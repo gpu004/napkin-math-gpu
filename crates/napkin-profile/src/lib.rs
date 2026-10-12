@@ -213,19 +213,30 @@ impl Profile {
                     nvbandwidth_gbps,
                     napkin_bench_gbps,
                     ratio: nvbandwidth_gbps / napkin_bench_gbps,
-                    same_link: metric.starts_with("GPU") || same_link,
+                    same_link: match metric {
+                        TransferMetric::Peer { .. } => true,
+                        TransferMetric::H2d | TransferMetric::D2h => same_link,
+                    },
                 });
             }
         };
-        add("H2D", evidence.h2d(CopyPath::Ce), Some(measured.h2d_gbps));
-        add("D2H", evidence.d2h(CopyPath::Ce), Some(measured.d2h_gbps));
         add(
-            "GPU0→GPU1",
+            TransferMetric::H2d,
+            evidence.h2d(CopyPath::Ce),
+            Some(measured.h2d_gbps),
+        );
+        add(
+            TransferMetric::D2h,
+            evidence.d2h(CopyPath::Ce),
+            Some(measured.d2h_gbps),
+        );
+        add(
+            TransferMetric::Peer { src: 0, dst: 1 },
             evidence.peer(CopyPath::Ce, 0, 1),
             measured.g2g_forward_gbps,
         );
         add(
-            "GPU1→GPU0",
+            TransferMetric::Peer { src: 1, dst: 0 },
             evidence.peer(CopyPath::Ce, 1, 0),
             measured.g2g_reverse_gbps,
         );
@@ -233,9 +244,26 @@ impl Profile {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransferMetric {
+    H2d,
+    D2h,
+    Peer { src: u32, dst: u32 },
+}
+
+impl fmt::Display for TransferMetric {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::H2d => f.write_str("H2D"),
+            Self::D2h => f.write_str("D2H"),
+            Self::Peer { src, dst } => write!(f, "GPU{src}→GPU{dst}"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CrossCheck {
-    pub metric: &'static str,
+    pub metric: TransferMetric,
     pub nvbandwidth_gbps: f64,
     pub napkin_bench_gbps: f64,
     pub ratio: f64,

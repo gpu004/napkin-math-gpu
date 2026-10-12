@@ -133,6 +133,42 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn transfer_metrics_display_and_match_link_semantics() -> Result<(), String> {
+        let Some(mut profile) = find("h100").cloned() else {
+            return Err("built-in h100 profile is missing".to_owned());
+        };
+        let Some(measured) = profile.measured.as_mut() else {
+            return Err("built-in h100 measured profile is missing".to_owned());
+        };
+        measured.pcie_gen = Some(4);
+
+        let checks = profile.transfer_cross_check();
+        assert_eq!(
+            checks.iter().map(|check| check.metric).collect::<Vec<_>>(),
+            vec![
+                TransferMetric::H2d,
+                TransferMetric::D2h,
+                TransferMetric::Peer { src: 0, dst: 1 },
+                TransferMetric::Peer { src: 1, dst: 0 },
+            ]
+        );
+        assert_eq!(
+            checks
+                .iter()
+                .map(|check| check.same_link)
+                .collect::<Vec<_>>(),
+            vec![false, false, true, true]
+        );
+        assert_eq!(TransferMetric::H2d.to_string(), "H2D");
+        assert_eq!(TransferMetric::D2h.to_string(), "D2H");
+        assert_eq!(
+            TransferMetric::Peer { src: 0, dst: 1 }.to_string(),
+            "GPU0→GPU1"
+        );
+        Ok(())
+    }
+
     fn parsed_fixture() -> Result<Nvbandwidth, String> {
         Nvbandwidth::parse(
             include_str!("../tests/fixtures/h100.nvbandwidth.json"),

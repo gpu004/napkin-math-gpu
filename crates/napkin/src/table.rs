@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use crate::price::PriceRecord;
 use crate::profile::{
     Basis, CopyPath, CrossCheck, Dtype, GpuState, Measured, Profile, Rates, RoundState, Span,
-    TransferRate,
+    TransferMetric, TransferRate,
 };
 use crate::units::{
     fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_sig, fmt_tflops, round_sig,
@@ -811,24 +811,28 @@ fn append_transfer_cross_check_table(out: &mut String, profiles: &[Profile]) {
             let (Some(evidence), Some(measured)) = (&profile.nvbandwidth, &profile.measured) else {
                 continue;
             };
-            let pcie = format!(
-                "{} / {}",
-                pcie_label(
-                    evidence
-                        .pcie_links
-                        .first()
-                        .map(|link| (link.r#gen, link.width)),
-                ),
-                pcie_label(measured.pcie_gen.zip(measured.pcie_width))
-            );
             for check in profile.transfer_cross_check() {
                 let (ce, sm) = cross_check_rates(evidence, &check);
+                let pcie = match check.metric {
+                    TransferMetric::Peer { .. } => "n/a (NVLink)".to_owned(),
+                    TransferMetric::H2d | TransferMetric::D2h => format!(
+                        "{} / {}",
+                        pcie_label(
+                            evidence
+                                .pcie_links
+                                .first()
+                                .map(|link| (link.r#gen, link.width)),
+                        ),
+                        pcie_label(measured.pcie_gen.zip(measured.pcie_width))
+                    ),
+                };
+                let metric = check.metric.to_string();
                 let measured = fmt_gbps(check.napkin_bench_gbps, 3);
                 emit(
                     out,
                     &[
                         &profile.name,
-                        check.metric,
+                        &metric,
                         &ce.map_or_else(|| "—".to_owned(), |rate| fmt_gbps(rate, 3)),
                         &sm.map_or_else(|| "—".to_owned(), |rate| fmt_gbps(rate, 3)),
                         &measured,
@@ -846,17 +850,12 @@ fn cross_check_rates(
     check: &CrossCheck,
 ) -> (Option<f64>, Option<f64>) {
     match check.metric {
-        "H2D" => (profile.h2d(CopyPath::Ce), profile.h2d(CopyPath::Sm)),
-        "D2H" => (profile.d2h(CopyPath::Ce), profile.d2h(CopyPath::Sm)),
-        "GPU0→GPU1" => (
-            profile.peer(CopyPath::Ce, 0, 1),
-            profile.peer(CopyPath::Sm, 0, 1),
+        TransferMetric::H2d => (profile.h2d(CopyPath::Ce), profile.h2d(CopyPath::Sm)),
+        TransferMetric::D2h => (profile.d2h(CopyPath::Ce), profile.d2h(CopyPath::Sm)),
+        TransferMetric::Peer { src, dst } => (
+            profile.peer(CopyPath::Ce, src, dst),
+            profile.peer(CopyPath::Sm, src, dst),
         ),
-        "GPU1→GPU0" => (
-            profile.peer(CopyPath::Ce, 1, 0),
-            profile.peer(CopyPath::Sm, 1, 0),
-        ),
-        _ => (None, None),
     }
 }
 

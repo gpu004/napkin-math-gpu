@@ -1,10 +1,10 @@
 {
-	"nvbandwidth" :
+	"nvbandwidth" : 
 	{
 		"CUDA Driver API Version" : 13000,
 		"CUDA Runtime Version" : 12090,
 		"Driver Version" : "580.95.05",
-		"GPU Device list" :
+		"GPU Device list" : 
 		[
 			"0: NVIDIA A100-SXM4-80GB (00000000:5f:00): (modal)",
 			"1: NVIDIA A100-SXM4-80GB (00000000:dd:00): (modal)"
@@ -14,11 +14,11 @@
 		"Version Patch" : 0,
 		"bounceBufferConfComputeEnabled" : false,
 		"git_version" : "v0.10",
-		"testcases" :
+		"testcases" : 
 		[
 			{
 				"bandwidth_description" : "memcpy CE CPU(row) -> GPU(column) bandwidth (GB/s)",
-				"bandwidth_matrix" :
+				"bandwidth_matrix" : 
 				[
 					[
 						"26.7846",
@@ -31,7 +31,7 @@
 			},
 			{
 				"bandwidth_description" : "memcpy CE CPU(row) <- GPU(column) bandwidth (GB/s)",
-				"bandwidth_matrix" :
+				"bandwidth_matrix" : 
 				[
 					[
 						"26.2813",
@@ -44,7 +44,7 @@
 			},
 			{
 				"bandwidth_description" : "memcpy SM CPU(row) -> GPU(column) bandwidth (GB/s)",
-				"bandwidth_matrix" :
+				"bandwidth_matrix" : 
 				[
 					[
 						"26.7845",
@@ -57,7 +57,7 @@
 			},
 			{
 				"bandwidth_description" : "memcpy SM CPU(row) <- GPU(column) bandwidth (GB/s)",
-				"bandwidth_matrix" :
+				"bandwidth_matrix" : 
 				[
 					[
 						"26.3054",
@@ -70,7 +70,7 @@
 			},
 			{
 				"bandwidth_description" : "memcpy CE GPU(row) -> GPU(column) bandwidth (GB/s)",
-				"bandwidth_matrix" :
+				"bandwidth_matrix" : 
 				[
 					[
 						"N/A",
@@ -87,7 +87,7 @@
 			},
 			{
 				"bandwidth_description" : "memcpy CE GPU(row) <- GPU(column) bandwidth (GB/s)",
-				"bandwidth_matrix" :
+				"bandwidth_matrix" : 
 				[
 					[
 						"N/A",
@@ -104,7 +104,7 @@
 			},
 			{
 				"bandwidth_description" : "memcpy SM GPU(row) -> GPU(column) bandwidth (GB/s)",
-				"bandwidth_matrix" :
+				"bandwidth_matrix" : 
 				[
 					[
 						"N/A",
@@ -121,7 +121,7 @@
 			},
 			{
 				"bandwidth_description" : "memcpy SM GPU(row) <- GPU(column) bandwidth (GB/s)",
-				"bandwidth_matrix" :
+				"bandwidth_matrix" : 
 				[
 					[
 						"N/A",
@@ -138,7 +138,7 @@
 			},
 			{
 				"bandwidth_description" : "memory latency SM CPU(row) <-> GPU(column) (ns)",
-				"bandwidth_matrix" :
+				"bandwidth_matrix" : 
 				[
 					[
 						"1340.33",
@@ -151,7 +151,7 @@
 			},
 			{
 				"bandwidth_description" : "Device to Device Latency SM GPU(row) <-> GPU(column) (ns)",
-				"bandwidth_matrix" :
+				"bandwidth_matrix" : 
 				[
 					[
 						"N/A",
@@ -170,3 +170,4 @@
 		"version" : "v0.10.0"
 	}
 }
+

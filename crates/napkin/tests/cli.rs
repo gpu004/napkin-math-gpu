@@ -232,6 +232,7 @@ fn compare_prints_table() {
     assert_eq!(code, 0);
     assert!(stdout.contains("| GPU |"), "{stdout}");
     assert!(stdout.contains("CE / napkin-bench"), "{stdout}");
+    assert!(stdout.contains("n/a (NVLink)"), "{stdout}");
 }
 
 #[test]
