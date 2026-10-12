@@ -239,7 +239,8 @@ pub struct GpuState {
     /// Untimed GEMM work, at least this long, before the first timed round of
     /// each dtype.
     pub warmup_ms: f64,
-    /// Every timed round runs enough GEMMs to last at least this long.
+    /// Target length of a timed round: the GEMM count per round is sized from
+    /// the last warm-up batch, so real rounds land near it, not above it.
     pub round_ms: f64,
     /// One entry per timed round, keyed and ordered like `samples_ms`.
     pub rounds: BTreeMap<String, Vec<RoundState>>,
@@ -252,7 +253,7 @@ pub struct RoundState {
     /// `power_w` is None when a round was too short to catch any.
     pub polls: u32,
     /// Host wall-clock length of the timed round, so a reader can check that
-    /// the round really lasted at least `GpuState::round_ms`.
+    /// the round came close to `GpuState::round_ms`.
     pub wall_ms: f64,
     pub sm_clock_mhz: Option<Span>,
     pub mem_clock_mhz: Option<Span>,

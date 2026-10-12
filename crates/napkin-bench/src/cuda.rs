@@ -165,7 +165,7 @@ fn cuda_rounds(
 /// the first ~100 ms at its maximum SM clock and then settles lower once the
 /// software power cap engages, so rounds timed right after a short warm-up
 /// catch the boost and later rounds catch the cap. Running `op` for `warmup`
-/// first and then sizing every round to last at least `round` reports the
+/// first and then sizing every round to last about `round` reports the
 /// sustained rate and averages each round over the controller's swings.
 fn sustained_rounds(
     ctx: &Arc<CudaContext>,

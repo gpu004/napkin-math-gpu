@@ -219,7 +219,8 @@ fn gpu_state_table(out: &mut String, state: &GpuState) {
                 spans.iter().map(|s| s.max).reduce(f64::max),
             )
         };
-        let power: Vec<f64> = rounds.iter().filter_map(|r| r.power_w).collect();
+        let mut power: Vec<f64> = rounds.iter().filter_map(|r| r.power_w).collect();
+        power.sort_by(f64::total_cmp);
         let polls: u32 = rounds.iter().map(|r| r.polls).sum();
         let mut reasons = BTreeMap::new();
         for round in rounds {
@@ -244,10 +245,7 @@ fn gpu_state_table(out: &mut String, state: &GpuState) {
                 &with_unit(&lows_highs(|r| r.sm_clock_mhz), "MHz"),
                 &with_unit(&lows_highs(|r| r.mem_clock_mhz), "MHz"),
                 &with_unit(
-                    &fmt_range(
-                        power.iter().copied().reduce(f64::min),
-                        power.iter().copied().reduce(f64::max),
-                    ),
+                    &median(&power).map_or_else(String::new, |w| format!("{w:.0}")),
                     "W",
                 ),
                 &with_unit(&lows_highs(|r| r.temperature_c), "°C"),
@@ -258,8 +256,10 @@ fn gpu_state_table(out: &mut String, state: &GpuState) {
     let _ = write!(
         out,
         "\nRead through {} every {} ms on the GPU that ran the GEMMs, during the timed rounds \
-         only. Board limits: {:.0} W, SM clock {} MHz, memory clock {} MHz. Power is the energy \
-         counter's change over each round. Clock limits give the share of polls that reported each \
+         only. Board limits: {:.0} W, SM clock {} MHz, memory clock {} MHz. Power is the median \
+         round's energy-counter change between its first and last counter update; the counter \
+         updates only a few times per round, so a single round in `gpu_state` can read above the \
+         board limit. Clock limits give the share of polls that reported each \
          NVML clock-limit reason.\n",
         state.source,
         fmt_sig(state.poll_interval_ms, 2),
@@ -277,6 +277,15 @@ fn fmt_range(low: Option<f64>, high: Option<f64>) -> String {
         }
         (Some(value), _) | (None, Some(value)) => format!("{value:.0}"),
         (None, None) => String::new(),
+    }
+}
+
+fn median(sorted: &[f64]) -> Option<f64> {
+    let mid = sorted.len() / 2;
+    match sorted.len() {
+        0 => None,
+        n if n % 2 == 1 => sorted.get(mid).copied(),
+        _ => Some((sorted.get(mid - 1)? + sorted.get(mid)?) / 2.0),
     }
 }
 
@@ -591,8 +600,7 @@ mod tests {
         };
         let table = numbers(&h100_with(&[], Some(state)), false).unwrap();
         assert!(
-            table
-                .contains("| fp16 | 1590–1980 MHz | 2619 MHz | 650–700 W | — | sw_power_cap 50% |"),
+            table.contains("| fp16 | 1590–1980 MHz | 2619 MHz | 675 W | — | sw_power_cap 50% |"),
             "{table}"
         );
         assert!(table.contains("Board limits: 700 W"), "{table}");
