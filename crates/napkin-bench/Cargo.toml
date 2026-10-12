@@ -1,0 +1,21 @@
+[package]
+name = "napkin-bench"
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+napkin = { path = "../napkin" }
+cudarc = { version = "0.19", default-features = false, features = [
+    "std",
+    "driver",
+    "cublas",
+    "nvrtc",
+    "f16",
+    "cuda-12090",
+    "dynamic-loading",
+] }
+serde_json = "1"
+half = "2"

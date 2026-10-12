@@ -1,315 +1,211 @@
 # GPU Napkin Math
 
-Use a handful of measured ceilings to decide whether a GPU workload is limited
-by compute, memory, transfers, communication, launch overhead, or capacity. The
-equations on this page apply to every GPU; the numbers do not.
+The goal of this project is to collect numbers and techniques to quickly
+estimate GPU workload performance from first principles — how long does it
+take to read 1 GB from HBM on an H100? By composing them you should be able to
+answer questions like: is this kernel compute- or memory-bound, how long does
+the upload take, and how many GPUs does the model need? It follows Simon
+Eskildsen's [Napkin Math](https://github.com/sirupsen/napkin-math).
 
-## Pick a GPU profile
+## Numbers
 
-| Profile | Architecture | Modal request | Status |
-| --- | --- | --- | --- |
-| [H100](H100.md) | Hopper | `H100!` | Calibrated on Modal |
-| [B200](B200.md) | Blackwell | `B200` | Vendor-ceiling planning profile |
-| [B300](B300.md) | Blackwell Ultra | `B300` | Vendor-ceiling planning profile |
+Below are numbers rounded for memorization, not faux precision.
+The H100 and A100 numbers were measured on Modal (`H100!:2` / `A100-80GB:2`,
+2026-08-08, driver 580.95.05, CUDA 12.8) by the previous PyTorch 2.8 harness —
+cuBLAS through `torch`, `torch.Tensor.add_` for the launch row — so the launch
+figure includes PyTorch dispatcher overhead. A re-run with the Rust
+`napkin-bench` (cudarc) harness is pending; see [Benchmarks](#benchmarks).
 
-Modal also offers `H200`. It is a Hopper GPU with more and faster memory than
-H100, not the predecessor of B300. There is no `H300` request on Modal. For
-benchmarking H100 specifically, use `H100!`: an unpinned `H100` request may be
-upgraded to H200. `B200+` similarly opts into either B200 or B300.
+**Note 1:** Compute figures are dense, not sparse. NVIDIA's headline Tensor
+Core numbers assume structured sparsity; dense is half.
 
-## The metrics that matter on any GPU
+**Note 2:** Take the numbers with a grain of salt. GB means 10^9 bytes. For
+transfers, [NVBandwidth](https://github.com/NVIDIA/nvbandwidth) is the state of
+the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 
-| Metric | Symbol | Why it matters |
-| --- | ---: | --- |
-| Usable device-memory capacity | `C` | Whether the workload fits at all |
-| Achievable compute throughput at the actual dtype | `F` | Compute-time floor |
-| Achievable HBM bandwidth | `M` | Device-memory-time floor |
-| Host-to-device and device-to-host bandwidth | `P_h2d`, `P_d2h` | Input and output transfer floors |
-| GPU-to-GPU bandwidth | `P_g2g` | Tensor/pipeline parallel communication floor |
-| Kernel-launch latency | `L` | Cost of many small kernels |
+<!-- napkin table --gpu h100 -->
+| Operation | Latency | Throughput | 1 MB | 1 GB |
+| --- | ---: | ---: | ---: | ---: |
+| Kernel launch (back-to-back) | 5 μs |  |  |  |
+| Pinned host RAM copy |  | 70 GB/s | 10 μs | 10 ms |
+| Host → device, pinned |  | 60 GB/s | 20 μs | 20 ms |
+| Device → host, pinned |  | 60 GB/s | 20 μs | 20 ms |
+| HBM copy (read + write) |  | 3 TB/s | 300 ns | 300 μs |
+| Elementwise add |  | 3 TB/s | 300 ns | 300 μs |
+| GPU ↔ GPU, NVLink one-way |  | 400 GB/s | 3 μs | 3 ms |
 
-Keep the qualifiers attached to every number: exact SKU and form factor,
-precision, dense versus sparse, theoretical versus achieved, direction,
-topology, and software stack. No throughput number is universal across dtypes,
-layouts, shapes, kernels, or systems.
+| Dense GEMM | Throughput | 1 GFLOP | 1 TFLOP | Ridge point |
+| --- | ---: | ---: | ---: | ---: |
+| fp16 | 700 TFLOP/s | 1 μs | 1 ms | 230 FLOP/B |
+| bf16 | 700 TFLOP/s | 1 μs | 1 ms | 240 FLOP/B |
+| tf32 | 400 TFLOP/s | 3 μs | 3 ms | 130 FLOP/B |
+| fp32 | 50 TFLOP/s | 20 μs | 20 ms | 17 FLOP/B |
+<!-- /napkin -->
 
-## The reusable arithmetic
+## Other GPUs
+
+<!-- napkin compare -->
+| GPU | Memory | HBM | Dense BF16 | BF16 ridge | NVLink | Host link | Launch | Basis |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 170 FLOP/B | 600 GB/s | 30 GB/s | 5 μs | measured 2026-08-08 |
+| H100 SXM 80GB | 80 GB | 3 TB/s | 700 TFLOP/s | 240 FLOP/B | 900 GB/s | 60 GB/s | 5 μs | measured 2026-08-08 |
+| B200 SXM 180GB | 180 GB | 8 TB/s | 2 PFLOP/s | 280 FLOP/B | 2 TB/s | — | — | datasheet |
+| B300 SXM 288GB | 288 GB | 8 TB/s | 2 PFLOP/s | 280 FLOP/B | 2 TB/s | — | — | datasheet |
+
+| GPU | HBM measured / ceiling | BF16 measured / ceiling |
+| --- | ---: | ---: |
+| A100 SXM 80GB | 1750 / 2039 GB/s (86%) | 289 / 312 TFLOP/s (93%) |
+| H100 SXM 80GB | 3000 / 3350 GB/s (90%) | 717 / 990 TFLOP/s (73%) |
+<!-- /napkin -->
+
+Modal request semantics matter: `H100!` pins an H100 — a plain `H100` request
+may be upgraded to H200 — and `B200+` explicitly allows either B200 or B300.
+Rows labelled "datasheet" are vendor ceilings, not achieved throughput.
+
+## Arithmetic
 
 For a workload with `W` FLOPs and `Q` bytes of HBM traffic:
 
 ```text
-arithmetic intensity = W / Q                         FLOP/byte
-ridge point          = F / M                         FLOP/byte
+arithmetic  = W / Q                          FLOP/byte
+ridge point          = F / M = TFLOP/s × 1,000 / GB/s FLOP/byte
 compute time         = W / F
 memory time          = Q / M
 device time          = max(compute time, memory time)
 ```
 
-The unit shortcut is:
+Below the ridge point the kernel is memory-bound; above it, compute-bound.
+Add the stages that sit on the critical path:
 
 ```text
-ridge point = compute TFLOP/s × 1,000 / memory GB/s
-```
-
-If arithmetic intensity is below the ridge point, the roofline model predicts
-a memory-bound kernel. If it is above the ridge point, it predicts a
-compute-bound kernel.
-
-Add data movement and launch overhead when they are on the critical path:
-
-```text
-host copy time   = host bytes / host bandwidth
 H2D time         = H2D bytes / P_h2d
 D2H time         = D2H bytes / P_d2h
 GPU-to-GPU time  = communicated bytes / P_g2g
 launch time      = kernel launches × L
 
-serial estimate  = host copy + H2D + device + GPU-to-GPU + D2H + launch
+serial estimate     = host + H2D + device + GPU-to-GPU + D2H + launch
+overlapped estimate = max(those stages)
 ```
 
-The serial sum is conservative. When stages genuinely overlap, model the
-overlapped section with `max(...)`, not a sum. Count algorithmic traffic, not
-just allocation size: a copy reads and writes two buffer-sized byte streams,
-while `C = A + B` reads two and writes one.
+Count algorithmic traffic, not allocation size: a copy reads and writes, while
+`C = A + B` reads two streams and writes one. Capacity is separate from speed:
+`weights = params × bits / 8`, and the working set must fit in usable memory
+with headroom for runtime state, buffers, and fragmentation.
 
-## Capacity is a separate constraint
+## Examples
 
-Speed does not matter when the working set does not fit:
+A BF16 job with 200 TFLOPs, 1 TB of HBM traffic, a 2 GB upload, and 20 kernel
+launches on an H100:
 
 ```text
-working set = weights + activations + KV cache + temporary workspace
-fits        = working set <= usable device memory
+$ napkin estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB --h2d 2GB --launches 20
+H100 SXM 80GB · bf16 · measured 2026-08-08
+intensity   200 FLOP/B   ridge 240 FLOP/B   memory-bound
+compute     280 ms
+memory      330 ms
+device      330 ms
+h2d         36 ms
+launch      93 μs
+total       370 ms   memory-bound
 ```
 
-For replicated weights, a quick lower bound is:
+A 70B bf16 decode step must read the full 140 GB of weights once per token.
+Does it fit, and how fast can one GPU's bandwidth feed it?
 
 ```text
-weight bytes = parameter count × bits per parameter / 8
+$ napkin fit --gpu h100 --params 70B --bits 16
+H100 SXM 80GB · 70B params · 16-bit
+weights     140 GB
+working set 140 GB
+usable      72 GB per GPU (10% headroom)
+fits        no — needs at least 2 GPUs (weights sharded)
+
+$ napkin estimate --gpu h100 --dtype bf16 --flops 140G --bytes 140GB
+H100 SXM 80GB · bf16 · measured 2026-08-08
+intensity   1 FLOP/B   ridge 240 FLOP/B   memory-bound
+compute     200 μs
+memory      47 ms
+device      47 ms
+total       47 ms   memory-bound
 ```
 
-Leave headroom for runtime state, allocator fragmentation, communication
-buffers, and workspaces. Multi-GPU capacity scales only when the software
-actually shards the relevant tensors.
+Memory-bound: about 50 ms/token on one GPU's bandwidth, and it splits roughly
+linearly across tensor-parallel GPUs (plus communication).
 
-## Estimation discipline
-
-1. Choose the exact GPU and precision.
-2. Measure or obtain ceilings with matching dense/sparse conventions.
-3. Count FLOPs and bytes for the workload.
-4. Compute the roofline lower bound.
-5. Add transfers, communication, launches, and non-overlapped CPU work.
-6. Report one or two significant digits and name the predicted bottleneck.
-7. Check the estimate against a representative end-to-end run.
-
-A napkin estimate is a lower-bound model, not a latency promise. Cache effects,
-occupancy, synchronization, collectives, framework overhead, power limits, and
-contention can make real execution slower.
-
-## Calculator
-
-The CLI implements the same arithmetic using a measured JSON profile. It
-currently defaults to the checked-in H100 calibration:
+## Usage
 
 ```sh
-python3 gpu_napkin.py \
-  --dtype bf16 \
-  --flops 2e14 \
-  --bytes 1e12 \
-  --h2d-bytes 2e9 \
-  --launches 20
+cargo install --path crates/napkin
+
+napkin gpus                                       # profiles and their basis
+napkin table --gpu h100                           # the tables above
+napkin compare                                    # every GPU side by side
+napkin estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB [--h2d 2GB]
+                [--d2h ..] [--host ..] [--g2g ..] [--launches 20]
+                [--overlap] [--ceiling]
+napkin fit --gpu h100 --params 70B --bits 16 [--extra 20GB] [--headroom 0.1]
+napkin readme --write README.md                   # regenerate the marker blocks
 ```
 
-It can also include `--cpu-bytes`, `--d2h-bytes`, and
-`--gpu-to-gpu-bytes`. Extra printed digits do not make the estimate more
-certain.
+## Benchmarks
 
-## Website
-
-The interactive estimator is an Astro static site deployed with Cloudflare
-Workers Static Assets. Website builds run locally; Modal remains reserved for
-GPU benchmarks and tests.
+The numbers come from `napkin-bench` (Rust + cudarc), run on Modal:
 
 ```sh
-npm install
-npm run dev
-npm run build
-npm run deploy
+modal run modal/bench.py --gpu h100     # writes profiles/h100.measured.json
+napkin readme --write README.md         # refreshes the tables
 ```
 
-PostHog Product Analytics, Session Replay, and Web Analytics are initialized
-when `PUBLIC_POSTHOG_KEY` and `PUBLIC_POSTHOG_HOST` are present at build time.
-Copy `.env.example` to `.env` for local development and keep production values
-in the deployment environment.
+- `launch_us`: back-to-back empty-kernel launches, CUDA-event timed.
+- `sync_us`: launch plus stream-synchronize round trip, wall clock.
+- `host_copy_gbps`: pinned host memcpy on min(8, cpus) threads; read + write
+  bytes counted.
+- `h2d_gbps` / `d2h_gbps`: 512 MiB pinned async copies, event timed; the bytes
+  that cross the link.
+- `h2d_latency_us` / `d2h_latency_us`: 4-byte synchronous copies, wall clock.
+- `hbm_gbps`: 512 MiB device-to-device memcpy; read + write counted (2x).
+- `elementwise_gbps`: NVRTC `c[i] = a[i] + b[i]` fp32; two reads + one write (3x).
+- `hbm_latency_ns`: single-thread pointer chase over a random cycle in a
+  1 GiB buffer, ns per dependent load.
+- `g2g_gbps`: 512 MiB peer copy, slower of the two directions; `None` with
+  fewer than 2 GPUs or no peer access.
+- `compute_tflops`: cuBLAS GemmEx 8192³, `2·N³` FLOPs counted, validated
+  against a CPU float64 reference per dtype.
 
-The interface takes visual cues from [turbopuffer](https://turbopuffer.com/):
-monospace type, ruled technical panels, restrained color, and dense operational
-information.
+## Techniques
 
-## Evidence
-
-The [evidence guide](BENCHMARKS.md) defines the source-of-truth policy and maps
-each metric to NVIDIA datasheets, NVBandwidth, NCCL Tests, Nsight Compute,
-cuBLAS/cuBLASLt, or MLPerf. The checked-in [H100 report](results/h100-sxm.md)
-and [JSON](results/h100-sxm.json) are prototype calibration artifacts.
-
-Modal availability and request semantics were checked against the
-[Modal GPU guide](https://modal.com/docs/guide/gpu) and with live `nvidia-smi`
-allocations on 2026-08-09. Hardware ceilings come from NVIDIA's
-[H100 specifications](https://www.nvidia.com/en-us/data-center/h100/) and
-[HGX B200/B300 specifications](https://www.nvidia.com/en-us/data-center/hgx/).
-
-This project is inspired by Simon Eskildsen's
-[Napkin Math](https://github.com/sirupsen/napkin-math) and is MIT licensed.
+- **Count algorithmic bytes, not allocations.** A copy is 2x its buffer; an
+  elementwise add is 3x. KV cache and weight reads are traffic too.
+- **Dense is not sparse.** NVIDIA's headline FLOPs assume structured sparsity;
+  halve them or measure.
+- **Keep the qualifiers attached.** dtype, direction, topology, dense/sparse,
+  measured/theoretical, software stack — no throughput number is universal.
+- **Sum serial stages; max overlapped ones.** Overlap is a property of the
+  workload, not of the GPU.
+- **One or two significant digits.** You want order-of-magnitude answers;
+  extra digits are not extra certainty.
+- **Validate against one real end-to-end run.** A napkin estimate is a lower
+  bound; check it once before trusting it.
 
 ## Resources
 
-Sources behind the checked-in numbers:
-
-- [NVIDIA H100 specifications](https://www.nvidia.com/en-us/data-center/h100/)
-  and [HGX B200/B300 specifications](https://www.nvidia.com/en-us/data-center/hgx/).
-  Datasheet ceilings for capacity, HBM, FLOP/s, and NVLink.
-- [Modal GPU guide](https://modal.com/docs/guide/gpu). GPU request names and
-  upgrade semantics such as `H100!`.
-- [NVBandwidth](https://github.com/NVIDIA/nvbandwidth). Host↔device and
-  device↔device bandwidth and latency across the real topology.
-- [NCCL Tests](https://github.com/NVIDIA/nccl-tests). AllReduce, AllGather, and
-  ReduceScatter message-size curves.
-- [Nsight Compute Profiling Guide](https://docs.nvidia.com/nsight-compute/ProfilingGuide/).
-  Speed of Light, memory workload, and roofline sections for real kernels.
-- [cuBLAS/cuBLASLt](https://docs.nvidia.com/cuda/cublas/). Achievable GEMM
-  ceilings by dtype and shape.
-- [MLPerf Inference](https://mlcommons.org/benchmarks/inference-datacenter/).
-  End-to-end results to check napkin predictions against.
-
-### Napkin math for GPUs
-
-- [Making Deep Learning Go Brrrr From First Principles](https://horace.io/brrr_intro.html).
-  The clearest explanation of compute-, memory-, and overhead-bound work, which
-  is exactly the split this repository's equations make.
-- [How to Scale Your Model](https://jax-ml.github.io/scaling-book/). A whole
-  book of roofline-first napkin math for training and inference, with a
-  dedicated [GPU chapter](https://jax-ml.github.io/scaling-book/gpus/) covering
-  SMs, HBM, NVLink, and collectives.
-- [Roofline: An Insightful Visual Performance Model](https://dl.acm.org/doi/10.1145/1498765.1498785).
-  The original paper behind arithmetic intensity and ridge points.
-- [Transformer Math 101](https://blog.eleuther.ai/transformer-math/). The
-  `6 × parameters × tokens` training-FLOPs rule and memory accounting for
-  weights, optimizer state, and activations.
-- [Transformer Inference Arithmetic](https://kipp.ly/transformer-inference-arithmetic/).
-  Back-of-the-envelope KV-cache sizing, memory- versus compute-bound decoding,
-  and batch-size crossover points.
-- [Efficiently Scaling Transformer Inference](https://arxiv.org/abs/2211.05102).
-  Latency, throughput, and partitioning trade-offs for large-model inference,
-  derived from first-principles cost models.
-- [Efficient Large-Scale Language Model Training on GPU Clusters](https://arxiv.org/abs/2104.04473).
-  Megatron-LM's tensor/pipeline/data-parallel cost model and its
-  model-FLOPs-utilization arithmetic.
-- [PaLM](https://arxiv.org/abs/2204.02311). The standard definition
-  of model FLOPs utilization (MFU) versus hardware FLOPs utilization.
-- [Scaling Laws for Neural Language Models](https://arxiv.org/abs/2001.08361).
-  Where the compute-per-token approximation used everywhere comes from.
-- [FlashAttention](https://arxiv.org/abs/2205.14135). A worked example of
-  counting HBM traffic instead of FLOPs and winning by moving fewer bytes.
-- [PagedAttention (vLLM)](https://arxiv.org/abs/2309.06180). Why KV-cache
-  capacity, not compute, often caps serving throughput.
-- [Accelerating Generative AI with PyTorch II: GPT, Fast](https://pytorch.org/blog/accelerating-generative-ai-2/).
-  Decoding as a memory-bandwidth problem: tokens per second ≈ HBM bandwidth /
-  weight bytes, and how quantization and speculative decoding move that bound.
-
-### GPU architecture and vendor guides
-
-- [Modal GPU Glossary](https://modal.com/gpu-glossary). Short, linked
-  definitions of SMs, warps, tensor cores, memory hierarchy, and the CUDA
-  software stack.
-- [NVIDIA GPU Performance Background](https://docs.nvidia.com/deeplearning/performance/dl-performance-gpu-background/index.html)
-  and [Matrix Multiplication Background](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html).
-  NVIDIA's own arithmetic-intensity walkthrough plus tile and wave
-  quantization effects that make GEMM shapes matter.
-- [NVIDIA Hopper Architecture In-Depth](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/)
-  and the [Blackwell Architecture Technical Overview](https://resources.nvidia.com/en-us-blackwell-architecture).
-  Where the per-generation ceilings and new features come from.
-- [Hopper Tuning Guide](https://docs.nvidia.com/cuda/hopper-tuning-guide/) and
-  [Blackwell Tuning Guide](https://docs.nvidia.com/cuda/blackwell-tuning-guide/).
-  What changed per generation for shared memory, L2, and occupancy.
-- [CUDA C++ Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html)
-  and [CUDA C++ Best Practices Guide](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/).
-  The reference for the execution and memory model, coalescing, and transfer
-  overlap.
-- [Nvidia's H100: Funny L2, and Tons of Bandwidth](https://chipsandcheese.com/p/nvidias-h100-funny-l2-and-tons-of-bandwidth).
-  Independent microbenchmarks of H100 cache and memory latency and bandwidth.
-- [Benchmarking and Dissecting the Nvidia Hopper GPU Architecture](https://arxiv.org/abs/2402.13499)
-  and [Dissecting the NVIDIA Volta GPU Architecture via Microbenchmarking](https://arxiv.org/abs/1804.06826).
-  Measured latencies and throughputs for memory levels and instructions, the
-  GPU counterpart to Agner's instruction tables.
-- [Which GPU(s) to Get for Deep Learning](https://timdettmers.com/2023/01/30/which-gpu-for-deep-learning/).
-  Practical comparison of GPUs through memory bandwidth, tensor cores, and
-  cache sizes.
-
-### Kernels, profiling, and benchmarking
-
-- [Nsight Systems User Guide](https://docs.nvidia.com/nsight-systems/UserGuide/).
-  Timeline profiling to find launch gaps, host stalls, and non-overlapped
-  transfers before reaching for kernel-level tools.
-- [How to Implement Performance Metrics in CUDA C/C++](https://developer.nvidia.com/blog/how-implement-performance-metrics-cuda-cc/).
-  Timing with CUDA events and computing effective bandwidth correctly.
-- [PyTorch Benchmark recipe](https://pytorch.org/tutorials/recipes/recipes/benchmark.html).
-  `torch.utils.benchmark` handles warmup, synchronization, and threading so
-  timings are not just asynchronous launch times.
-- [Strangely, Matrix Multiplications on GPUs Run Faster When Given "Predictable" Data!](https://www.thonking.ai/p/strangely-matrix-multiplications).
-  Power and clock throttling mean the input values change GEMM throughput;
-  benchmark with realistic data.
-- [CUDA Graphs](https://developer.nvidia.com/blog/cuda-graphs/). The standard
-  fix when the `launches × L` term dominates.
-- [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance](https://siboehm.com/articles/22/CUDA-MMM)
-  and [Outperforming cuBLAS on H100](https://cudaforfun.substack.com/p/outperforming-cublas-on-h100-a-worklog).
-  Step-by-step worklogs that show how far a kernel is from the roofline at
-  each step.
-- [CUTLASS](https://github.com/NVIDIA/cutlass) and [Triton](https://triton-lang.org/).
-  The usual ways to reach library-level GEMM and fused-kernel performance
-  without hand-written PTX.
-- [PTX ISA](https://docs.nvidia.com/cuda/parallel-thread-execution/) and
-  [CUDA Binary Utilities](https://docs.nvidia.com/cuda/cuda-binary-utilities/)
-  (`cuobjdump`, `nvdisasm`). For inspecting what the compiler actually emitted.
-- [Godbolt's compiler explorer](https://gcc.godbolt.org/#). Also compiles CUDA
-  with NVCC and shows PTX and SASS next to the source.
-- [GPU MODE lectures](https://github.com/gpu-mode/lectures) and
-  [resource stream](https://github.com/gpu-mode/resource-stream). A large,
-  curated collection of GPU programming talks, papers, and posts.
-
-### Communication, I/O, and multi-GPU
-
-- [NCCL User Guide](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/).
-  Environment knobs, topology detection, and collective semantics.
-- [NCCL Tests performance notes](https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md).
-  How `algbw` and `busbw` are defined and how to convert between them for each
-  collective.
-- [Machine Learning Engineering Open Book](https://github.com/stas00/ml-engineering).
-  Field notes on accelerators, network, storage, debugging, and training at
-  scale, with many benchmark scripts.
-- [GPUDirect Storage](https://docs.nvidia.com/gpudirect-storage/). The
-  storage-to-HBM path that skips the host bounce buffer.
-
-### Shared with Napkin Math
-
-Host-side code, data loading, and launches still run on CPUs, so much of the
-original [Napkin Math](https://github.com/sirupsen/napkin-math) resource list
-still applies:
-
-- ["How to get consistent results when benchmarking on Linux?"](https://easyperf.net/blog/2019/08/02/Perf-measurement-environment-on-Linux).
-  CPU affinity, turbo boost, and other knobs for reliable host-side timing.
-  Pair it with locked GPU clocks for device-side timing.
-- [LLVM benchmarking tips](https://www.llvm.org/docs/Benchmarking.html).
-  Dedicating CPUs and disabling address space randomization.
-- [Top-Down performance analysis methodology](https://easyperf.net/blog/2019/02/09/Top-Down-performance-analysis-methodology).
-  Finding host-side bottlenecks, such as data loaders or Python overhead, that
-  starve the GPU.
-- [Agner's Instruction Tables](https://www.agner.org/optimize/instruction_tables.pdf).
-  Expected throughput for CPU instructions in preprocessing and launch paths.
-- [Systems Performance (book)](https://www.brendangregg.com/systems-performance-2nd-edition-book.html).
-  The USE method and OS-level analysis that apply unchanged to GPU hosts.
-- [io_uring](https://lwn.net/Articles/776703/). Fast asynchronous I/O for
-  feeding datasets and checkpoints to the GPU.
-- [How Long Does It Take To Make a Context Switch?](https://blog.tsunanet.net/2010/11/how-long-does-it-take-to-make-context.html).
-  Host scheduling costs that show up between kernel launches.
-- [Files are hard](https://danluu.com/file-consistency/). Required reading
-  before trusting checkpoint writes.
+* [Making Deep Learning Go Brrrr From First Principles](https://horace.io/brrr_intro.html). The best short introduction to compute-, memory-, and overhead-bound GPU work. Start here.
+* [How to Scale Your Model](https://jax-ml.github.io/scaling-book/). Book-length napkin math for accelerators: rooflines, sharding, communication, and inference arithmetic.
+* [Roofline: An Insightful Visual Performance Model for Multicore Architectures](https://dl.acm.org/doi/10.1145/1498765.1498785). Williams, Waterman, and Patterson's original roofline paper.
+* [Transformer Inference Arithmetic](https://kipp.ly/transformer-inference-arithmetic/). FLOP and byte counting for LLM inference, with KV-cache and latency estimates.
+* [Transformer Math 101](https://blog.eleuther.ai/transformer-math/). Training compute and memory rules of thumb from EleutherAI.
+* [Efficiently Scaling Transformer Inference](https://arxiv.org/abs/2211.05102). Pope et al. on the memory/compute/communication trade-offs of large-model inference.
+* [Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM](https://arxiv.org/abs/2104.04473). Tensor, pipeline, and data parallelism with communication accounting.
+* [FlashAttention](https://arxiv.org/abs/2205.14135). A worked example of winning by counting HBM bytes instead of FLOPs.
+* [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance](https://siboehm.com/articles/22/CUDA-MMM). Step-by-step from naive to near-cuBLAS, with the arithmetic for each step.
+* [NVIDIA GPU Performance Background User's Guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-gpu-background/index.html). NVIDIA's own arithmetic- and roofline primer.
+* [NVIDIA Matrix Multiplication Background User's Guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html). Tile and wave quantization, and why GEMM shapes matter.
+* [CUDA C++ Best Practices Guide](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/). Memory coalescing, transfers, occupancy, and measurement.
+* [Modal GPU Glossary](https://modal.com/gpu-glossary). Fast definitions for SMs, warps, HBM, Tensor Cores, and the rest of the vocabulary.
+* [Dissecting the NVIDIA Volta GPU Architecture via Microbenchmarking](https://arxiv.org/abs/1804.06826). The template for measuring latencies and cache hierarchies yourself.
+* [Benchmarking and Dissecting the Nvidia Hopper GPU Architecture](https://arxiv.org/abs/2402.13499). Microbenchmarked Hopper latencies, Tensor Cores, and memory.
+* [NVBandwidth](https://github.com/NVIDIA/nvbandwidth). NVIDIA's tool for host↔device and device↔device bandwidth; the state of the art for transfer numbers.
+* [NCCL Tests](https://github.com/NVIDIA/nccl-tests). Collective benchmarks; read [PERFORMANCE.md](https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md) for algorithm versus bus bandwidth.
+* [Nsight Compute](https://developer.nvidia.com/nsight-compute). Per-kernel roofline, memory, and occupancy analysis.
+* [cudarc](https://github.com/chelsea0x3b/cudarc). The Rust CUDA bindings `napkin-bench` is built on.
+* [Napkin Math](https://github.com/sirupsen/napkin-math). Simon Eskildsen's original project, which this one follows.

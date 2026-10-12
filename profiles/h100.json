@@ -1,0 +1,19 @@
+{
+  "id": "h100",
+  "name": "H100 SXM 80GB",
+  "architecture": "Hopper",
+  "modal_gpu": "H100!",
+  "memory_gb": 80,
+  "ceiling": {
+    "hbm_gbps": 3350,
+    "nvlink_gbps": 900,
+    "compute_tflops": {
+      "fp8": 1979,
+      "bf16": 989.5,
+      "fp16": 989.5,
+      "tf32": 494.5,
+      "fp32": 67
+    },
+    "source": "https://www.nvidia.com/en-us/data-center/h100/ — NVIDIA publishes sparse tensor figures; dense shown at half. FP32 is the non-tensor rate."
+  }
+}

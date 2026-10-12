@@ -1,0 +1,18 @@
+{
+  "id": "a100",
+  "name": "A100 SXM 80GB",
+  "architecture": "Ampere",
+  "modal_gpu": "A100-80GB",
+  "memory_gb": 80,
+  "ceiling": {
+    "hbm_gbps": 2039,
+    "nvlink_gbps": 600,
+    "compute_tflops": {
+      "bf16": 312,
+      "fp16": 312,
+      "tf32": 156,
+      "fp32": 19.5
+    },
+    "source": "https://www.nvidia.com/en-us/data-center/a100/ — NVIDIA publishes sparse BF16/FP16/TF32 tensor figures; dense shown at half. FP32 is the non-tensor rate."
+  }
+}
