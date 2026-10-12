@@ -1,0 +1,38 @@
+{
+  "id": "h100-gemm-bf16",
+  "title": "Large bf16 GEMM through cuBLAS",
+  "gpu": "h100",
+  "modal_request": "H100!",
+  "job": "One bf16 GEMM C = A·B with M=16384, N=28672, K=8192 (a Llama-3-70B MLP up-projection over 16,384 tokens), bf16 inputs and output, fp32 accumulation, through torch.mm, which calls cuBLAS. Time per GEMM, back to back.",
+  "workload": {
+    "dtype": "bf16",
+    "flops": 7696581394432,
+    "hbm_bytes": 1677721600,
+    "launches": 1,
+    "mode": "serial"
+  },
+  "derivation": [
+    "flops = 2·M·N·K = 2 × 16384 × 28672 × 8192 = 7.70 TFLOP",
+    "hbm_bytes = 2 B × (M·K + K·N + M·N) = 2 × (134,217,728 + 234,881,024 + 469,762,048) = 1.68 GB: each operand read once and C written once, the minimum traffic",
+    "launches = 1: one cuBLAS kernel per GEMM"
+  ],
+  "observation": {
+    "tool": "PyTorch torch.utils.benchmark.Timer around torch.mm (cuBLAS)",
+    "metric": "median wall time per GEMM; the Timer synchronizes CUDA before reading the clock"
+  },
+  "tolerance": {
+    "low": 0.8,
+    "high": 1.25,
+    "why": "The compute rate is napkin-bench's cuBLAS GemmEx bf16 on an 8192³ GEMM, the same library and dtype on a similar-sized problem, so a matched run should agree closely. The band allows two known sources of drift: the calibration's own seven GEMM samples spread from 1.36 to 1.60 ms (±8%) because sustained clocks and power vary (#5), and a different shape can select a different cuBLAS kernel and fill the 132 SMs differently (wave quantization)."
+  },
+  "match": [
+    "same GPU model (NVIDIA H100 80GB HBM3) and Modal request family as profiles/h100.measured.json",
+    "same dtype (bf16 in, fp32 accumulate) and library family (cuBLAS) as the calibration",
+    "torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False, so reductions stay fp32 as in the calibration"
+  ],
+  "excludes": [
+    "clock and power throttling during a sustained run: the estimate uses one rate",
+    "wave and tile quantization of this shape",
+    "allocation and data preparation: buffers are allocated once, before timing"
+  ]
+}
