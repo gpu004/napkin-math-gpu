@@ -42,7 +42,19 @@ mod tests {
     }
 
     #[test]
-    fn measured_profiles_are_attached_only_where_available() {
+    fn measured_json_without_pcie_fields_parses() {
+        let json = include_str!("../../../profiles/h100.measured.json")
+            .replace(r#""pcie_gen": 5,"#, "")
+            .replace(r#""pcie_gen_max": 5,"#, "")
+            .replace(r#""pcie_width": 16,"#, "")
+            .replace(r#""pcie_width_max": 16,"#, "");
+        let measured: napkin_profile::Measured = serde_json::from_str(&json).unwrap();
+        assert_eq!(measured.pcie_gen, None);
+        assert_eq!(measured.pcie_width_max, None);
+    }
+
+    #[test]
+    fn all_builtin_gpus_have_measured_profiles() {
         for id in ["a100", "h100", "b200", "b300"] {
             assert!(
                 find(id).is_some_and(|profile| profile.measured.is_some()),

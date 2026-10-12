@@ -11,11 +11,12 @@ Eskildsen's [Napkin Math](https://github.com/sirupsen/napkin-math).
 
 Below are numbers rounded for memorization, not faux precision.
 All four GPUs were measured on Modal on 2026-10-12 by `napkin-bench` (Rust +
-cudarc, CUDA-event timing, driver 580.95.05, CUDA 12.9): `H100!:2`,
-`A100-80GB:2`, `B200:2`, and `B300:2`. Each request returned two GPUs; the
-GPU↔GPU rows are the measured peer bandwidth between them, which on Modal is a
-PCIe path (~35 GB/s) rather than NVLink — that is why the figure is far below
-the NVLink datasheet column in the compare table.
+cudarc, CUDA-event timing, CUDA 12.9, driver 580.95.05 on A100/H100 and
+610.57.04 on B200/B300): `H100!:2`, `A100-80GB:2`, `B200:2`, and `B300:2`.
+Each request returned two GPUs; the GPU↔GPU row is a `cuMemcpyPeerAsync` copy
+between them with peer access enabled — NVLink where the hardware has it.
+Host copies ran on A100 at PCIe Gen4 x16, H100 and B200 at Gen5 x16, and B300
+at Gen6 x16, so the host-link rows carry each run's link assumption.
 
 **Note 1:** Compute figures are dense, not sparse. NVIDIA's headline Tensor
 Core numbers assume structured sparsity; dense is half.
@@ -31,16 +32,16 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 | Launch + sync round trip | 7 μs |  |  |  |
 | Pinned host RAM copy |  | 100 GB/s | 10 μs | 10 ms |
 | Host → device, pinned | 10 μs | 60 GB/s | 20 μs | 20 ms |
-| Device → host, pinned | 10 μs | 50 GB/s | 20 μs | 20 ms |
-| HBM random read (pointer chase) | 400 ns |  |  |  |
+| Device → host, pinned | 10 μs | 60 GB/s | 20 μs | 20 ms |
+| HBM random read (pointer chase) | 300 ns |  |  |  |
 | HBM copy (read + write) |  | 3 TB/s | 300 ns | 300 μs |
 | Elementwise add |  | 3 TB/s | 300 ns | 300 μs |
-| GPU ↔ GPU, NVLink one-way | 20 μs | 40 GB/s | 30 μs | 30 ms |
+| GPU ↔ GPU, NVLink one-way | 10 μs | 400 GB/s | 3 μs | 3 ms |
 
 | Dense GEMM | Throughput | 1 GFLOP | 1 TFLOP | Ridge point |
 | --- | ---: | ---: | ---: | ---: |
-| fp16 | 800 TFLOP/s | 1 μs | 1 ms | 260 FLOP/B |
-| bf16 | 800 TFLOP/s | 1 μs | 1 ms | 250 FLOP/B |
+| fp16 | 700 TFLOP/s | 1 μs | 1 ms | 240 FLOP/B |
+| bf16 | 700 TFLOP/s | 1 μs | 1 ms | 240 FLOP/B |
 | tf32 | 400 TFLOP/s | 3 μs | 3 ms | 120 FLOP/B |
 | fp32 | 50 TFLOP/s | 20 μs | 20 ms | 17 FLOP/B |
 <!-- /napkin -->
@@ -50,17 +51,17 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 <!-- napkin compare -->
 | GPU | Memory | HBM | Dense BF16 | BF16 ridge | NVLink | Host link | Launch | Basis |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 160 FLOP/B | 600 GB/s | 10 GB/s | 3 μs | measured 2026-10-12 |
-| H100 SXM 80GB | 80 GB | 3 TB/s | 800 TFLOP/s | 250 FLOP/B | 900 GB/s | 50 GB/s | 2 μs | measured 2026-10-12 |
-| B200 SXM 180GB | 180 GB | 6 TB/s | 2 PFLOP/s | 260 FLOP/B | 2 TB/s | 60 GB/s | 4 μs | measured 2026-10-12 |
-| B300 SXM 288GB | 288 GB | 6 TB/s | 2 PFLOP/s | 290 FLOP/B | 2 TB/s | 60 GB/s | 2 μs | measured 2026-10-12 |
+| A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 150 FLOP/B | 600 GB/s | 30 GB/s | 3 μs | measured 2026-10-12 |
+| H100 SXM 80GB | 80 GB | 3 TB/s | 700 TFLOP/s | 240 FLOP/B | 900 GB/s | 60 GB/s | 2 μs | measured 2026-10-12 |
+| B200 SXM 180GB | 180 GB | 6 TB/s | 2 PFLOP/s | 250 FLOP/B | 2 TB/s | 60 GB/s | 4 μs | measured 2026-10-12 |
+| B300 SXM 288GB | 288 GB | 6 TB/s | 2 PFLOP/s | 280 FLOP/B | 2 TB/s | 50 GB/s | 3 μs | measured 2026-10-12 |
 
 | GPU | HBM measured / ceiling | BF16 measured / ceiling |
 | --- | ---: | ---: |
-| A100 SXM 80GB | 1738 / 2039 GB/s (85%) | 271 / 312 TFLOP/s (87%) |
-| H100 SXM 80GB | 2983 / 3350 GB/s (89%) | 754 / 990 TFLOP/s (76%) |
-| B200 SXM 180GB | 6332 / 8000 GB/s (79%) | 1615 / 2250 TFLOP/s (72%) |
-| B300 SXM 288GB | 6240 / 8000 GB/s (78%) | 1812 / 2250 TFLOP/s (81%) |
+| A100 SXM 80GB | 1738 / 2039 GB/s (85%) | 265 / 312 TFLOP/s (85%) |
+| H100 SXM 80GB | 3003 / 3350 GB/s (90%) | 734 / 990 TFLOP/s (74%) |
+| B200 SXM 180GB | 6322 / 8000 GB/s (79%) | 1585 / 2250 TFLOP/s (70%) |
+| B300 SXM 288GB | 6487 / 8000 GB/s (81%) | 1823 / 2250 TFLOP/s (81%) |
 <!-- /napkin -->
 
 Modal request semantics matter: `H100!` pins an H100 — a plain `H100` request
