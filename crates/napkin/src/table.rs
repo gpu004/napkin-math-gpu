@@ -1,15 +1,59 @@
 //! Markdown table rendering for the README "Numbers" section: one
 //! significant digit, sized for memorization rather than faux precision.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::price::PriceRecord;
-use crate::profile::{Dtype, Measured, Profile, Rates};
+use crate::profile::{Dtype, GpuState, Measured, Profile, Rates, RoundState, Span};
 use crate::units::{
     fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_sig, fmt_tflops, round_sig,
 };
 
 const SIG: u32 = 1;
+
+/// A cell gets a † when the rounds behind it disagree by more than this
+/// fraction (`Measured::round_spread`). Back-to-back rounds of one kernel on
+/// an otherwise idle GPU usually agree to a few tenths of a percent (fp32
+/// GEMM and HBM copy do on every GPU here), so a larger range means the GPU
+/// changed state during the run and the median alone would hide it.
+pub const SPREAD_FLAG: f64 = 0.05;
+
+/// `samples_ms` keys in table order, with the name the footnote uses.
+const SAMPLE_NAMES: [(&str, &str); 17] = [
+    ("launch_us", "kernel launch"),
+    ("sync_us", "launch + sync"),
+    ("host_copy_gbps", "host RAM copy"),
+    ("h2d_latency_us", "host → device latency"),
+    ("h2d_gbps", "host → device"),
+    ("d2h_latency_us", "device → host latency"),
+    ("d2h_gbps", "device → host"),
+    ("hbm_latency_ns", "HBM random read"),
+    ("hbm_gbps", "HBM copy"),
+    ("elementwise_gbps", "elementwise add"),
+    ("g2g_latency_us", "GPU ↔ GPU latency"),
+    ("g2g_forward_gbps", "GPU 0 → 1"),
+    ("g2g_reverse_gbps", "GPU 1 → 0"),
+    ("gemm_fp16", "fp16 GEMM"),
+    ("gemm_bf16", "bf16 GEMM"),
+    ("gemm_tf32", "tf32 GEMM"),
+    ("gemm_fp32", "fp32 GEMM"),
+];
+
+fn flagged(m: &Measured, keys: &[&str]) -> bool {
+    keys.iter()
+        .filter_map(|key| m.round_spread(key))
+        .any(|spread| spread > SPREAD_FLAG)
+}
+
+/// Appends a † to a non-empty `cell` whose rounds are flagged.
+fn mark(m: &Measured, keys: &[&str], cell: String) -> String {
+    if !cell.is_empty() && flagged(m, keys) {
+        format!("{cell} †")
+    } else {
+        cell
+    }
+}
 
 fn cell_time(bytes: f64, gbps: f64, exact: bool) -> String {
     let rate = if exact { gbps } else { round_sig(gbps, SIG) };
@@ -133,90 +177,8 @@ pub fn prices(records: &[PriceRecord]) -> String {
 pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
     let m = profile.measured.as_ref()?;
     let sig = if exact { 3 } else { SIG };
-    let lat_us = |v: f64| fmt_duration(v / 1e6, sig);
-    let gbps = |v: f64| fmt_gbps(v, sig);
-    let mb = |v: f64| cell_time(1e6, v, exact);
-    let gb = |v: f64| cell_time(1e9, v, exact);
-
     let mut out = String::new();
-    emit(
-        &mut out,
-        &["Operation", "Latency", "Throughput", "1 MB", "1 GB"],
-    );
-    emit(&mut out, &["---", "---:", "---:", "---:", "---:"]);
-    let rows: [[String; 5]; 8] = [
-        [
-            "Kernel launch (back-to-back)".to_owned(),
-            lat_us(m.launch_us),
-            String::new(),
-            String::new(),
-            String::new(),
-        ],
-        [
-            "Launch + sync round trip".to_owned(),
-            m.sync_us.map_or_else(String::new, lat_us),
-            String::new(),
-            String::new(),
-            String::new(),
-        ],
-        [
-            "Pinned host RAM copy".to_owned(),
-            String::new(),
-            gbps(m.host_copy_gbps),
-            mb(m.host_copy_gbps),
-            gb(m.host_copy_gbps),
-        ],
-        [
-            "Host → device, pinned".to_owned(),
-            m.h2d_latency_us.map_or_else(String::new, lat_us),
-            gbps(m.h2d_gbps),
-            mb(m.h2d_gbps),
-            gb(m.h2d_gbps),
-        ],
-        [
-            "Device → host, pinned".to_owned(),
-            m.d2h_latency_us.map_or_else(String::new, lat_us),
-            gbps(m.d2h_gbps),
-            mb(m.d2h_gbps),
-            gb(m.d2h_gbps),
-        ],
-        [
-            "HBM random read (pointer chase)".to_owned(),
-            m.hbm_latency_ns
-                .map_or_else(String::new, |ns| format!("{} ns", fmt_sig(ns, sig))),
-            String::new(),
-            String::new(),
-            String::new(),
-        ],
-        [
-            "HBM copy (read + write)".to_owned(),
-            String::new(),
-            gbps(m.hbm_gbps),
-            mb(m.hbm_gbps),
-            gb(m.hbm_gbps),
-        ],
-        [
-            "Elementwise add".to_owned(),
-            String::new(),
-            gbps(m.elementwise_gbps),
-            mb(m.elementwise_gbps),
-            gb(m.elementwise_gbps),
-        ],
-    ];
-    let g2g_row = [
-        "GPU ↔ GPU, NVLink one-way".to_owned(),
-        m.g2g_latency_us.map_or_else(String::new, lat_us),
-        m.g2g_gbps.map_or_else(String::new, gbps),
-        m.g2g_gbps.map_or_else(String::new, mb),
-        m.g2g_gbps.map_or_else(String::new, gb),
-    ];
-    for r in rows.iter().chain(std::iter::once(&g2g_row)) {
-        if r[1..].iter().all(String::is_empty) {
-            continue;
-        }
-        emit(&mut out, &[&r[0], &r[1], &r[2], &r[3], &r[4]]);
-    }
-
+    emit_movement_rows(&mut out, m, exact);
     out.push('\n');
     emit(
         &mut out,
@@ -232,7 +194,244 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
     for dtype in [Dtype::Fp16, Dtype::Bf16, Dtype::Tf32, Dtype::Fp32] {
         emit_gemm_row(&mut out, m, dtype, sig, exact);
     }
+    spread_footnote(&mut out, m);
+    if let Some(state) = &m.gpu_state {
+        gpu_state_table(&mut out, state);
+    }
     Some(out)
+}
+
+/// Names every flagged metric with its round spread, e.g.
+/// "† Rounds disagree by more than 5%: fp16 GEMM 15%, bf16 GEMM 17%. ..."
+fn spread_footnote(out: &mut String, m: &Measured) {
+    let spreads: Vec<String> = SAMPLE_NAMES
+        .iter()
+        .filter_map(|(key, name)| {
+            m.round_spread(key)
+                .filter(|spread| *spread > SPREAD_FLAG)
+                .map(|spread| format!("{name} {}%", fmt_sig(spread * 100.0, 2)))
+        })
+        .collect();
+    if spreads.is_empty() {
+        return;
+    }
+    let _ = write!(
+        out,
+        "\n† Rounds disagree by more than {:.0}%: {}. Spread is the slowest of the {} rounds over \
+         the fastest, minus one: the observed range, not a confidence interval. The cell shows the \
+         median round.\n",
+        SPREAD_FLAG * 100.0,
+        spreads.join(", "),
+        m.rounds,
+    );
+}
+
+/// One row per GEMM dtype with what NVML saw across its timed rounds.
+fn gpu_state_table(out: &mut String, state: &GpuState) {
+    out.push('\n');
+    emit(
+        out,
+        &[
+            "GEMM rounds",
+            "SM clock",
+            "Memory clock",
+            "Power",
+            "Temperature",
+            "Clock limits",
+        ],
+    );
+    emit(out, &["---", "---:", "---:", "---:", "---:", "---"]);
+    for dtype in [Dtype::Fp16, Dtype::Bf16, Dtype::Tf32, Dtype::Fp32] {
+        let Some(rounds) = state.rounds.get(&format!("gemm_{dtype}")) else {
+            continue;
+        };
+        let lows_highs = |pick: fn(&RoundState) -> Option<Span>| {
+            let spans: Vec<_> = rounds.iter().filter_map(pick).collect();
+            fmt_range(
+                spans.iter().map(|s| s.min).reduce(f64::min),
+                spans.iter().map(|s| s.max).reduce(f64::max),
+            )
+        };
+        let mut power: Vec<f64> = rounds.iter().filter_map(|r| r.power_w).collect();
+        power.sort_by(f64::total_cmp);
+        let polls: u32 = rounds.iter().map(|r| r.polls).sum();
+        let mut reasons = BTreeMap::new();
+        for round in rounds {
+            for (name, count) in &round.clock_limit_reasons {
+                *reasons.entry(name.as_str()).or_insert(0_u32) += count;
+            }
+        }
+        let limits = reasons
+            .iter()
+            .map(|(name, count)| {
+                format!(
+                    "{name} {:.0}%",
+                    f64::from(*count) * 100.0 / f64::from(polls.max(1))
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        emit(
+            out,
+            &[
+                &dtype.to_string(),
+                &with_unit(&lows_highs(|r| r.sm_clock_mhz), "MHz"),
+                &with_unit(&lows_highs(|r| r.mem_clock_mhz), "MHz"),
+                &with_unit(
+                    &median(&power).map_or_else(String::new, |w| format!("{w:.0}")),
+                    "W",
+                ),
+                &with_unit(&lows_highs(|r| r.temperature_c), "°C"),
+                if limits.is_empty() { "none" } else { &limits },
+            ],
+        );
+    }
+    let _ = write!(
+        out,
+        "\nRead through {} every {} ms on the GPU that ran the GEMMs, during the timed rounds \
+         only. Board limits: {:.0} W, SM clock {} MHz, memory clock {} MHz. Power is the median \
+         round's energy-counter change between its first and last counter update; the counter \
+         updates only a few times per round, so a single round in `gpu_state` can read above the \
+         board limit. Clock limits give the share of polls that reported each \
+         NVML clock-limit reason.\n",
+        state.source,
+        fmt_sig(state.poll_interval_ms, 2),
+        state.power_limit_w,
+        state.max_sm_clock_mhz,
+        state.max_mem_clock_mhz,
+    );
+}
+
+/// `"1590–1980"`, or one number when both ends round to the same value.
+fn fmt_range(low: Option<f64>, high: Option<f64>) -> String {
+    match (low, high) {
+        (Some(low), Some(high)) if low.round() < high.round() => {
+            format!("{low:.0}–{high:.0}")
+        }
+        (Some(value), _) | (None, Some(value)) => format!("{value:.0}"),
+        (None, None) => String::new(),
+    }
+}
+
+fn median(sorted: &[f64]) -> Option<f64> {
+    let mid = sorted.len() / 2;
+    match sorted.len() {
+        0 => None,
+        n if n % 2 == 1 => sorted.get(mid).copied(),
+        _ => Some((sorted.get(mid - 1)? + sorted.get(mid)?) / 2.0),
+    }
+}
+
+fn with_unit(value: &str, unit: &str) -> String {
+    if value.is_empty() {
+        "—".to_owned()
+    } else {
+        format!("{value} {unit}")
+    }
+}
+
+/// The "Operation" table: launch, host, HBM and GPU-to-GPU rows.
+fn emit_movement_rows(out: &mut String, m: &Measured, exact: bool) {
+    let sig = if exact { 3 } else { SIG };
+    let lat_us = |v: f64| fmt_duration(v / 1e6, sig);
+    let gbps = |v: f64| fmt_gbps(v, sig);
+    let mb = |v: f64| cell_time(1e6, v, exact);
+    let gb = |v: f64| cell_time(1e9, v, exact);
+
+    emit(out, &["Operation", "Latency", "Throughput", "1 MB", "1 GB"]);
+    emit(out, &["---", "---:", "---:", "---:", "---:"]);
+    let rows: [[String; 5]; 8] = [
+        [
+            "Kernel launch (back-to-back)".to_owned(),
+            mark(m, &["launch_us"], lat_us(m.launch_us)),
+            String::new(),
+            String::new(),
+            String::new(),
+        ],
+        [
+            "Launch + sync round trip".to_owned(),
+            mark(m, &["sync_us"], m.sync_us.map_or_else(String::new, lat_us)),
+            String::new(),
+            String::new(),
+            String::new(),
+        ],
+        [
+            "Pinned host RAM copy".to_owned(),
+            String::new(),
+            mark(m, &["host_copy_gbps"], gbps(m.host_copy_gbps)),
+            mb(m.host_copy_gbps),
+            gb(m.host_copy_gbps),
+        ],
+        [
+            "Host → device, pinned".to_owned(),
+            mark(
+                m,
+                &["h2d_latency_us"],
+                m.h2d_latency_us.map_or_else(String::new, lat_us),
+            ),
+            mark(m, &["h2d_gbps"], gbps(m.h2d_gbps)),
+            mb(m.h2d_gbps),
+            gb(m.h2d_gbps),
+        ],
+        [
+            "Device → host, pinned".to_owned(),
+            mark(
+                m,
+                &["d2h_latency_us"],
+                m.d2h_latency_us.map_or_else(String::new, lat_us),
+            ),
+            mark(m, &["d2h_gbps"], gbps(m.d2h_gbps)),
+            mb(m.d2h_gbps),
+            gb(m.d2h_gbps),
+        ],
+        [
+            "HBM random read (pointer chase)".to_owned(),
+            mark(
+                m,
+                &["hbm_latency_ns"],
+                m.hbm_latency_ns
+                    .map_or_else(String::new, |ns| format!("{} ns", fmt_sig(ns, sig))),
+            ),
+            String::new(),
+            String::new(),
+            String::new(),
+        ],
+        [
+            "HBM copy (read + write)".to_owned(),
+            String::new(),
+            mark(m, &["hbm_gbps"], gbps(m.hbm_gbps)),
+            mb(m.hbm_gbps),
+            gb(m.hbm_gbps),
+        ],
+        [
+            "Elementwise add".to_owned(),
+            String::new(),
+            mark(m, &["elementwise_gbps"], gbps(m.elementwise_gbps)),
+            mb(m.elementwise_gbps),
+            gb(m.elementwise_gbps),
+        ],
+    ];
+    let g2g_row = [
+        "GPU ↔ GPU, NVLink one-way".to_owned(),
+        mark(
+            m,
+            &["g2g_latency_us"],
+            m.g2g_latency_us.map_or_else(String::new, lat_us),
+        ),
+        mark(
+            m,
+            &["g2g_forward_gbps", "g2g_reverse_gbps"],
+            m.g2g_gbps.map_or_else(String::new, gbps),
+        ),
+        m.g2g_gbps.map_or_else(String::new, mb),
+        m.g2g_gbps.map_or_else(String::new, gb),
+    ];
+    for r in rows.iter().chain(std::iter::once(&g2g_row)) {
+        if r[1..].iter().all(String::is_empty) {
+            continue;
+        }
+        emit(out, &[&r[0], &r[1], &r[2], &r[3], &r[4]]);
+    }
 }
 
 fn emit_gemm_row(out: &mut String, m: &Measured, dtype: Dtype, sig: u32, exact: bool) {
@@ -248,7 +447,7 @@ fn emit_gemm_row(out: &mut String, m: &Measured, dtype: Dtype, sig: u32, exact: 
             out,
             &[
                 &dtype.to_string(),
-                &fmt_tflops(tflops, sig),
+                &mark(m, &[&format!("gemm_{dtype}")], fmt_tflops(tflops, sig)),
                 &ts(1e9),
                 &ts(1e12),
                 &ridge,
@@ -358,7 +557,83 @@ pub fn compare(profiles: &[Profile], exact: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::host_link_label;
+    use super::*;
+    use crate::profile::find;
+
+    fn h100_with(samples: &[(&str, Vec<f64>)], gpu_state: Option<GpuState>) -> Profile {
+        let mut profile = find("h100").cloned().unwrap();
+        let measured = profile.measured.as_mut().unwrap();
+        measured.samples_ms = samples
+            .iter()
+            .map(|(key, rounds)| ((*key).to_owned(), rounds.clone()))
+            .collect();
+        measured.gpu_state = gpu_state;
+        profile
+    }
+
+    #[test]
+    fn flags_gemm_rounds_that_disagree_beyond_threshold() {
+        let profile = h100_with(
+            &[
+                ("gemm_fp16", vec![1.40, 1.45, 1.61]),
+                ("gemm_fp32", vec![21.0, 21.0, 21.01]),
+            ],
+            None,
+        );
+        let table = numbers(&profile, false).unwrap();
+        assert!(table.contains("| fp16 | 700 TFLOP/s † |"), "{table}");
+        assert!(table.contains("| fp32 | 50 TFLOP/s |"), "{table}");
+        assert!(table.contains("fp16 GEMM 15%."), "{table}");
+        assert!(!table.contains("fp32 GEMM"), "{table}");
+        assert!(table.contains("not a confidence interval"), "{table}");
+    }
+
+    #[test]
+    fn omits_footnote_when_rounds_agree() {
+        let profile = h100_with(&[("gemm_fp16", vec![1.40, 1.41, 1.42])], None);
+        let table = numbers(&profile, false).unwrap();
+        assert!(!table.contains('†'), "{table}");
+    }
+
+    #[test]
+    fn renders_gpu_state_per_gemm_dtype() {
+        let round = |sm: f64, power: f64, capped: u32| RoundState {
+            polls: 4,
+            wall_ms: 200.0,
+            sm_clock_mhz: Some(Span {
+                min: sm,
+                median: sm,
+                max: 1980.0,
+            }),
+            mem_clock_mhz: Some(Span {
+                min: 2619.0,
+                median: 2619.0,
+                max: 2619.0,
+            }),
+            power_w: Some(power),
+            temperature_c: None,
+            clock_limit_reasons: BTreeMap::from([("sw_power_cap".to_owned(), capped)]),
+        };
+        let state = GpuState {
+            source: "NVML 12.580 via nvml-wrapper 0.13".to_owned(),
+            poll_interval_ms: 5.0,
+            max_sm_clock_mhz: 1980,
+            max_mem_clock_mhz: 2619,
+            power_limit_w: 700.0,
+            warmup_ms: 1000.0,
+            round_ms: 200.0,
+            rounds: BTreeMap::from([(
+                "gemm_fp16".to_owned(),
+                vec![round(1980.0, 650.0, 0), round(1590.0, 699.6, 4)],
+            )]),
+        };
+        let table = numbers(&h100_with(&[], Some(state)), false).unwrap();
+        assert!(
+            table.contains("| fp16 | 1590–1980 MHz | 2619 MHz | 675 W | — | sw_power_cap 50% |"),
+            "{table}"
+        );
+        assert!(table.contains("Board limits: 700 W"), "{table}");
+    }
 
     #[test]
     fn host_limited_link_shows_effective_and_gpu_generations() {

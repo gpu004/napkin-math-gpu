@@ -4,13 +4,21 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use napkin_profile::collective::{Collective, CollectiveEvidence, Curve, CurvePoint, Topology};
+
 pub use napkin_profile::*;
 
 static BUILTIN: LazyLock<Vec<Profile>> = LazyLock::new(generated_profiles);
+static COLLECTIVES: LazyLock<Vec<CollectiveEvidence>> = LazyLock::new(generated_collectives);
 
 /// Returns the built-in profiles in a100, h100, b200, b300 order.
 pub fn builtin() -> &'static [Profile] {
     BUILTIN.as_slice()
+}
+
+/// Returns the built-in NCCL Tests collective evidence.
+pub fn collectives() -> &'static [CollectiveEvidence] {
+    COLLECTIVES.as_slice()
 }
 
 /// Finds a built-in profile by its identifier.
@@ -77,6 +85,26 @@ mod tests {
             measured.pcie_gen = None;
             assert_eq!(measured.pcie_effective_gen(), None);
         }
+    }
+
+    #[test]
+    fn measured_json_without_gpu_state_parses() {
+        let mut json: serde_json::Value =
+            serde_json::from_str(include_str!("../../../profiles/h100.measured.json")).unwrap();
+        json.as_object_mut().unwrap().remove("gpu_state");
+        let measured: napkin_profile::Measured = serde_json::from_value(json).unwrap();
+        assert!(measured.gpu_state.is_none());
+    }
+
+    #[test]
+    fn round_spread_is_slowest_over_fastest() {
+        let mut measured = find("h100").unwrap().measured.clone().unwrap();
+        measured.samples_ms = BTreeMap::from([("gemm_fp16".to_owned(), vec![1.5, 1.2, 1.8, 1.2])]);
+        let spread = measured.round_spread("gemm_fp16").unwrap();
+        assert!((spread - 0.5).abs() < 1e-12);
+        assert!(measured.round_spread("gemm_bf16").is_none());
+        measured.samples_ms = BTreeMap::from([("gemm_fp16".to_owned(), vec![1.5])]);
+        assert!(measured.round_spread("gemm_fp16").is_none());
     }
 
     #[test]

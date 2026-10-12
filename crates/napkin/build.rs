@@ -5,7 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use napkin_profile::{Ceiling, Dtype, Measured, Profile};
+use napkin_profile::collective::{Collective, CollectiveEvidence, Curve, CurvePoint, Topology};
+use napkin_profile::{Ceiling, Dtype, GpuState, Measured, Profile, RoundState, Span};
 use serde::Deserialize;
 
 const DATASHEET_IDS: [&str; 4] = ["a100", "h100", "b200", "b300"];
@@ -72,7 +73,10 @@ fn run() -> Result<(), String> {
         }
     }
     let profiles = load_profiles(&paths.datasheets, &paths.measured)?;
-    let generated = emit_profiles(&profiles);
+    let nccl_dir = profiles_dir.join("nccl-tests");
+    println!("cargo:rerun-if-changed={}", nccl_dir.display());
+    let collectives = load_collectives(&nccl_dir, &profiles)?;
+    let generated = emit_profiles(&profiles, &collectives);
     let out_dir = env::var("OUT_DIR").map_err(|e| e.to_string())?;
     let output = Path::new(&out_dir).join("profiles.rs");
     fs::write(&output, generated)
@@ -348,7 +352,106 @@ fn validate_measured(id: &str, measured: &Measured) -> Result<(), String> {
     Ok(())
 }
 
-fn emit_profiles(profiles: &[Profile]) -> String {
+fn load_collectives(
+    nccl_dir: &Path,
+    profiles: &[Profile],
+) -> Result<Vec<CollectiveEvidence>, String> {
+    let entries = fs::read_dir(nccl_dir)
+        .map_err(|error| format!("cannot read {}: {error}", nccl_dir.display()))?;
+    let required = [
+        "run.json",
+        "topo.txt",
+        "nccl_topology.txt",
+        "all_reduce_perf.txt",
+        "all_reduce_perf.json",
+        "all_gather_perf.txt",
+        "all_gather_perf.json",
+        "reduce_scatter_perf.txt",
+        "reduce_scatter_perf.json",
+    ];
+    let mut evidence = Vec::new();
+    for entry in entries {
+        let directory = entry
+            .map_err(|error| format!("cannot read entry in {}: {error}", nccl_dir.display()))?
+            .path();
+        if !directory.is_dir() {
+            continue;
+        }
+        let name = directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("invalid NCCL evidence directory {}", directory.display()))?;
+        let gpu = name
+            .split_once('x')
+            .map(|(gpu, _)| gpu)
+            .ok_or_else(|| format!("NCCL evidence directory {name:?} must be <gpu>x<count>"))?;
+        if !DATASHEET_IDS.contains(&gpu) {
+            return Err(format!(
+                "NCCL evidence directory {name:?} has GPU id {gpu:?} not in DATASHEET_IDS"
+            ));
+        }
+        for file in required {
+            let path = directory.join(file);
+            if !path.is_file() {
+                return Err(format!("missing NCCL evidence file {}", path.display()));
+            }
+        }
+        let read = |name: &str| -> Result<String, String> {
+            let path = directory.join(name);
+            fs::read_to_string(&path)
+                .map_err(|error| format!("cannot read {}: {error}", path.display()))
+        };
+        let logical_dir = format!("profiles/nccl-tests/{name}");
+        let run_json = read("run.json")?;
+        let reduce = read("all_reduce_perf.json")?;
+        let gather = read("all_gather_perf.json")?;
+        let scatter = read("reduce_scatter_perf.json")?;
+        let item = napkin_profile::collective::parse_evidence(
+            &logical_dir,
+            &run_json,
+            [&reduce, &gather, &scatter],
+        )
+        .map_err(|error| format!("invalid NCCL evidence in {logical_dir}: {error}"))?;
+        if let Some(profile) = profiles.iter().find(|profile| profile.id == item.gpu)
+            && let Some(measured) = &profile.measured
+            && measured.device_name != item.device_name
+        {
+            return Err(format!(
+                "NCCL evidence in {logical_dir} names {:?}, measured profile {} names {:?}",
+                item.device_name, item.gpu, measured.device_name
+            ));
+        }
+        if evidence.iter().any(|existing: &CollectiveEvidence| {
+            existing.gpu == item.gpu
+                && existing.gpu_count == item.gpu_count
+                && existing.topology == item.topology
+                && existing.dtype == item.dtype
+        }) {
+            return Err(format!(
+                "duplicate NCCL evidence for {} × {} {} {}",
+                item.gpu, item.gpu_count, item.topology, item.dtype
+            ));
+        }
+        evidence.push(item);
+    }
+    evidence.sort_by(|left, right| {
+        (
+            &left.gpu,
+            left.gpu_count,
+            left.topology.to_string(),
+            left.dtype.to_string(),
+        )
+            .cmp(&(
+                &right.gpu,
+                right.gpu_count,
+                right.topology.to_string(),
+                right.dtype.to_string(),
+            ))
+    });
+    Ok(evidence)
+}
+
+fn emit_profiles(profiles: &[Profile], collectives: &[CollectiveEvidence]) -> String {
     let mut generated = String::from("fn generated_profiles() -> Vec<Profile> {\n    vec![\n");
     for profile in profiles {
         generated.push_str("        generated_profile_");
@@ -359,7 +462,86 @@ fn emit_profiles(profiles: &[Profile]) -> String {
     for profile in profiles {
         emit_profile(profile, &mut generated);
     }
+    generated.push_str("fn generated_collectives() -> Vec<CollectiveEvidence> {\n    vec![\n");
+    for (index, _) in collectives.iter().enumerate() {
+        let _ = writeln!(generated, "        generated_collective_{index}(),");
+    }
+    generated.push_str("    ]\n}\n");
+    for (index, evidence) in collectives.iter().enumerate() {
+        emit_collective(index, evidence, &mut generated);
+        for (curve_index, curve) in evidence.curves.iter().enumerate() {
+            emit_curve(index, curve_index, curve, &mut generated);
+        }
+    }
     generated
+}
+
+fn emit_collective(index: usize, evidence: &CollectiveEvidence, generated: &mut String) {
+    let fields = [
+        ("gpu", string_literal(&evidence.gpu)),
+        ("device_name", string_literal(&evidence.device_name)),
+        ("gpu_count", format!("{}_u32", evidence.gpu_count)),
+        ("topology", topology_literal(evidence.topology).to_owned()),
+        ("dtype", dtype_literal(evidence.dtype).to_owned()),
+        ("redop", string_literal(&evidence.redop)),
+        ("rank_layout", string_literal(&evidence.rank_layout)),
+        ("modal_request", string_literal(&evidence.modal_request)),
+        ("captured_at", string_literal(&evidence.captured_at)),
+        ("driver_version", string_literal(&evidence.driver_version)),
+        ("nccl_version", string_literal(&evidence.nccl_version)),
+        ("nccl_tests", string_literal(&evidence.nccl_tests)),
+        ("raw_dir", string_literal(&evidence.raw_dir)),
+    ];
+    let _ = writeln!(
+        generated,
+        "fn generated_collective_{index}() -> CollectiveEvidence {{\n    CollectiveEvidence {{"
+    );
+    for (field, value) in fields {
+        emit_field(generated, "        ", field, &value);
+    }
+    generated.push_str("        curves: vec![\n");
+    for curve_index in 0..evidence.curves.len() {
+        let _ = writeln!(
+            generated,
+            "            generated_curve_{index}_{curve_index}(),"
+        );
+    }
+    generated.push_str("        ],\n    }\n}\n");
+}
+
+fn emit_curve(evidence_index: usize, curve_index: usize, curve: &Curve, generated: &mut String) {
+    let collective = match curve.collective {
+        Collective::AllReduce => "Collective::AllReduce",
+        Collective::AllGather => "Collective::AllGather",
+        Collective::ReduceScatter => "Collective::ReduceScatter",
+    };
+    let _ = writeln!(
+        generated,
+        "#[expect(clippy::unreadable_literal, reason = \"preserve NCCL evidence precision\")]\nfn generated_curve_{evidence_index}_{curve_index}() -> Curve {{\n    Curve {{\n        collective: {collective},\n        command: {},\n        points: vec![",
+        string_literal(&curve.command),
+    );
+    for point in &curve.points {
+        emit_curve_point(point, generated);
+    }
+    generated.push_str("        ],\n    }\n}\n");
+}
+
+fn emit_curve_point(point: &CurvePoint, generated: &mut String) {
+    let _ = writeln!(
+        generated,
+        "            CurvePoint {{ bytes: {}_u64, time_us: {}, algbw_gbps: {}, busbw_gbps: {} }},",
+        point.bytes,
+        float_literal(point.time_us),
+        float_literal(point.algbw_gbps),
+        float_literal(point.busbw_gbps)
+    );
+}
+
+fn topology_literal(topology: Topology) -> &'static str {
+    match topology {
+        Topology::Nvlink => "Topology::Nvlink",
+        Topology::Pcie => "Topology::Pcie",
+    }
 }
 
 fn emit_profile(profile: &Profile, generated: &mut String) {
@@ -469,6 +651,7 @@ fn emit_measured(measured: &Measured) -> String {
         gemm_shape,
         checks,
         samples_ms,
+        gpu_state,
     } = measured;
     let fields = [
         ("captured_at", string_literal(captured_at)),
@@ -510,6 +693,12 @@ fn emit_measured(measured: &Measured) -> String {
         ),
         ("checks", bool_map(checks)),
         ("samples_ms", samples_map(samples_ms)),
+        (
+            "gpu_state",
+            gpu_state
+                .as_ref()
+                .map_or_else(|| "None".to_owned(), gpu_state_literal),
+        ),
     ];
     let mut generated = String::from("Some(Measured {\n");
     for (name, value) in fields {
@@ -585,4 +774,79 @@ fn samples_map(values: &BTreeMap<String, Vec<f64>>) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("BTreeMap::from([{entries}])")
+}
+
+fn gpu_state_literal(state: &GpuState) -> String {
+    let GpuState {
+        source,
+        poll_interval_ms,
+        max_sm_clock_mhz,
+        max_mem_clock_mhz,
+        power_limit_w,
+        warmup_ms,
+        round_ms,
+        rounds,
+    } = state;
+    let rounds = rounds
+        .iter()
+        .map(|(name, rounds)| {
+            let rounds = rounds
+                .iter()
+                .map(round_state_literal)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({}, vec![{rounds}])", string_literal(name))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "Some(GpuState {{ source: {}, poll_interval_ms: {}, max_sm_clock_mhz: {max_sm_clock_mhz}_u32, \
+         max_mem_clock_mhz: {max_mem_clock_mhz}_u32, power_limit_w: {}, warmup_ms: {}, \
+         round_ms: {}, rounds: BTreeMap::from([{rounds}]) }})",
+        string_literal(source),
+        float_literal(*poll_interval_ms),
+        float_literal(*power_limit_w),
+        float_literal(*warmup_ms),
+        float_literal(*round_ms),
+    )
+}
+
+fn round_state_literal(round: &RoundState) -> String {
+    let RoundState {
+        polls,
+        wall_ms,
+        sm_clock_mhz,
+        mem_clock_mhz,
+        power_w,
+        temperature_c,
+        clock_limit_reasons,
+    } = round;
+    let reasons = clock_limit_reasons
+        .iter()
+        .map(|(name, count)| format!("({}, {count}_u32)", string_literal(name)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "RoundState {{ polls: {polls}_u32, wall_ms: {}, sm_clock_mhz: {}, mem_clock_mhz: {}, power_w: {}, \
+         temperature_c: {}, clock_limit_reasons: BTreeMap::from([{reasons}]) }}",
+        float_literal(*wall_ms),
+        option_span_literal(*sm_clock_mhz),
+        option_span_literal(*mem_clock_mhz),
+        option_float_literal(*power_w),
+        option_span_literal(*temperature_c),
+    )
+}
+
+fn option_span_literal(span: Option<Span>) -> String {
+    span.map_or_else(
+        || "None".to_owned(),
+        |Span { min, median, max }| {
+            format!(
+                "Some(Span {{ min: {}, median: {}, max: {} }})",
+                float_literal(min),
+                float_literal(median),
+                float_literal(max)
+            )
+        },
+    )
 }

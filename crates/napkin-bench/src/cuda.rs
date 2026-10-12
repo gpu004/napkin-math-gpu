@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use cudarc::cublas::result::CublasError;
 use cudarc::cublas::safe::CudaBlas;
@@ -19,6 +19,8 @@ use cudarc::driver::sys as dsys;
 use cudarc::nvrtc::compile_ptx;
 use half::{bf16, f16};
 use napkin_profile::{Dtype, Measured};
+
+use crate::gpu_state::{Monitor, Window, round_states};
 
 /// Anything the harness can fail with.
 #[derive(Debug)]
@@ -60,6 +62,8 @@ pub(crate) struct Config {
     elementwise_mib: usize,
     host_mib: usize,
     gemm_n: u32,
+    gemm_warmup: Duration,
+    gemm_round: Duration,
     chase_steps: u64,
     iterations_bw: u32,
     iterations_launch: u32,
@@ -75,6 +79,8 @@ impl Config {
             elementwise_mib: 256,
             host_mib: 512,
             gemm_n: 8192,
+            gemm_warmup: Duration::from_secs(1),
+            gemm_round: Duration::from_millis(200),
             chase_steps: 1_000_000,
             iterations_bw: 20,
             iterations_launch: 1_000,
@@ -90,6 +96,8 @@ impl Config {
             elementwise_mib: 64,
             host_mib: 64,
             gemm_n: 4096,
+            gemm_warmup: Duration::from_millis(100),
+            gemm_round: Duration::from_millis(20),
             chase_steps: 100_000,
             iterations_bw: 5,
             iterations_launch: 100,
@@ -98,16 +106,34 @@ impl Config {
     }
 }
 
-/// Median of event-timed rounds; each round records `iterations` calls of `op`
-/// and stores per-iteration milliseconds.
+/// Event-timed rounds; each round records `iterations` calls of `op` and
+/// stores per-iteration milliseconds.
 fn cuda_samples(
     ctx: &Arc<CudaContext>,
     stream: &Arc<CudaStream>,
     warmups: u32,
     iterations: u32,
     rounds: u32,
-    mut op: impl FnMut() -> Result<(), BenchError>,
+    op: impl FnMut() -> Result<(), BenchError>,
 ) -> Result<Vec<f64>, BenchError> {
+    Ok(cuda_rounds(ctx, stream, warmups, iterations, rounds, op)?
+        .into_iter()
+        .map(|(ms, _)| ms)
+        .collect())
+}
+
+/// `cuda_samples` plus the host-clock window of each round, so NVML polls can
+/// be matched to it. The stream is idle when a round starts, so its first
+/// call begins on the GPU right after `start` is taken, and `end` is taken
+/// once the last call has finished.
+fn cuda_rounds(
+    ctx: &Arc<CudaContext>,
+    stream: &Arc<CudaStream>,
+    warmups: u32,
+    iterations: u32,
+    rounds: u32,
+    mut op: impl FnMut() -> Result<(), BenchError>,
+) -> Result<Vec<(f64, Window)>, BenchError> {
     for _ in 0..warmups {
         op()?;
     }
@@ -116,17 +142,82 @@ fn cuda_samples(
     for _ in 0..rounds {
         let start = ctx.new_event(Some(dsys::CUevent_flags::CU_EVENT_DEFAULT))?;
         let end = ctx.new_event(Some(dsys::CUevent_flags::CU_EVENT_DEFAULT))?;
+        let window_start = Instant::now();
         start.record(stream)?;
         for _ in 0..iterations {
             op()?;
         }
         end.record(stream)?;
         stream.synchronize()?;
+        let window = Window {
+            start: window_start,
+            end: Instant::now(),
+        };
         let ms =
             unsafe { cudarc::driver::result::event::elapsed(start.cu_event(), end.cu_event())? };
-        samples.push(f64::from(ms) / f64::from(iterations));
+        samples.push((f64::from(ms) / f64::from(iterations), window));
     }
     Ok(samples)
+}
+
+/// `cuda_rounds` for work that heats the GPU enough for its power controller
+/// to lower clocks, like an 8192³ fp16 GEMM on a 700 W H100. Such a GPU runs
+/// the first ~100 ms at its maximum SM clock and then settles lower once the
+/// software power cap engages, so rounds timed right after a short warm-up
+/// catch the boost and later rounds catch the cap. Running `op` for `warmup`
+/// first and then sizing every round to last about `round` reports the
+/// sustained rate and averages each round over the controller's swings.
+fn sustained_rounds(
+    ctx: &Arc<CudaContext>,
+    stream: &Arc<CudaStream>,
+    warmup: Duration,
+    round: Duration,
+    rounds: u32,
+    mut op: impl FnMut() -> Result<(), BenchError>,
+) -> Result<Vec<(f64, Window)>, BenchError> {
+    const BATCH: u32 = 10;
+    // The first batch pays one-time setup (cuBLAS loads its kernels lazily,
+    // which took over a second on B300), so it neither counts towards the
+    // warm-up nor sizes the rounds; otherwise a 0.7 ms GEMM was sized as a
+    // 100 ms one and every "200 ms" round lasted 7 ms.
+    let mut warm_since = None;
+    let per_call = loop {
+        let batch_start = Instant::now();
+        for _ in 0..BATCH {
+            op()?;
+        }
+        stream.synchronize()?;
+        let per_call = batch_start.elapsed() / BATCH;
+        if let Some(since) = warm_since
+            && Instant::elapsed(&since) >= warmup
+        {
+            break per_call;
+        }
+        warm_since.get_or_insert_with(Instant::now);
+    };
+    let iterations = round
+        .as_nanos()
+        .div_ceil(per_call.as_nanos().max(1))
+        .max(u128::from(BATCH));
+    cuda_rounds(
+        ctx,
+        stream,
+        0,
+        u32::try_from(iterations).unwrap_or(u32::MAX),
+        rounds,
+        op,
+    )
+}
+
+/// NVML-style PCI bus ID of `ctx`'s device, e.g. `"00000000:18:00.0"`.
+fn pci_bus_id(ctx: &Arc<CudaContext>) -> Result<String, BenchError> {
+    let attr = |a| ctx.attribute(a).map(i32::cast_unsigned);
+    Ok(format!(
+        "{:08x}:{:02x}:{:02x}.0",
+        attr(dsys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_PCI_DOMAIN_ID)?,
+        attr(dsys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_PCI_BUS_ID)?,
+        attr(dsys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID)?,
+    ))
 }
 
 /// Wall-clock median for latency-style metrics.
@@ -914,6 +1005,8 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         eprintln!("single GPU; skipping g2g");
     }
 
+    let monitor = Monitor::open(pci_bus_id(&ctx0)?).map_err(BenchError)?;
+    let mut gemm_states = BTreeMap::new();
     let blas = CudaBlas::new(stream0.clone())?;
     let n = cfg.gemm_n as usize;
     let a_host = random_f32(n * n, 0x000F_ACEA);
@@ -927,25 +1020,31 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
             _ => 2,
         };
         let mut c_dev = unsafe { stream0.alloc::<u8>(n * n * elem) }?;
-        let gemm_samples = cuda_samples(
-            &ctx0,
-            &stream0,
-            if cfg.quick { 3 } else { 10 },
-            if cfg.quick { 3 } else { 10 },
-            cfg.rounds,
-            || {
-                gemm_ex(
-                    &blas,
+        let (gemm_rounds, polls) = monitor
+            .watch(|| {
+                sustained_rounds(
+                    &ctx0,
                     &stream0,
-                    &a_dev,
-                    &b_dev,
-                    &mut c_dev,
-                    u32::try_from(n).unwrap_or(0),
-                    &spec,
+                    cfg.gemm_warmup,
+                    cfg.gemm_round,
+                    cfg.rounds,
+                    || {
+                        gemm_ex(
+                            &blas,
+                            &stream0,
+                            &a_dev,
+                            &b_dev,
+                            &mut c_dev,
+                            u32::try_from(n).unwrap_or(0),
+                            &spec,
+                        )
+                    },
                 )
-            },
-        )?;
+            })
+            .map_err(BenchError)?;
+        let (gemm_samples, windows): (Vec<f64>, Vec<Window>) = gemm_rounds?.into_iter().unzip();
         let key = format!("gemm_{}", spec.dtype);
+        gemm_states.insert(key.clone(), round_states(&polls, &windows));
         let ms = record(&key, &gemm_samples);
         let flops = 2.0 * (n as f64).powi(3);
         let tflops = flops / (ms / 1e3) / 1e12;
@@ -1006,6 +1105,11 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         },
         checks,
         samples_ms,
+        gpu_state: Some(
+            monitor
+                .state(cfg.gemm_warmup, cfg.gemm_round, gemm_states)
+                .map_err(BenchError)?,
+        ),
     })
     .and_then(|m| {
         if all_ok {

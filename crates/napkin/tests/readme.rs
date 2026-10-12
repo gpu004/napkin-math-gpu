@@ -81,3 +81,30 @@ fn readme_cost_examples_match_cli() {
     }
     assert!(examples >= 2, "expected at least two README cost examples");
 }
+
+#[test]
+fn llm_recipe_follow_up_commands_have_example_markers() {
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))
+        .expect("README.md must exist at the repo root");
+    let mut in_llm_example = false;
+    for line in readme.lines().map(str::trim) {
+        if line.starts_with("<!-- napkin example llm ") {
+            in_llm_example = true;
+            continue;
+        }
+        if in_llm_example && line == "<!-- /napkin -->" {
+            in_llm_example = false;
+            continue;
+        }
+        if in_llm_example
+            && let Some(arguments) = line.strip_prefix("$ napkin ")
+            && (arguments.starts_with("fit ") || arguments.starts_with("estimate "))
+        {
+            let marker = format!("<!-- napkin example {arguments} -->");
+            assert!(
+                readme.lines().any(|candidate| candidate.trim() == marker),
+                "missing example marker for recipe follow-up: {marker}"
+            );
+        }
+    }
+}

@@ -94,6 +94,23 @@ pub fn parse_bytes(s: &str) -> Result<f64, ParseError> {
     parse_with(s, byte_suffix)
 }
 
+/// Formats a byte quantity using binary units and significant digits.
+#[must_use]
+pub fn fmt_binary_bytes(bytes: f64, sig: u32) -> String {
+    for (unit, factor) in [
+        ("PiB", 2.0_f64.powi(50)),
+        ("TiB", 2.0_f64.powi(40)),
+        ("GiB", 2.0_f64.powi(30)),
+        ("MiB", 2.0_f64.powi(20)),
+        ("KiB", 2.0_f64.powi(10)),
+    ] {
+        if bytes.abs() >= factor {
+            return format!("{} {unit}", fmt_sig(bytes / factor, sig));
+        }
+    }
+    format!("{} B", fmt_sig(bytes, sig))
+}
+
 /// Parses a parameter count: `"70B"` is 70 billion, `"7M"` is 7 million.
 ///
 /// # Errors
@@ -189,6 +206,28 @@ pub fn fmt_sig(v: f64, sig: u32) -> String {
     }
 }
 
+/// Formats a quantity with an SI prefix and `sig` significant digits.
+#[must_use]
+pub fn fmt_si(v: f64, sig: u32) -> String {
+    let abs = v.abs();
+    let (divisor, prefix) = if abs >= 1e18 {
+        (1e18, "E")
+    } else if abs >= 1e15 {
+        (1e15, "P")
+    } else if abs >= 1e12 {
+        (1e12, "T")
+    } else if abs >= 1e9 {
+        (1e9, "G")
+    } else if abs >= 1e6 {
+        (1e6, "M")
+    } else if abs >= 1e3 {
+        (1e3, "K")
+    } else {
+        (1.0, "")
+    };
+    format!("{}{prefix}", fmt_sig(v / divisor, sig))
+}
+
 /// Formats a duration in seconds as ns/μs/ms/s at `sig` significant digits.
 #[must_use]
 pub fn fmt_duration(seconds: f64, sig: u32) -> String {
@@ -266,6 +305,8 @@ mod tests {
         assert!((parse_bytes("1.5 GB").unwrap() - 1.5e9).abs() < 1.0);
         assert!((parse_bytes("700B").unwrap() - 700.0).abs() < f64::EPSILON);
         assert!(parse_bytes("5QB").is_err());
+        assert_eq!(fmt_binary_bytes(16_384.0, 3), "16 KiB");
+        assert_eq!(fmt_binary_bytes(4_294_967_296.0, 3), "4 GiB");
     }
 
     #[test]
@@ -325,5 +366,19 @@ mod tests {
         assert_eq!(fmt_count(900.0, 3), "900");
         assert_eq!(fmt_sig(0.016_666, 3), "0.0167");
         assert_eq!(fmt_sig(0.005_555, 3), "0.00556");
+    }
+
+    #[test]
+    fn formats_si_quantities_that_parse_back() {
+        for (value, expected) in [
+            (2.29e15, "2.29P"),
+            (44e12, "44T"),
+            (16_400.0, "16.4K"),
+            (512.0, "512"),
+        ] {
+            let formatted = fmt_si(value, 3);
+            assert_eq!(formatted, expected);
+            assert!((parse_number(&formatted).unwrap() / value - 1.0).abs() < 0.01);
+        }
     }
 }

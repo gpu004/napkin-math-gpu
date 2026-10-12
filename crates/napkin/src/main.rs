@@ -1,17 +1,22 @@
 //! `napkin`: the GPU napkin-math CLI.
 
 use std::fmt::Write as _;
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{ArgGroup, Parser, Subcommand};
+use napkin::collective::{self, Query, Regime};
 use napkin::cost::{self, Job, Work};
 use napkin::estimate::{self, CopyMode, Mode, Transfer, TransferTime, Workload};
 use napkin::fit;
+use napkin::llm::{self, Model, Workload as LlmWorkload};
 use napkin::price::{self, Date, STALE_AFTER_DAYS};
+use napkin::profile::collective::{Collective, Topology};
 use napkin::profile::{self, Basis, Dtype, Profile};
 use napkin::units::{
-    self, fmt_bytes, fmt_count, fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_sig,
+    self, fmt_binary_bytes, fmt_bytes, fmt_count, fmt_duration, fmt_gbps, fmt_intensity, fmt_money,
+    fmt_si, fmt_sig,
 };
 
 /// GPU napkin math: estimate workload performance from first principles.
@@ -87,6 +92,24 @@ enum Command {
         #[arg(long)]
         ceiling: bool,
     },
+    /// Estimate one NCCL collective from measured NCCL Tests curves.
+    Collective {
+        #[arg(long, default_value = "h100")]
+        gpu: String,
+        /// GPUs taking part.
+        #[arg(long)]
+        count: u32,
+        #[arg(long, value_enum)]
+        topology: Topology,
+        #[arg(long, value_enum)]
+        op: Collective,
+        #[arg(long, value_enum, default_value_t = Dtype::Bf16)]
+        dtype: Dtype,
+        /// NCCL Tests size: per-rank buffer for `AllReduce`, total gathered
+        /// output for `AllGather`, or total per-rank input for `ReduceScatter`.
+        #[arg(long)]
+        bytes: String,
+    },
     /// Capacity: does the model fit, and on how many GPUs.
     Fit {
         #[arg(long, default_value = "h100")]
@@ -97,9 +120,12 @@ enum Command {
         /// Bits per parameter.
         #[arg(long, default_value_t = 16.0)]
         bits: f64,
-        /// Extra non-weight bytes, e.g. "20GB".
+        /// Non-weight bytes that shard with the weights across GPUs, e.g. KV cache.
         #[arg(long)]
         extra: Option<String>,
+        /// Bytes every GPU holds regardless of GPU count, e.g. CUDA context and activation workspace.
+        #[arg(long)]
+        per_gpu: Option<String>,
         /// Per-GPU memory fraction held in reserve.
         #[arg(long, default_value_t = 0.1)]
         headroom: f64,
@@ -146,6 +172,8 @@ enum Command {
     },
     /// List dated GPU price records and their age.
     Prices,
+    /// Derive memory, prefill and decode inputs for a transformer from explicit architecture and workload flags.
+    Llm(LlmArgs),
     /// Rewrite the `<!-- napkin ... -->` marker blocks in README.md.
     Readme {
         /// Exit non-zero if the marker blocks are stale.
@@ -158,6 +186,55 @@ enum Command {
         #[arg(default_value = "README.md")]
         path: PathBuf,
     },
+}
+
+#[derive(clap::Args, Debug)]
+struct LlmArgs {
+    /// GPU profile to use.
+    #[arg(long, default_value = "h100")]
+    gpu: String,
+    /// Compute and activation dtype.
+    #[arg(long, value_enum, default_value_t = Dtype::Bf16)]
+    dtype: Dtype,
+    /// Number of transformer layers.
+    #[arg(long)]
+    layers: NonZeroU64,
+    /// Hidden width.
+    #[arg(long)]
+    hidden: NonZeroU64,
+    /// Query heads.
+    #[arg(long)]
+    heads: NonZeroU64,
+    /// KV heads (equal to --heads for multi-head attention, fewer for GQA).
+    #[arg(long)]
+    kv_heads: NonZeroU64,
+    /// Width of each attention head.
+    #[arg(long)]
+    head_dim: NonZeroU64,
+    /// Parameter count, e.g. "70B".
+    #[arg(long)]
+    params: String,
+    /// Bits per model weight.
+    #[arg(long, default_value_t = 16.0)]
+    weight_bits: f64,
+    /// Bits per KV-cache element.
+    #[arg(long, default_value_t = 16.0)]
+    kv_bits: f64,
+    /// Concurrent requests.
+    #[arg(long, default_value = "1")]
+    batch: NonZeroU64,
+    /// Prompt tokens per request.
+    #[arg(long)]
+    prompt: NonZeroU64,
+    /// Generated tokens per request.
+    #[arg(long)]
+    generated: NonZeroU64,
+    /// Bytes every GPU holds regardless of GPU count, e.g. CUDA context and activation workspace.
+    #[arg(long)]
+    per_gpu: Option<String>,
+    /// Per-GPU memory fraction held in reserve.
+    #[arg(long)]
+    headroom: Option<f64>,
 }
 
 fn main() -> ExitCode {
@@ -175,7 +252,11 @@ fn main() -> ExitCode {
 
 fn run() -> Result<String, String> {
     let cli = Cli::parse();
-    match &cli.command {
+    dispatch(&cli.command)
+}
+
+fn dispatch(command: &Command) -> Result<String, String> {
+    match command {
         Command::Gpus => Ok(cmd_gpus()),
         Command::Table { gpu, exact } => cmd_table(gpu, *exact),
         Command::Compare { exact } => Ok(cmd_compare(*exact)),
@@ -209,13 +290,30 @@ fn run() -> Result<String, String> {
             *overlap,
             *ceiling,
         ),
+        Command::Collective {
+            gpu,
+            count,
+            topology,
+            op,
+            dtype,
+            bytes,
+        } => cmd_collective(gpu, *count, *topology, *op, *dtype, bytes),
         Command::Fit {
             gpu,
             params,
             bits,
             extra,
+            per_gpu,
             headroom,
-        } => cmd_fit(gpu, params, *bits, extra.as_deref(), *headroom),
+        } => cmd_fit(
+            gpu,
+            params,
+            *bits,
+            extra.as_deref(),
+            per_gpu.as_deref(),
+            *headroom,
+        ),
+        Command::Llm(args) => cmd_llm(args),
         Command::Cost {
             gpus,
             time,
@@ -246,6 +344,125 @@ fn run() -> Result<String, String> {
         Command::Prices => cmd_prices(),
         Command::Readme { check, path, .. } => cmd_readme(path, *check),
     }
+}
+
+fn cmd_collective(
+    gpu: &str,
+    gpu_count: u32,
+    topology: Topology,
+    op: Collective,
+    dtype: Dtype,
+    bytes: &str,
+) -> Result<String, String> {
+    let gpu_profile = get_profile(gpu)?;
+    let query = Query {
+        gpu,
+        gpu_count,
+        topology,
+        collective: op,
+        dtype,
+        bytes: units::parse_bytes(bytes).map_err(|error| error.to_string())?,
+    };
+    let estimate = collective::estimate(&query)?;
+    let evidence = estimate.evidence;
+    let redop = if op == Collective::AllGather {
+        String::new()
+    } else {
+        format!(" {}", evidence.redop)
+    };
+    let mut out = format!(
+        "{} × {} · {} · {} · {}{} · {} ({})\n",
+        gpu_profile.name,
+        gpu_count,
+        topology,
+        op,
+        dtype,
+        redop,
+        fmt_binary_bytes(query.bytes, 3),
+        op.size_convention()
+    );
+    let regime_detail = match estimate.regime {
+        Regime::Latency => "fixed per-call cost is at least half the time",
+        Regime::Bandwidth => "time grows with size",
+    };
+    let _ = writeln!(out, "regime      {} ({regime_detail})", estimate.regime);
+    let _ = writeln!(out, "time        {}", fmt_duration(estimate.time_s, 3));
+    let bus_factor = match op {
+        Collective::AllReduce => "2(n-1)/n",
+        Collective::AllGather | Collective::ReduceScatter => "(n-1)/n",
+    };
+    let _ = writeln!(
+        out,
+        "collective  algbw {} · busbw {} (busbw = algbw × {bus_factor})",
+        fmt_gbps(estimate.algbw_gbps, 3),
+        fmt_gbps(estimate.busbw_gbps, 3)
+    );
+    if estimate.lower == estimate.upper {
+        let _ = write!(
+            out,
+            "curve       {} {}",
+            fmt_curve_bytes(estimate.lower.bytes),
+            fmt_duration(estimate.lower.time_us / 1e6, 3)
+        );
+    } else {
+        let _ = write!(
+            out,
+            "curve       {} {} .. {} {}",
+            fmt_curve_bytes(estimate.lower.bytes),
+            fmt_duration(estimate.lower.time_us / 1e6, 3),
+            fmt_curve_bytes(estimate.upper.bytes),
+            fmt_duration(estimate.upper.time_us / 1e6, 3)
+        );
+    }
+    let _ = writeln!(
+        out,
+        " · floor {} · peak busbw {} at {}",
+        fmt_duration(estimate.floor_us / 1e6, 3),
+        fmt_gbps(estimate.peak.busbw_gbps, 3),
+        fmt_curve_bytes(estimate.peak.bytes)
+    );
+    let peer_copy = gpu_profile
+        .measured
+        .as_ref()
+        .and_then(|measured| measured.g2g_gbps)
+        .map_or_else(
+            || "not measured".to_owned(),
+            |rate| {
+                format!(
+                    "{} measured (napkin-bench cuMemcpyPeer, one GPU pair; not used here)",
+                    fmt_gbps(rate, 3)
+                )
+            },
+        );
+    let _ = writeln!(out, "peer copy   {peer_copy}");
+    let _ = writeln!(
+        out,
+        "nvlink      {} per-GPU datasheet aggregate, both directions (not used here)",
+        fmt_gbps(gpu_profile.ceiling.nvlink_gbps, 3)
+    );
+    let captured_date = evidence
+        .captured_at
+        .get(..10)
+        .map_or(evidence.captured_at.as_str(), |captured| captured);
+    let _ = writeln!(
+        out,
+        "evidence    NCCL {} · nccl-tests {} · {} · {} · {}",
+        evidence.nccl_version,
+        evidence.nccl_tests,
+        evidence.modal_request,
+        captured_date,
+        evidence.raw_dir
+    );
+    Ok(out)
+}
+
+fn fmt_curve_bytes(bytes: u64) -> String {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "NCCL curve sizes are exactly representable through 2^53 bytes"
+    )]
+    let bytes = bytes as f64;
+    fmt_binary_bytes(bytes, 3)
 }
 
 fn get_profile(id: &str) -> Result<&'static Profile, String> {
@@ -408,6 +625,7 @@ fn cmd_fit(
     params: &str,
     bits: f64,
     extra: Option<&str>,
+    per_gpu: Option<&str>,
     headroom: f64,
 ) -> Result<String, String> {
     let p = get_profile(gpu)?;
@@ -416,6 +634,7 @@ fn cmd_fit(
         units::parse_count(params).map_err(|e| e.to_string())?,
         bits,
         opt_bytes(extra)?,
+        opt_bytes(per_gpu)?,
         headroom,
     )
     .map_err(|e| e.to_string())?;
@@ -425,6 +644,13 @@ fn cmd_fit(
     let _ = writeln!(out, "weights     {}", gb(f.weight_bytes));
     if f.extra_bytes > 0.0 {
         let _ = writeln!(out, "extra       {}", gb(f.extra_bytes));
+    }
+    if f.per_gpu_bytes > 0.0 {
+        let _ = writeln!(
+            out,
+            "per GPU     {} (replicated on every GPU)",
+            gb(f.per_gpu_bytes)
+        );
     }
     let _ = writeln!(out, "working set {}", gb(f.working_bytes));
     let _ = writeln!(
@@ -438,7 +664,7 @@ fn cmd_fit(
     } else {
         let _ = writeln!(
             out,
-            "fits        no — needs at least {} GPUs (weights sharded)",
+            "fits        no — needs at least {} GPUs (weights + extra sharded, per-GPU replicated)",
             f.min_gpus
         );
     }
@@ -704,6 +930,275 @@ fn cmd_prices() -> Result<String, String> {
     Ok(out)
 }
 
+fn byte_arg(bytes: f64) -> String {
+    fmt_bytes(bytes, 3).replace(' ', "")
+}
+
+fn flops_arg(flops: f64) -> String {
+    fmt_si(flops, 3)
+}
+
+fn fmt_tokens(value: f64) -> String {
+    format!("{value:.0}")
+}
+
+fn cmd_llm(args: &LlmArgs) -> Result<String, String> {
+    let p = get_profile(&args.gpu)?;
+    let model = Model {
+        layers: args.layers,
+        hidden: args.hidden,
+        heads: args.heads,
+        kv_heads: args.kv_heads,
+        head_dim: args.head_dim,
+        params: units::parse_count(&args.params).map_err(|e| e.to_string())?,
+        weight_bits: args.weight_bits,
+        kv_bits: args.kv_bits,
+    };
+    let workload = LlmWorkload {
+        batch: args.batch,
+        prompt_tokens: args.prompt,
+        generated_tokens: args.generated,
+        activation: args.dtype,
+    };
+    let recipe = llm::recipe(&model, &workload).map_err(|e| e.to_string())?;
+    let per_gpu_bytes = opt_bytes(args.per_gpu.as_deref())?;
+    let capacity = fit::fit(
+        p,
+        model.params,
+        model.weight_bits,
+        recipe.kv_cache_bytes,
+        per_gpu_bytes,
+        args.headroom.unwrap_or(0.1),
+    )
+    .map_err(|e| e.to_string())?;
+    let group_size = args.heads.get() / args.kv_heads.get();
+    let batch = args.batch.get();
+    let prompt = args.prompt.get();
+    let generated = args.generated.get();
+    let layers = args.layers.get();
+    let hidden = args.hidden.get();
+    let heads = args.heads.get();
+    let kv_heads = args.kv_heads.get();
+    let head_dim = args.head_dim.get();
+    let weight_bits = units::fmt_sig(model.weight_bits, 3);
+    let kv_bits = units::fmt_sig(model.kv_bits, 3);
+    let mut out = format!(
+        "{} · {} params · {layers} layers · {heads} heads ({kv_heads} KV heads, GQA {group_size}:1) × {head_dim} head dim · hidden {hidden}\n",
+        p.name, args.params
+    );
+    let _ = writeln!(
+        out,
+        "weights {weight_bits}-bit · KV {kv_bits}-bit · activations {} · batch {batch} × ({prompt} prompt + {generated} generated)\n",
+        args.dtype
+    );
+    render_llm_memory(&mut out, args, &model, &recipe, per_gpu_bytes);
+    render_llm_prefill(&mut out, args, &recipe);
+    render_llm_decode(&mut out, args, &recipe);
+
+    if capacity.fits_one {
+        let _ = writeln!(
+            out,
+            "\nfits on one {}: {} of {} usable",
+            p.name,
+            fmt_bytes(capacity.working_bytes, 3),
+            fmt_bytes(capacity.usable_bytes_per_gpu, 3)
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "\nhypothetical: the {} working set exceeds {} usable on one {},\nso both estimates assume one GPU's bandwidth and compute. Sharding needs at least {} GPUs;\nit divides weights and KV, not per-GPU memory, and a tensor-parallel speedup needs\na communication term (napkin collective) before you claim one.",
+            fmt_bytes(capacity.working_bytes, 3),
+            fmt_bytes(capacity.usable_bytes_per_gpu, 3),
+            p.name,
+            capacity.min_gpus
+        );
+    }
+    Ok(out)
+}
+
+fn render_llm_memory(
+    out: &mut String,
+    args: &LlmArgs,
+    model: &Model,
+    recipe: &llm::Recipe,
+    per_gpu_bytes: f64,
+) {
+    let layers = args.layers.get();
+    let batch = args.batch.get();
+    let prompt = args.prompt.get();
+    let generated = args.generated.get();
+    let kv_heads = args.kv_heads.get();
+    let head_dim = args.head_dim.get();
+    let weight_bits = units::fmt_sig(model.weight_bits, 3);
+    out.push_str("memory: what must stay resident\n");
+    let _ = writeln!(
+        out,
+        "{:<13}{} × {} / 8 = {}",
+        "weights",
+        args.params,
+        weight_bits,
+        fmt_bytes(recipe.weight_bytes, 3)
+    );
+    let _ = writeln!(
+        out,
+        "{:<13}2 × {layers} layers × {kv_heads} KV heads × {head_dim} × {} B = {}",
+        "KV/token",
+        units::fmt_sig(model.kv_bits / 8.0, 3),
+        fmt_bytes(recipe.kv_bytes_per_token, 3)
+    );
+    let _ = writeln!(
+        out,
+        "{:<13}{batch} × ({prompt} + {generated}) = {}",
+        "live tokens",
+        fmt_tokens(recipe.live_tokens)
+    );
+    let _ = writeln!(
+        out,
+        "{:<13}{} × {} = {}",
+        "KV cache",
+        fmt_bytes(recipe.kv_bytes_per_token, 3),
+        fmt_tokens(recipe.live_tokens),
+        fmt_bytes(recipe.kv_cache_bytes, 3)
+    );
+    let _ = write!(
+        out,
+        "$ napkin fit --gpu {} --params {} --bits {} --extra {}",
+        args.gpu,
+        args.params,
+        weight_bits,
+        byte_arg(recipe.kv_cache_bytes)
+    );
+    if args.per_gpu.is_some() {
+        let _ = write!(out, " --per-gpu {}", byte_arg(per_gpu_bytes));
+    }
+    if let Some(headroom) = args.headroom {
+        let _ = write!(out, " --headroom {}", units::fmt_sig(headroom, 3));
+    }
+    out.push_str("\n\n");
+}
+
+fn render_llm_prefill(out: &mut String, args: &LlmArgs, recipe: &llm::Recipe) {
+    let batch = args.batch.get();
+    let prompt = args.prompt.get();
+    let layers = args.layers.get();
+    let hidden = args.hidden.get();
+    let heads = args.heads.get();
+    let head_dim = args.head_dim.get();
+    let prefill_tokens = recipe.prefill.tokens;
+    let _ = writeln!(
+        out,
+        "prefill: one forward over {batch} × {prompt} = {} prompt tokens",
+        fmt_tokens(prefill_tokens)
+    );
+    let _ = writeln!(
+        out,
+        "{:<13}2 × {} × {} = {} FLOP",
+        "linear",
+        args.params,
+        fmt_tokens(prefill_tokens),
+        flops_arg(recipe.prefill.linear_flops)
+    );
+    let _ = writeln!(
+        out,
+        "{:<13}2 × {layers} × {heads} × {head_dim} × {batch} × {prompt}² (causal) = {} FLOP",
+        "attention",
+        flops_arg(recipe.prefill.attention_flops)
+    );
+    let _ = writeln!(
+        out,
+        "{:<13}read once = {}",
+        "weights",
+        fmt_bytes(recipe.prefill.weight_bytes, 3)
+    );
+    let _ = writeln!(
+        out,
+        "{:<13}{} × {} = {}",
+        "KV write",
+        fmt_bytes(recipe.kv_bytes_per_token, 3),
+        fmt_tokens(prefill_tokens),
+        fmt_bytes(recipe.prefill.kv_bytes, 3)
+    );
+    let _ = writeln!(
+        out,
+        "{:<13}2 × {layers} × {} × {hidden} × {} B (floor) = {}",
+        "activations",
+        fmt_tokens(prefill_tokens),
+        units::fmt_sig(llm::element_bytes(args.dtype), 3),
+        fmt_bytes(recipe.prefill.activation_bytes, 3)
+    );
+    let _ = writeln!(
+        out,
+        "$ napkin estimate --gpu {} --dtype {} --flops {} --bytes {}",
+        args.gpu,
+        args.dtype,
+        flops_arg(recipe.prefill.flops()),
+        byte_arg(recipe.prefill.hbm_bytes())
+    );
+    out.push('\n');
+}
+
+fn render_llm_decode(out: &mut String, args: &LlmArgs, recipe: &llm::Recipe) {
+    let batch = args.batch.get();
+    let layers = args.layers.get();
+    let hidden = args.hidden.get();
+    let heads = args.heads.get();
+    let head_dim = args.head_dim.get();
+    let decode_bytes = recipe.decode.hbm_bytes();
+    let context = fmt_tokens(recipe.decode_context);
+    let _ = writeln!(
+        out,
+        "decode step: {batch} new tokens at context {context} (the last, largest step)"
+    );
+    let _ = writeln!(
+        out,
+        "{:<13}2 × {} × {batch} = {} FLOP",
+        "linear",
+        args.params,
+        flops_arg(recipe.decode.linear_flops)
+    );
+    let _ = writeln!(
+        out,
+        "{:<13}4 × {layers} × {heads} × {head_dim} × {batch} × {context} = {} FLOP",
+        "attention",
+        flops_arg(recipe.decode.attention_flops)
+    );
+    let _ = writeln!(
+        out,
+        "{:<13}read once, shared by {batch} requests = {}",
+        "weights",
+        fmt_bytes(recipe.decode.weight_bytes, 3)
+    );
+    let _ = writeln!(
+        out,
+        "{:<13}{} × {batch} × {context} = {}",
+        "KV read",
+        fmt_bytes(recipe.kv_bytes_per_token, 3),
+        fmt_bytes(recipe.decode.kv_bytes, 3)
+    );
+    let _ = writeln!(
+        out,
+        "{:<13}2 × {layers} × {batch} × {hidden} × {} B (floor) = {}",
+        "activations",
+        units::fmt_sig(llm::element_bytes(args.dtype), 3),
+        fmt_bytes(recipe.decode.activation_bytes, 3)
+    );
+    let _ = writeln!(
+        out,
+        "{:<13}{} / {batch} = {}",
+        "per token",
+        fmt_bytes(decode_bytes, 3),
+        fmt_bytes(decode_bytes / recipe.decode.tokens, 3)
+    );
+    let _ = writeln!(
+        out,
+        "$ napkin estimate --gpu {} --dtype {} --flops {} --bytes {}",
+        args.gpu,
+        args.dtype,
+        flops_arg(recipe.decode.flops()),
+        byte_arg(decode_bytes)
+    );
+}
+
 const MARKER_PREFIX: &str = "<!-- napkin ";
 const MARKER_END: &str = "<!-- /napkin -->";
 
@@ -713,6 +1208,20 @@ fn render_marker(command: &str) -> Result<String, String> {
         ["table", "--gpu", gpu] => cmd_table(gpu, false),
         ["compare"] => Ok(cmd_compare(false)),
         ["prices"] => Ok(napkin::table::prices(price::builtin())),
+        ["example", args @ ..] => {
+            let cli = Cli::try_parse_from(std::iter::once("napkin").chain(args.iter().copied()))
+                .map_err(|error| error.to_string())?;
+            if matches!(&cli.command, Command::Readme { .. }) {
+                return Err("example markers cannot run readme".to_owned());
+            }
+            let command_output = dispatch(&cli.command)?;
+            let mut rendered = format!("```text\n$ napkin {}\n{command_output}", args.join(" "));
+            if !rendered.ends_with('\n') {
+                rendered.push('\n');
+            }
+            rendered.push_str("```\n");
+            Ok(rendered)
+        }
         _ => Err(format!("unsupported marker command {command:?}")),
     }
 }
@@ -763,4 +1272,21 @@ fn cmd_readme(path: &std::path::Path, check: bool) -> Result<String, String> {
         return Ok(format!("{}: napkin blocks updated\n", path.display()));
     }
     Ok(format!("{}: already current\n", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collective_example_marker_renders_user_facing_command_output() -> Result<(), String> {
+        let command = "example collective --gpu h100 --count 2 --topology nvlink --op all-reduce --bytes 16KiB";
+        let output = render_marker(command)?;
+        assert!(output.starts_with(
+            "```text\n$ napkin collective --gpu h100 --count 2 --topology nvlink --op all-reduce --bytes 16KiB\n"
+        ));
+        assert!(output.contains("H100 SXM 80GB × 2 · nvlink · AllReduce · bf16 sum · 16 KiB"));
+        assert!(output.ends_with("\n```\n"));
+        Ok(())
+    }
 }

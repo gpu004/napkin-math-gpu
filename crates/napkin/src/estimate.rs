@@ -481,6 +481,7 @@ mod tests {
                 gemm_shape: [8192, 8192, 8192],
                 checks: BTreeMap::from([("hbm_copy".to_owned(), true)]),
                 samples_ms: BTreeMap::new(),
+                gpu_state: None,
             }),
         }
     }
