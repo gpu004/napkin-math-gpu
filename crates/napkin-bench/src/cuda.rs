@@ -114,15 +114,17 @@ fn cuda_samples(
     stream.synchronize()?;
     let mut samples = Vec::with_capacity(rounds as usize);
     for _ in 0..rounds {
-        let start = ctx.new_event(None)?;
-        let end = ctx.new_event(None)?;
+        let start = ctx.new_event(Some(dsys::CUevent_flags::CU_EVENT_DEFAULT))?;
+        let end = ctx.new_event(Some(dsys::CUevent_flags::CU_EVENT_DEFAULT))?;
         start.record(stream)?;
         for _ in 0..iterations {
             op()?;
         }
         end.record(stream)?;
-        end.synchronize()?;
-        samples.push(f64::from(start.elapsed_ms(&end)?) / f64::from(iterations));
+        stream.synchronize()?;
+        let ms =
+            unsafe { cudarc::driver::result::event::elapsed(start.cu_event(), end.cu_event())? };
+        samples.push(f64::from(ms) / f64::from(iterations));
     }
     Ok(samples)
 }
@@ -430,9 +432,11 @@ fn driver_version_string() -> String {
 )]
 pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchError> {
     let device_count = CudaContext::device_count()?.cast_unsigned();
+    progress("devices", &format!("{device_count}"));
     let ctx0 = CudaContext::new(0)?;
     let stream0 = ctx0.default_stream();
     let kernels = load_kernels(&ctx0)?;
+    progress("kernels", "loaded");
 
     let mut samples_ms: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     let mut checks: BTreeMap<String, bool> = BTreeMap::new();

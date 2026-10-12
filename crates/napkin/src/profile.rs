@@ -43,14 +43,18 @@ mod tests {
 
     #[test]
     fn measured_profiles_are_attached_only_where_available() {
-        assert!(find("h100").is_some_and(|profile| profile.measured.is_some()));
-        assert!(find("b200").is_some_and(|profile| profile.measured.is_none()));
+        for id in ["a100", "h100", "b200", "b300"] {
+            assert!(
+                find(id).is_some_and(|profile| profile.measured.is_some()),
+                "{id}"
+            );
+        }
     }
 
     #[test]
     fn ceiling_basis_has_no_host_or_launch_rates() {
         let b200 = find("b200").unwrap();
-        let rates = b200.rates(false);
+        let rates = b200.rates(true);
         assert_eq!(rates.basis, Basis::Ceiling);
         assert!(rates.h2d_gbps.is_none());
         assert!(rates.launch_us.is_none());

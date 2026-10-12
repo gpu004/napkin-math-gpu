@@ -31,13 +31,17 @@ image = (
 app = modal.App("gpu-napkin-math", image=image)
 
 
-def _run(quick: bool) -> str:
+def _run(quick: bool, gpu_request: str) -> str:
     import subprocess
+    import sys
 
-    cmd = ["/app/target/release/napkin-bench"]
+    cmd = ["/app/target/release/napkin-bench", "--gpu-request", gpu_request]
     if quick:
         cmd.append("--quick")
-    out = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    sys.stderr.write(out.stderr)
+    if out.returncode != 0:
+        raise RuntimeError(f"napkin-bench exited {out.returncode}")
     return out.stdout
 
 
@@ -48,7 +52,6 @@ FUNCS = {
         memory=8192,
         timeout=20 * 60,
         name=f"bench_{name}",
-        serialized=True,
     )(_run)
     for name, request in GPUS.items()
 }
@@ -58,7 +61,7 @@ FUNCS = {
 def main(gpu: str = "h100", quick: bool = False) -> None:
     if gpu not in FUNCS:
         raise ValueError(f"--gpu must be one of: {sorted(FUNCS)}")
-    result = FUNCS[gpu].remote(quick)
+    result = FUNCS[gpu].remote(quick, GPUS[gpu])
     if quick:
         print(result)
         return
