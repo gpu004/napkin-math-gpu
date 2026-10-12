@@ -50,7 +50,7 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
         ],
         [
             "Launch + sync round trip".to_owned(),
-            m.sync_us.map_or_else(String::new, &lat_us),
+            m.sync_us.map_or_else(String::new, lat_us),
             String::new(),
             String::new(),
             String::new(),
@@ -64,14 +64,14 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
         ],
         [
             "Host → device, pinned".to_owned(),
-            m.h2d_latency_us.map_or_else(String::new, &lat_us),
+            m.h2d_latency_us.map_or_else(String::new, lat_us),
             gbps(m.h2d_gbps),
             mb(m.h2d_gbps),
             gb(m.h2d_gbps),
         ],
         [
             "Device → host, pinned".to_owned(),
-            m.d2h_latency_us.map_or_else(String::new, &lat_us),
+            m.d2h_latency_us.map_or_else(String::new, lat_us),
             gbps(m.d2h_gbps),
             mb(m.d2h_gbps),
             gb(m.d2h_gbps),
@@ -101,10 +101,10 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
     ];
     let g2g_row = [
         "GPU ↔ GPU, NVLink one-way".to_owned(),
-        m.g2g_latency_us.map_or_else(String::new, &lat_us),
-        m.g2g_gbps.map_or_else(String::new, &gbps),
-        m.g2g_gbps.map_or_else(String::new, &mb),
-        m.g2g_gbps.map_or_else(String::new, &gb),
+        m.g2g_latency_us.map_or_else(String::new, lat_us),
+        m.g2g_gbps.map_or_else(String::new, gbps),
+        m.g2g_gbps.map_or_else(String::new, mb),
+        m.g2g_gbps.map_or_else(String::new, gb),
     ];
     for r in rows.iter().chain(std::iter::once(&g2g_row)) {
         if r[1..].iter().all(String::is_empty) {

@@ -294,7 +294,7 @@ mod tests {
             assert!(p.ceiling.hbm_gbps > 0.0);
             assert!(p.ceiling.nvlink_gbps > 0.0);
             assert!(!p.ceiling.compute_tflops.is_empty());
-            assert!(!p.ceiling.source.is_empty());
+            assert_ne!(p.ceiling.source, "");
         }
     }
 
