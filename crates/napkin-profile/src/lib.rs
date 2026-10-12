@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 pub mod nvbandwidth;
 
 pub use nvbandwidth::{
-    Access, Bandwidth, CopyPath, Endpoint, Latency, Nvbandwidth, PcieLink, Statistic, TopologyProbe,
+    Access, Bandwidth, CopyPath, Endpoint, Latency, Nvbandwidth, PcieLink, Statistic,
 };
 
 /// GPU numeric precisions, ordered low to high bit-width.

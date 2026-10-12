@@ -415,7 +415,7 @@ fn validate_renders_committed_case_numbers() {
     assert_eq!(code, 0, "{stderr}");
     for row in [
         "| [h100-gemm-bf16](#h100-gemm-bf16) | 11 ms | compute-bound | 11 ms | 1.01 | 0.80–1.25 | within |",
-        "| [h100-pcie-roundtrip](#h100-pcie-roundtrip) | 630 ms | h2d-bound | 3.7 s | 5.90 | 0.90–1.10 | outside (slower) |",
+        "| [h100-pcie-roundtrip](#h100-pcie-roundtrip) | 620 ms | d2h-bound | 3.7 s | 6.02 | 0.90–1.10 | outside (slower) |",
         "| [h100-tiny-kernels](#h100-tiny-kernels) | 17 ms | launch-bound | 62 ms | 3.64 | 0.50–2.00 | outside (slower) |",
     ] {
         assert!(

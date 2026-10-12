@@ -62,13 +62,6 @@ pub struct PcieLink {
     pub width_max: u8,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TopologyProbe {
-    pub command: String,
-    pub exit_code: i32,
-    pub output: String,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Nvbandwidth {
     pub version: String,
@@ -83,7 +76,7 @@ pub struct Nvbandwidth {
     pub cuda_driver_version: String,
     pub devices: Vec<String>,
     pub pcie_links: Vec<PcieLink>,
-    pub topology: Vec<TopologyProbe>,
+    pub topology: String,
     pub buffer_bytes: u64,
     pub samples: u32,
     pub statistic: Statistic,
@@ -99,7 +92,7 @@ impl Nvbandwidth {
     /// # Errors
     /// Returns an error when the run failed, skipped verification, has invalid
     /// matrices or metadata, or does not match the launcher record.
-    pub fn parse(raw: &str, run: &str) -> Result<Self, String> {
+    pub fn parse(raw: &str, run: &str, topo: &str) -> Result<Self, String> {
         let raw: RawDocument = serde_json::from_str(raw)
             .map_err(|error| format!("invalid NVBandwidth JSON: {error}"))?;
         let run: RunRecord = serde_json::from_str(run)
@@ -109,15 +102,6 @@ impl Nvbandwidth {
         let (buffer_bytes, samples, statistic) = run_settings(&run.command)?;
         let devices = parse_devices(&output, &run)?;
         let pcie_links = parse_pcie_links(&run);
-        let topology = run
-            .topology
-            .iter()
-            .map(|probe| TopologyProbe {
-                command: probe.command.join(" "),
-                exit_code: probe.exit_code,
-                output: format!("{}{}", probe.stdout, probe.stderr),
-            })
-            .collect();
         let (bandwidths, latencies) = parse_testcases(&output, devices.len())?;
 
         Ok(Self {
@@ -133,7 +117,7 @@ impl Nvbandwidth {
             cuda_driver_version: cuda_version(output.cuda_driver_version),
             devices,
             pcie_links,
-            topology,
+            topology: topo.to_owned(),
             buffer_bytes,
             samples,
             statistic,
@@ -544,7 +528,6 @@ struct RunRecord {
     captured_at: String,
     gpus: Vec<RunGpu>,
     pcie_links: Vec<RunPcieLink>,
-    topology: Vec<RunTopology>,
 }
 
 #[derive(Deserialize)]
@@ -560,14 +543,6 @@ struct RunPcieLink {
     pcie_gen_max: u8,
     pcie_width: u8,
     pcie_width_max: u8,
-}
-
-#[derive(Deserialize)]
-struct RunTopology {
-    command: Vec<String>,
-    exit_code: i32,
-    stdout: String,
-    stderr: String,
 }
 
 fn command_value<'a>(command: &'a [String], flag: &str) -> Result<&'a str, String> {

@@ -6,8 +6,8 @@
 		"Driver Version" : "580.95.05",
 		"GPU Device list" : 
 		[
-			"0: NVIDIA B300 SXM6 AC (00000000:58:00): (modal)",
-			"1: NVIDIA B300 SXM6 AC (00000000:85:00): (modal)"
+			"0: NVIDIA A100-SXM4-80GB (00000000:8c:00): (modal)",
+			"1: NVIDIA A100-SXM4-80GB (00000000:d6:00): (modal)"
 		],
 		"Version Major" : 0,
 		"Version Minor" : 10,
@@ -21,52 +21,52 @@
 				"bandwidth_matrix" : 
 				[
 					[
-						"55.7737",
-						"55.6981"
+						"26.7149",
+						"24.9221"
 					]
 				],
 				"name" : "host_to_device_memcpy_ce",
 				"status" : "Passed",
-				"sum" : 111.47186796100002
+				"sum" : 51.637024129000004
 			},
 			{
 				"bandwidth_description" : "memcpy CE CPU(row) <- GPU(column) bandwidth (GB/s)",
 				"bandwidth_matrix" : 
 				[
 					[
-						"57.0566",
-						"57.068"
+						"26.2901",
+						"26.3037"
 					]
 				],
 				"name" : "device_to_host_memcpy_ce",
 				"status" : "Passed",
-				"sum" : 114.12465692200001
+				"sum" : 52.593801192000001
 			},
 			{
 				"bandwidth_description" : "memcpy SM CPU(row) -> GPU(column) bandwidth (GB/s)",
 				"bandwidth_matrix" : 
 				[
 					[
-						"51.5553",
-						"51.5633"
+						"26.5614",
+						"26.5338"
 					]
 				],
 				"name" : "host_to_device_memcpy_sm",
 				"status" : "Passed",
-				"sum" : 103.11857032900001
+				"sum" : 53.095181084000004
 			},
 			{
 				"bandwidth_description" : "memcpy SM CPU(row) <- GPU(column) bandwidth (GB/s)",
 				"bandwidth_matrix" : 
 				[
 					[
-						"52.557",
-						"52.5612"
+						"26.3216",
+						"26.3357"
 					]
 				],
 				"name" : "device_to_host_memcpy_sm",
 				"status" : "Passed",
-				"sum" : 105.11824250000001
+				"sum" : 52.657300763999999
 			},
 			{
 				"bandwidth_description" : "memcpy CE GPU(row) -> GPU(column) bandwidth (GB/s)",
@@ -74,16 +74,16 @@
 				[
 					[
 						"N/A",
-						"765.114"
+						"276.559"
 					],
 					[
-						"764.025",
+						"278.84",
 						"N/A"
 					]
 				],
 				"name" : "device_to_device_memcpy_read_ce",
 				"status" : "Passed",
-				"sum" : 1529.1391094529999
+				"sum" : 555.39904886800002
 			},
 			{
 				"bandwidth_description" : "memcpy CE GPU(row) <- GPU(column) bandwidth (GB/s)",
@@ -91,16 +91,16 @@
 				[
 					[
 						"N/A",
-						"774.356"
+						"280.222"
 					],
 					[
-						"774.496",
+						"280.341",
 						"N/A"
 					]
 				],
 				"name" : "device_to_device_memcpy_write_ce",
 				"status" : "Passed",
-				"sum" : 1548.8522650220002
+				"sum" : 560.56350295300001
 			},
 			{
 				"bandwidth_description" : "memcpy SM GPU(row) -> GPU(column) bandwidth (GB/s)",
@@ -108,16 +108,16 @@
 				[
 					[
 						"N/A",
-						"783.677"
+						"255.591"
 					],
 					[
-						"780.467",
+						"255.591",
 						"N/A"
 					]
 				],
 				"name" : "device_to_device_memcpy_read_sm",
 				"status" : "Passed",
-				"sum" : 1564.1432142820001
+				"sum" : 511.18197157400004
 			},
 			{
 				"bandwidth_description" : "memcpy SM GPU(row) <- GPU(column) bandwidth (GB/s)",
@@ -125,29 +125,29 @@
 				[
 					[
 						"N/A",
-						"717.267"
+						"230.447"
 					],
 					[
-						"717.147",
+						"235.005",
 						"N/A"
 					]
 				],
 				"name" : "device_to_device_memcpy_write_sm",
 				"status" : "Passed",
-				"sum" : 1434.4133855270002
+				"sum" : 465.45263596900003
 			},
 			{
 				"bandwidth_description" : "memory latency SM CPU(row) <-> GPU(column) (ns)",
 				"bandwidth_matrix" : 
 				[
 					[
-						"1275.45",
-						"1330.23"
+						"1660.68",
+						"1630.82"
 					]
 				],
 				"name" : "host_device_latency_sm",
 				"status" : "Passed",
-				"sum" : 2605.678484775126
+				"sum" : 3291.5005534887314
 			},
 			{
 				"bandwidth_description" : "Device to Device Latency SM GPU(row) <-> GPU(column) (ns)",
@@ -155,16 +155,16 @@
 				[
 					[
 						"N/A",
-						"1597.18"
+						"826.508"
 					],
 					[
-						"1599.19",
+						"821.54",
 						"N/A"
 					]
 				],
 				"name" : "device_to_device_latency_sm",
 				"status" : "Passed",
-				"sum" : 3196.3643450289965
+				"sum" : 1648.0481293983757
 			}
 		],
 		"version" : "v0.10.0"

@@ -3,9 +3,9 @@
 Usage:
     modal run modal/nvbandwidth.py --gpu h100
 
-Writes the verbatim JSON to profiles/raw/<gpu>.nvbandwidth.json and the exact
-command, Modal request, GPU identity, PCIe link and topology to
-profiles/raw/<gpu>.nvbandwidth.run.json. `napkin` parses both at build time.
+Writes the verbatim NVBandwidth stdout to
+profiles/nvbandwidth/<gpu>x2/nvbandwidth.json, provenance to run.json, and
+topology probes to topo.txt. `napkin` parses the evidence at build time.
 
 PCIe links downtrain when idle, so the link is sampled every 100 ms while the
 copies run and the highest generation and width seen per GPU are kept.
@@ -15,8 +15,10 @@ because the Modal sandbox rejects NVML's `nvmlDeviceSetCpuAffinity`, which
 otherwise aborts the first host testcase; host buffers are then not NUMA-pinned.
 """
 
+import hashlib
 import json
 import subprocess
+import sys
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -78,14 +80,9 @@ def _smi(*args: str) -> str:
     return subprocess.run(["nvidia-smi", *args], capture_output=True, text=True, check=True).stdout
 
 
-def _smi_probe(*args: str) -> dict[str, object]:
-    out = subprocess.run(["nvidia-smi", *args], capture_output=True, text=True)
-    return {
-        "command": ["nvidia-smi", *args],
-        "exit_code": out.returncode,
-        "stdout": out.stdout,
-        "stderr": out.stderr,
-    }
+def _probe(cmd: list[str]) -> str:
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    return f"$ {' '.join(cmd)}\n# exit {out.returncode}\n{out.stdout}{out.stderr}"
 
 
 def _csv(text: str) -> list[list[str]]:
@@ -107,13 +104,20 @@ def _run(gpu_request: str) -> dict[str, object]:
         dict(zip(GPU_FIELDS.split(","), row, strict=True))
         for row in _csv(_smi(f"--query-gpu={GPU_FIELDS}", "--format=csv,noheader"))
     ]
-    topology = [_smi_probe("topo", "-m"), _smi_probe("nvlink", "--status")]
+    topo = "\n".join(
+        _probe(cmd)
+        for cmd in (
+            ["nvidia-smi", "topo", "-m"],
+            ["nvidia-smi", "topo", "-p2p", "n"],
+            ["nvidia-smi", "nvlink", "-s"],
+        )
+    )
     peak: dict[int, list[int]] = {}
     stop = threading.Event()
     poller = threading.Thread(target=_poll_links, args=(stop, peak))
     poller.start()
     captured_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    out = subprocess.run([BINARY, *ARGS], capture_output=True, text=True)
+    out = subprocess.run([BINARY, *ARGS], capture_output=True)
     stop.set()
     poller.join()
     links = [
@@ -128,7 +132,8 @@ def _run(gpu_request: str) -> dict[str, object]:
     ]
     return {
         "stdout": out.stdout,
-        "stderr": out.stderr,
+        "stderr": out.stderr.decode("utf-8", errors="replace"),
+        "topo": topo,
         "run": {
             "tool": "nvbandwidth",
             "repository": REPO,
@@ -141,7 +146,6 @@ def _run(gpu_request: str) -> dict[str, object]:
             "captured_at": captured_at,
             "gpus": gpus,
             "pcie_links": links,
-            "topology": topology,
         },
     }
 
@@ -166,10 +170,36 @@ def main(gpu: str = "h100") -> None:
     print(result["stderr"])
     run = result["run"]
     if run["exit_code"] != 0:
-        print(result["stdout"])
+        print(result["stdout"].decode("utf-8", errors="replace"))
         raise RuntimeError(f"nvbandwidth exited {run['exit_code']}")
-    raw = ROOT / "profiles" / "raw"
-    raw.mkdir(parents=True, exist_ok=True)
-    (raw / f"{gpu}.nvbandwidth.json").write_text(result["stdout"])
-    (raw / f"{gpu}.nvbandwidth.run.json").write_text(json.dumps(run, indent=2) + "\n")
-    print(f"Wrote {raw / f'{gpu}.nvbandwidth.json'}")
+    measured = json.loads((ROOT / "profiles" / f"{gpu}.measured.json").read_text())
+    expected = (measured.get("pcie_gen"), measured.get("pcie_width"))
+    links = run["pcie_links"]
+    mismatches = [
+        f"GPU{link['index']} sampled Gen{link['pcie_gen']} x{link['pcie_width']}"
+        for link in links
+        if (link["pcie_gen"], link["pcie_width"]) != expected
+    ]
+    if len(links) != len(run["gpus"]) or not links or mismatches:
+        details = ", ".join(mismatches) or "missing sampled link data"
+        print(
+            f"PCIe mismatch for {gpu}: expected Gen{expected[0]} x{expected[1]}; {details}",
+            file=sys.stderr,
+        )
+        raise RuntimeError("NVBandwidth evidence not written due to PCIe mismatch")
+
+    directory = ROOT / "profiles" / "nvbandwidth" / f"{gpu}x2"
+    topo = result["topo"]
+    if not topo.endswith("\n"):
+        topo += "\n"
+    files = {
+        "nvbandwidth.json": result["stdout"],
+        "run.json": (json.dumps(run, indent=2) + "\n").encode(),
+        "topo.txt": topo.encode(),
+    }
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, contents in files.items():
+        path = directory / name
+        path.write_bytes(contents)
+        relative_path = path.relative_to(ROOT).as_posix()
+        print(f"sha256 {hashlib.sha256(contents).hexdigest()} {relative_path}")

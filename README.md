@@ -176,8 +176,8 @@ live tokens are summed across requests. `--extra` is shardable with weights;
 
 ## Examples
 
-A BF16 job with 200 TFLOPs, 1 TB of HBM traffic, a 2 GB upload, a 1 GB
-peer transfer, and 20 kernel launches on an H100:
+A BF16 job with 200 TFLOPs, 1 TB of HBM traffic, a 2 GB upload, and 20 kernel
+launches on an H100:
 
 <!-- napkin example estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB --h2d 2GB --launches 20 -->
 ```text
@@ -517,8 +517,7 @@ cannot be combined with `--gemm`. `--gemm` cannot be combined with `--ceiling`.
 
 ## Benchmarks
 
-Compute, HBM, launch, and latency measurements come from `napkin-bench` (Rust +
-cudarc), run on Modal:
+The numbers come from `napkin-bench` (Rust + cudarc), run on Modal:
 
 ```sh
 modal run modal/bench.py --gpu h100     # writes profiles/h100.measured.json
@@ -529,8 +528,8 @@ napkin readme --write README.md PROBLEMS.md  # refreshes the tables
 - `sync_us`: launch plus stream-synchronize round trip, wall clock.
 - `host_copy_gbps`: pinned host memcpy on min(8, cpus) threads; read + write
   bytes counted.
-- `h2d_gbps` / `d2h_gbps`: napkin-bench's 512 MiB pinned async-copy cross-check;
-  the published transfer rates come from NVBandwidth below.
+- `h2d_gbps` / `d2h_gbps`: 512 MiB pinned async copies, event timed; the bytes
+  that cross the link.
 - `h2d_latency_us` / `d2h_latency_us`: 4-byte synchronous copies, wall clock;
   each sample includes the stream synchronize, so it is a per-copy fixed cost,
   not a bandwidth.
@@ -538,8 +537,8 @@ napkin readme --write README.md PROBLEMS.md  # refreshes the tables
 - `elementwise_gbps`: NVRTC `c[i] = a[i] + b[i]` fp32; two reads + one write (3x).
 - `hbm_latency_ns`: single-thread pointer chase over a random cycle in a
   1 GiB buffer, ns per dependent load.
-- `g2g_gbps`: napkin-bench's 512 MiB peer-copy cross-check, slower of the two
-  directions; `None` with fewer than 2 GPUs or no peer access.
+- `g2g_gbps`: 512 MiB peer copy, slower of the two directions; `None` with
+  fewer than 2 GPUs or no peer access.
 - `g2g_latency_us`: 4-byte peer copy plus stream synchronize, wall clock.
 - `compute_tflops`: the generic cuBLAS `GemmEx` 8192³ peak, `2·N³` FLOPs counted, validated
   against a CPU float64 reference per dtype. Each dtype first runs untimed
@@ -580,49 +579,6 @@ modal run modal/nccl.py --gpu h100 --count 2   # writes profiles/nccl-tests/h100
 
 See [BENCHMARKS.md](BENCHMARKS.md#nccl-tests) for what is recorded and how
 `napkin collective` reads the curve.
-
-### NVBandwidth
-
-Transfer throughput is ingested from NVIDIA NVBandwidth v0.10.0, pinned to
-commit `82fc4e8c6afa0babb8687793678f615b3b8d793e`. Run the Modal launcher with
-an exact GPU request such as:
-
-```sh
-modal run modal/nvbandwidth.py --gpu h100
-```
-
-It runs these NVBandwidth arguments with verification enabled:
-
-```sh
-nvbandwidth --format json --disableAffinity --bufferSize 512 --testSamples 7 \
-  --testcase host_to_device_memcpy_ce device_to_host_memcpy_ce \
-  host_to_device_memcpy_sm device_to_host_memcpy_sm \
-  device_to_device_memcpy_read_ce device_to_device_memcpy_write_ce \
-  device_to_device_memcpy_read_sm device_to_device_memcpy_write_sm \
-  host_device_latency_sm device_to_device_latency_sm
-```
-
-Do not add `--skipVerification` (`-s`): every testcase must pass. NVBandwidth
-reports decimal GB/s. The `512` buffer size is 512 MiB (536,870,912 bytes);
-each value is the median of 7 samples. Bandwidth counts the one-way payload
-once, not both the read and write traffic. CE uses the copy engine and SM uses
-GPU streaming multiprocessors. The peer READ matrix's value at row GPU *r*,
-column GPU *c* measures data flowing
-*c* → *r*, issued in *r*'s context; WRITE measures *r* → *c*, also issued in
-*r*'s context.
-
-The published host rates are the minimum CE value across the GPUs. The
-published GPU↔GPU rate is the minimum CE value across both directions and both
-READ/WRITE access patterns. The table retains the SM values and directional
-entries for comparison. On all four checked-in GPUs, the mean absolute
-deviation of the CE/napkin-bench ratio from 1 is below 1%; the table shows
-each individual ratio.
-
-`--disableAffinity` is needed because Modal rejects NVML's GPU-affinity
-configuration call; it disables that affinity optimization but leaves
-verification enabled. On Modal, `nvidia-smi topo -m` is unavailable; its failed
-probe and the successful `nvidia-smi nvlink --status` output are retained with
-the run metadata.
 
 ## Techniques
 

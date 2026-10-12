@@ -1,0 +1,65 @@
+{
+  "tool": "nvbandwidth",
+  "repository": "https://github.com/NVIDIA/nvbandwidth",
+  "tag": "v0.10.0",
+  "commit": "82fc4e8c6afa0babb8687793678f615b3b8d793e",
+  "version_output": "nvbandwidth Version: v0.10.0\nBuilt from Git version: v0.10",
+  "command": [
+    "nvbandwidth",
+    "--format",
+    "json",
+    "--disableAffinity",
+    "--bufferSize",
+    "512",
+    "--testSamples",
+    "7",
+    "--testcase",
+    "host_to_device_memcpy_ce",
+    "device_to_host_memcpy_ce",
+    "host_to_device_memcpy_sm",
+    "device_to_host_memcpy_sm",
+    "device_to_device_memcpy_read_ce",
+    "device_to_device_memcpy_write_ce",
+    "device_to_device_memcpy_read_sm",
+    "device_to_device_memcpy_write_sm",
+    "host_device_latency_sm",
+    "device_to_device_latency_sm"
+  ],
+  "exit_code": 0,
+  "gpu_request": "B200:2",
+  "captured_at": "2026-10-12T23:13:28Z",
+  "gpus": [
+    {
+      "index": "0",
+      "name": "NVIDIA B200",
+      "uuid": "GPU-be098169-1d43-71db-3c73-f4bb3a38b12e",
+      "pci.bus_id": "[Unknown Error]",
+      "driver_version": "610.57.04",
+      "memory.total": "183359 MiB"
+    },
+    {
+      "index": "1",
+      "name": "NVIDIA B200",
+      "uuid": "GPU-b4ef22cf-330e-f3cd-c6c6-cee3284398c9",
+      "pci.bus_id": "[Unknown Error]",
+      "driver_version": "610.57.04",
+      "memory.total": "183359 MiB"
+    }
+  ],
+  "pcie_links": [
+    {
+      "index": 0,
+      "pcie_gen": 5,
+      "pcie_gen_max": 5,
+      "pcie_width": 16,
+      "pcie_width_max": 16
+    },
+    {
+      "index": 1,
+      "pcie_gen": 5,
+      "pcie_gen_max": 5,
+      "pcie_width": 16,
+      "pcie_width_max": 16
+    }
+  ]
+}

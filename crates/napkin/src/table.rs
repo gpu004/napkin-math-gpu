@@ -97,7 +97,7 @@ fn host_link_label(
 
 fn host_link_cell(rates: &Rates, measured: Option<&Measured>, sig: u32) -> String {
     let bandwidth = rates
-        .h2d_gbps
+        .h2d
         .map(|rate| rate.gbps)
         .into_iter()
         .chain(rates.d2h.map(|rate| rate.gbps))

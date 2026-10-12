@@ -9,7 +9,7 @@ use napkin_profile::collective::{Collective, CollectiveEvidence, Curve, CurvePoi
 use napkin_profile::{
     Access, Bandwidth, Ceiling, CopyPath, Dtype, Endpoint, GemmAlgo, GemmCheck, GemmShape,
     GemmShapeSuite, GpuState, Latency, Measured, Nvbandwidth, Profile, RoundState, Span, Statistic,
-    TopologyProbe, tflops,
+    tflops,
 };
 use serde::Deserialize;
 
@@ -51,7 +51,16 @@ enum PriceTermsInput {
 struct ProfilePaths {
     datasheets: BTreeMap<String, PathBuf>,
     measured: BTreeMap<String, PathBuf>,
-    nvbandwidth: BTreeMap<String, (PathBuf, PathBuf)>,
+    nvbandwidth: BTreeMap<String, NvbandwidthPaths>,
+}
+
+#[derive(Debug)]
+struct NvbandwidthPaths {
+    directory_name: String,
+    gpu_count: u32,
+    raw: PathBuf,
+    run: PathBuf,
+    topo: PathBuf,
 }
 
 #[derive(Debug)]
@@ -75,9 +84,9 @@ fn run() -> Result<(), String> {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?;
     let profiles_dir = Path::new(&manifest_dir).join("../../profiles");
     println!("cargo:rerun-if-changed={}", profiles_dir.display());
-    let raw_dir = profiles_dir.join("raw");
-    println!("cargo:rerun-if-changed={}", raw_dir.display());
-    let paths = profile_paths(&profiles_dir, &raw_dir)?;
+    let nvbandwidth_dir = profiles_dir.join("nvbandwidth");
+    println!("cargo:rerun-if-changed={}", nvbandwidth_dir.display());
+    let paths = profile_paths(&profiles_dir, &nvbandwidth_dir)?;
     for (id, path) in &paths.measured {
         if !paths.datasheets.contains_key(id) {
             return Err(format!(
@@ -86,12 +95,11 @@ fn run() -> Result<(), String> {
             ));
         }
     }
-    for (id, (raw, run)) in &paths.nvbandwidth {
+    for (id, evidence) in &paths.nvbandwidth {
         if !paths.measured.contains_key(id) {
             return Err(format!(
-                "NVBandwidth evidence {} and {} has no measured profile",
-                raw.display(),
-                run.display()
+                "NVBandwidth evidence in {} has no measured profile",
+                evidence.directory_name
             ));
         }
     }
@@ -375,7 +383,7 @@ fn emit_prices(prices: &[PriceRecordInput]) -> Result<String, String> {
     Ok(generated)
 }
 
-fn profile_paths(profiles_dir: &Path, raw_dir: &Path) -> Result<ProfilePaths, String> {
+fn profile_paths(profiles_dir: &Path, nvbandwidth_dir: &Path) -> Result<ProfilePaths, String> {
     let mut datasheets = BTreeMap::new();
     let mut measured = BTreeMap::new();
     let entries = fs::read_dir(profiles_dir)
@@ -402,52 +410,77 @@ fn profile_paths(profiles_dir: &Path, raw_dir: &Path) -> Result<ProfilePaths, St
             datasheets.insert(id.to_owned(), path);
         }
     }
-    let mut nvbandwidth_raw = BTreeMap::new();
-    let mut nvbandwidth_runs = BTreeMap::new();
-    if raw_dir.exists() {
-        let entries = fs::read_dir(raw_dir)
-            .map_err(|error| format!("cannot read {}: {error}", raw_dir.display()))?;
+    let mut nvbandwidth = BTreeMap::new();
+    if nvbandwidth_dir.exists() {
+        let entries = fs::read_dir(nvbandwidth_dir)
+            .map_err(|error| format!("cannot read {}: {error}", nvbandwidth_dir.display()))?;
         for entry in entries {
             let path = entry
-                .map_err(|error| format!("cannot read entry in {}: {error}", raw_dir.display()))?
+                .map_err(|error| {
+                    format!(
+                        "cannot read entry in {}: {error}",
+                        nvbandwidth_dir.display()
+                    )
+                })?
                 .path();
-            if !path.is_file() {
+            if !path.is_dir() {
                 continue;
             }
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if let Some(id) = name.strip_suffix(".nvbandwidth.run.json") {
-                nvbandwidth_runs.insert(id.to_owned(), path);
-            } else if let Some(id) = name.strip_suffix(".nvbandwidth.json") {
-                nvbandwidth_raw.insert(id.to_owned(), path);
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| format!("invalid NVBandwidth directory name: {}", path.display()))?;
+            let (id, gpu_count) = parse_nvbandwidth_dir_name(name)?;
+            if nvbandwidth.contains_key(&id) {
+                return Err(format!(
+                    "multiple NVBandwidth directories found for profile {id:?}"
+                ));
             }
+            let raw = path.join("nvbandwidth.json");
+            let run = path.join("run.json");
+            let topo = path.join("topo.txt");
+            for required in [&raw, &run, &topo] {
+                if !required.is_file() {
+                    return Err(format!(
+                        "NVBandwidth directory {} is missing required file {}",
+                        path.display(),
+                        required.display()
+                    ));
+                }
+            }
+            nvbandwidth.insert(
+                id,
+                NvbandwidthPaths {
+                    directory_name: name.to_owned(),
+                    gpu_count,
+                    raw,
+                    run,
+                    topo,
+                },
+            );
         }
-    }
-    let ids: std::collections::BTreeSet<_> = nvbandwidth_raw
-        .keys()
-        .chain(nvbandwidth_runs.keys())
-        .cloned()
-        .collect();
-    let mut nvbandwidth = BTreeMap::new();
-    for id in ids {
-        let raw = nvbandwidth_raw.get(&id);
-        let run = nvbandwidth_runs.get(&id);
-        let (Some(raw), Some(run)) = (raw, run) else {
-            let found = raw
-                .or(run)
-                .map_or_else(String::new, |path| path.display().to_string());
-            return Err(format!(
-                "NVBandwidth evidence for {id:?} must include both raw and run files; found {found}"
-            ));
-        };
-        nvbandwidth.insert(id, (raw.clone(), run.clone()));
     }
     Ok(ProfilePaths {
         datasheets,
         measured,
         nvbandwidth,
     })
+}
+
+fn parse_nvbandwidth_dir_name(name: &str) -> Result<(String, u32), String> {
+    let Some((id, count)) = name.rsplit_once('x') else {
+        return Err(format!("malformed NVBandwidth directory name {name:?}"));
+    };
+    if !DATASHEET_IDS.contains(&id) {
+        return Err(format!("malformed NVBandwidth directory name {name:?}"));
+    }
+    let gpu_count = count
+        .parse::<u32>()
+        .map_err(|_| format!("malformed NVBandwidth directory name {name:?}"))?;
+    if gpu_count == 0 || format!("{id}x{gpu_count}") != name {
+        return Err(format!("malformed NVBandwidth directory name {name:?}"));
+    }
+    Ok((id.to_owned(), gpu_count))
 }
 
 fn load_profiles(
@@ -493,17 +526,27 @@ fn load_profiles(
 
 fn attach_nvbandwidth(
     mut profiles: Vec<Profile>,
-    evidence_paths: &BTreeMap<String, (PathBuf, PathBuf)>,
+    evidence_paths: &BTreeMap<String, NvbandwidthPaths>,
 ) -> Result<Vec<Profile>, String> {
     for profile in &mut profiles {
-        if let Some((raw_path, run_path)) = evidence_paths.get(&profile.id) {
-            let raw = fs::read_to_string(raw_path)
-                .map_err(|error| format!("cannot read {}: {error}", raw_path.display()))?;
-            let run = fs::read_to_string(run_path)
-                .map_err(|error| format!("cannot read {}: {error}", run_path.display()))?;
-            let evidence = Nvbandwidth::parse(&raw, &run).map_err(|error| {
+        if let Some(paths) = evidence_paths.get(&profile.id) {
+            let raw = fs::read_to_string(&paths.raw)
+                .map_err(|error| format!("cannot read {}: {error}", paths.raw.display()))?;
+            let run = fs::read_to_string(&paths.run)
+                .map_err(|error| format!("cannot read {}: {error}", paths.run.display()))?;
+            let topo = fs::read_to_string(&paths.topo)
+                .map_err(|error| format!("cannot read {}: {error}", paths.topo.display()))?;
+            let evidence = Nvbandwidth::parse(&raw, &run, &topo).map_err(|error| {
                 format!("invalid NVBandwidth evidence for {}: {error}", profile.id)
             })?;
+            if usize::try_from(paths.gpu_count).ok() != Some(evidence.devices.len()) {
+                return Err(format!(
+                    "NVBandwidth directory {} declares {} GPUs but the capture has {}",
+                    paths.directory_name,
+                    paths.gpu_count,
+                    evidence.devices.len()
+                ));
+            }
             let measured = profile.measured.as_ref().ok_or_else(|| {
                 format!(
                     "NVBandwidth evidence for {} has no measured profile",
@@ -954,7 +997,7 @@ fn emit_nvbandwidth(evidence: &Nvbandwidth) -> String {
         ),
         ("devices", string_vec(&evidence.devices)),
         ("pcie_links", pcie_links_literal(&evidence.pcie_links)),
-        ("topology", topology_literal(&evidence.topology)),
+        ("topology", string_literal(&evidence.topology)),
         ("buffer_bytes", format!("{}_u64", evidence.buffer_bytes)),
         ("samples", format!("{}_u32", evidence.samples)),
         (
@@ -999,22 +1042,6 @@ fn pcie_links_literal(links: &[napkin_profile::PcieLink]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("vec![{links}]")
-}
-
-fn topology_literal(probes: &[TopologyProbe]) -> String {
-    let probes = probes
-        .iter()
-        .map(|probe| {
-            format!(
-                "TopologyProbe {{ command: {}, exit_code: {}_i32, output: {} }}",
-                string_literal(&probe.command),
-                probe.exit_code,
-                string_literal(&probe.output)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("vec![{probes}]")
 }
 
 fn bandwidths_literal(bandwidths: &[Bandwidth]) -> String {

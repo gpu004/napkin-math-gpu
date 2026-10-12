@@ -32,6 +32,10 @@ include!(concat!(env!("OUT_DIR"), "/profiles.rs"));
 mod tests {
     use super::*;
 
+    const H100_RAW: &str = include_str!("../tests/fixtures/nvbandwidth/h100x2/nvbandwidth.json");
+    const H100_RUN: &str = include_str!("../tests/fixtures/nvbandwidth/h100x2/run.json");
+    const H100_TOPO: &str = include_str!("../tests/fixtures/nvbandwidth/h100x2/topo.txt");
+
     #[test]
     fn builtin_profiles_keep_datasheet_order() {
         assert_eq!(
@@ -170,14 +174,11 @@ mod tests {
     }
 
     fn parsed_fixture() -> Result<Nvbandwidth, String> {
-        Nvbandwidth::parse(
-            include_str!("../tests/fixtures/h100.nvbandwidth.json"),
-            include_str!("../tests/fixtures/h100.nvbandwidth.run.json"),
-        )
+        Nvbandwidth::parse(H100_RAW, H100_RUN, H100_TOPO)
     }
 
     fn parse_error(raw: &str, run: &str) -> String {
-        match Nvbandwidth::parse(raw, run) {
+        match Nvbandwidth::parse(raw, run, H100_TOPO) {
             Ok(_) => "expected NVBandwidth parsing to fail".to_owned(),
             Err(error) => error,
         }
@@ -186,6 +187,7 @@ mod tests {
     #[test]
     fn nvbandwidth_fixture_normalizes_directional_metrics_and_provenance() -> Result<(), String> {
         let evidence = parsed_fixture()?;
+        assert_eq!(evidence.topology, H100_TOPO);
         assert_eq!(evidence.h2d(CopyPath::Ce), Some(55.5174));
         assert_eq!(evidence.d2h(CopyPath::Ce), Some(55.492));
         assert_eq!(evidence.d2h(CopyPath::Sm), Some(40.92));
@@ -214,43 +216,32 @@ mod tests {
 
     #[test]
     fn nvbandwidth_rejects_non_decimal_units() {
-        let raw = include_str!("../tests/fixtures/h100.nvbandwidth.json")
-            .replace("bandwidth (GB/s)", "bandwidth (GiB/s)");
-        let error = parse_error(
-            &raw,
-            include_str!("../tests/fixtures/h100.nvbandwidth.run.json"),
-        );
+        let raw = H100_RAW.replace("bandwidth (GB/s)", "bandwidth (GiB/s)");
+        let error = parse_error(&raw, H100_RUN);
         assert!(error.contains("host_to_device_memcpy_ce"), "{error}");
     }
 
     #[test]
     fn nvbandwidth_rejects_failed_testcase() {
-        let raw = include_str!("../tests/fixtures/h100.nvbandwidth.json")
-            .replace(r#""status" : "Passed""#, r#""status" : "Error""#);
-        let error = parse_error(
-            &raw,
-            include_str!("../tests/fixtures/h100.nvbandwidth.run.json"),
-        );
+        let raw = H100_RAW.replace(r#""status" : "Passed""#, r#""status" : "Error""#);
+        let error = parse_error(&raw, H100_RUN);
         assert!(error.contains("status"), "{error}");
     }
 
     #[test]
     fn nvbandwidth_rejects_top_level_error() {
-        let raw = include_str!("../tests/fixtures/h100.nvbandwidth.json").replace(
+        let raw = H100_RAW.replace(
             r#""version" :"#,
             "\"error\" : \"synthetic failure\",\n\t\t\"version\" :",
         );
-        let error = parse_error(
-            &raw,
-            include_str!("../tests/fixtures/h100.nvbandwidth.run.json"),
-        );
+        let error = parse_error(&raw, H100_RUN);
         assert!(error.contains("contains error"), "{error}");
     }
 
     #[test]
     fn nvbandwidth_rejects_disabled_verification_and_failed_run() {
-        let raw = include_str!("../tests/fixtures/h100.nvbandwidth.json");
-        let run = include_str!("../tests/fixtures/h100.nvbandwidth.run.json");
+        let raw = H100_RAW;
+        let run = H100_RUN;
         let skipped = run.replace(
             r#""--disableAffinity","#,
             r#""--skipVerification", "--disableAffinity","#,
