@@ -18,7 +18,7 @@ impl std::error::Error for ParseError {}
 fn split_unit(s: &str) -> Result<(f64, &str), ParseError> {
     let s = s.trim();
     let boundary = s
-        .find(|c: char| c.is_ascii_alphabetic() && c != 'e' && c != 'E')
+        .find(|c: char| c.is_alphabetic() && c != 'e' && c != 'E')
         .unwrap_or(s.len());
     let (num, unit) = s.split_at(boundary);
     let (num, unit) =
@@ -102,6 +102,57 @@ pub fn parse_count(s: &str) -> Result<f64, ParseError> {
     parse_with(s, count_suffix)
 }
 
+/// Parses a duration with an explicit unit and returns seconds.
+///
+/// # Errors
+/// Returns `ParseError` for a missing, ambiguous, or unrecognized time unit.
+pub fn parse_duration(s: &str) -> Result<f64, ParseError> {
+    let (value, unit) = split_unit(s)?;
+    let multiplier = match unit {
+        "ns" => 1e-9,
+        "us" | "μs" => 1e-6,
+        "ms" => 1e-3,
+        "s" => 1.0,
+        "min" => 60.0,
+        "h" => 3600.0,
+        "" => {
+            return Err(ParseError(format!(
+                "duration {s:?} needs a unit; add a unit, e.g. 10s"
+            )));
+        }
+        _ => return Err(ParseError(format!("unrecognized duration unit in {s:?}"))),
+    };
+    Ok(value * multiplier)
+}
+
+/// Formats a price to three significant digits.
+#[must_use]
+pub fn fmt_money(value: f64, currency: &str) -> String {
+    if currency == "USD" {
+        format!("${}", fmt_sig(value, 3))
+    } else {
+        format!("{} {currency}", fmt_sig(value, 3))
+    }
+}
+
+/// Formats a count with a K/M/G/T suffix.
+#[must_use]
+pub fn fmt_count(value: f64, sig: u32) -> String {
+    let magnitude = value.abs();
+    let (scale, suffix) = if magnitude >= 1e12 {
+        (1e12, "T")
+    } else if magnitude >= 1e9 {
+        (1e9, "G")
+    } else if magnitude >= 1e6 {
+        (1e6, "M")
+    } else if magnitude >= 1e3 {
+        (1e3, "K")
+    } else {
+        return fmt_sig(value, sig);
+    };
+    format!("{}{suffix}", fmt_sig(value / scale, sig))
+}
+
 /// Rounds `v` to `sig` significant digits.
 #[must_use]
 pub fn round_sig(v: f64, sig: u32) -> f64 {
@@ -117,10 +168,20 @@ pub fn round_sig(v: f64, sig: u32) -> f64 {
 #[must_use]
 pub fn fmt_sig(v: f64, sig: u32) -> String {
     let rounded = round_sig(v, sig);
-    if (rounded - rounded.trunc()).abs() < f64::EPSILON && rounded.abs() < 1e15 {
+    if rounded == 0.0 {
+        return "0".to_owned();
+    }
+    if rounded.fract() == 0.0 && rounded.abs() < 1e15 {
         format!("{rounded:.0}")
     } else {
-        let decimals = usize::try_from(sig.saturating_sub(1)).unwrap_or(0);
+        let decimal_places =
+            (f64::from(sig.saturating_sub(1)) - rounded.abs().log10().floor()).max(0.0);
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "the decimal precision is bounded by the significant digit count and f64 range"
+        )]
+        let decimals = decimal_places as usize;
         format!("{rounded:.decimals$}")
             .trim_end_matches('0')
             .trim_end_matches('.')
@@ -226,5 +287,29 @@ mod tests {
         assert_eq!(fmt_gbps(55.0, 1), "60 GB/s");
         assert_eq!(fmt_tflops(717.0, 1), "700 TFLOP/s");
         assert_eq!(fmt_tflops(2250.0, 1), "2 PFLOP/s");
+    }
+
+    #[test]
+    fn parses_explicit_durations() {
+        assert_eq!(parse_duration("1ns").unwrap(), 1e-9);
+        assert_eq!(parse_duration("2us").unwrap(), 2e-6);
+        assert_eq!(parse_duration("3μs").unwrap(), 3e-6);
+        assert_eq!(parse_duration("4ms").unwrap(), 4e-3);
+        assert_eq!(parse_duration("5s").unwrap(), 5.0);
+        assert_eq!(parse_duration("2min").unwrap(), 120.0);
+        assert_eq!(parse_duration("1h").unwrap(), 3600.0);
+        assert!(parse_duration("10").is_err());
+        assert!(parse_duration("1m").is_err());
+    }
+
+    #[test]
+    fn formats_money_and_counts() {
+        assert_eq!(fmt_money(0.016_666, "USD"), "$0.0167");
+        assert_eq!(fmt_money(0.016_666, "EUR"), "0.0167 EUR");
+        assert_eq!(fmt_count(1.5e6, 3), "1.5M");
+        assert_eq!(fmt_count(25e3, 3), "25K");
+        assert_eq!(fmt_count(900.0, 3), "900");
+        assert_eq!(fmt_sig(0.016_666, 3), "0.0167");
+        assert_eq!(fmt_sig(0.005_555, 3), "0.00556");
     }
 }

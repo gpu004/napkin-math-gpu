@@ -6,8 +6,41 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use napkin_profile::{Ceiling, Dtype, Measured, Profile};
+use serde::Deserialize;
 
 const DATASHEET_IDS: [&str; 4] = ["a100", "h100", "b200", "b300"];
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PriceRecordInput {
+    id: String,
+    provider: String,
+    sku: String,
+    gpu: String,
+    currency: String,
+    amount: f64,
+    per: PricePerInput,
+    terms: PriceTermsInput,
+    preemptible: bool,
+    date: String,
+    source: String,
+    note: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum PricePerInput {
+    Second,
+    Minute,
+    Hour,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum PriceTermsInput {
+    OnDemand,
+    Spot,
+}
 
 #[derive(Debug)]
 struct ProfilePaths {
@@ -44,7 +77,172 @@ fn run() -> Result<(), String> {
     let output = Path::new(&out_dir).join("profiles.rs");
     fs::write(&output, generated)
         .map_err(|error| format!("cannot write {}: {error}", output.display()))?;
+    let prices_dir = Path::new(&manifest_dir).join("../../prices");
+    println!("cargo:rerun-if-changed={}", prices_dir.display());
+    let prices = load_prices(&prices_dir)?;
+    let output = Path::new(&out_dir).join("prices.rs");
+    fs::write(&output, emit_prices(&prices)?)
+        .map_err(|error| format!("cannot write {}: {error}", output.display()))?;
     Ok(())
+}
+
+fn load_prices(prices_dir: &Path) -> Result<Vec<PriceRecordInput>, String> {
+    let entries = fs::read_dir(prices_dir)
+        .map_err(|error| format!("cannot read {}: {error}", prices_dir.display()))?;
+    let mut paths = entries
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .map_err(|error| format!("cannot read entry in {}: {error}", prices_dir.display()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    paths.sort();
+    let mut records = Vec::new();
+    let mut ids = std::collections::BTreeSet::new();
+    for path in paths {
+        if !path.is_file()
+            || path.extension().and_then(|extension| extension.to_str()) != Some("json")
+        {
+            continue;
+        }
+        let json = fs::read_to_string(&path)
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        let file_records: Vec<PriceRecordInput> = serde_json::from_str(&json)
+            .map_err(|error| format!("invalid price JSON in {}: {error}", path.display()))?;
+        for record in file_records {
+            validate_price(&record, &path)?;
+            if !ids.insert(record.id.clone()) {
+                return Err(format!("duplicate price record id {:?}", record.id));
+            }
+            records.push(record);
+        }
+    }
+    Ok(records)
+}
+
+fn validate_price(record: &PriceRecordInput, path: &Path) -> Result<(), String> {
+    let source = path.display();
+    if record.id.is_empty()
+        || !record
+            .id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err(format!(
+            "price record in {source} has invalid id {:?}; expected [a-z0-9-]+",
+            record.id
+        ));
+    }
+    for (name, value) in [
+        ("provider", record.provider.as_str()),
+        ("sku", record.sku.as_str()),
+        ("note", record.note.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(format!("price record {:?} has empty {name}", record.id));
+        }
+    }
+    if !DATASHEET_IDS.contains(&record.gpu.as_str()) {
+        return Err(format!(
+            "price record {:?} has unknown gpu {:?}",
+            record.id, record.gpu
+        ));
+    }
+    if record.currency.len() != 3
+        || !record
+            .currency
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase())
+    {
+        return Err(format!(
+            "price record {:?} has invalid currency {:?}",
+            record.id, record.currency
+        ));
+    }
+    if !(record.amount > 0.0 && record.amount.is_finite()) {
+        return Err(format!(
+            "price record {:?} has nonpositive or non-finite amount",
+            record.id
+        ));
+    }
+    if !record.source.starts_with("https://") {
+        return Err(format!(
+            "price record {:?} source must start with https://",
+            record.id
+        ));
+    }
+    if parse_date(&record.date).is_none() {
+        return Err(format!(
+            "price record {:?} has invalid calendar date {:?}",
+            record.id, record.date
+        ));
+    }
+    Ok(())
+}
+
+fn parse_date(value: &str) -> Option<(i32, u8, u8)> {
+    if value.len() != 10
+        || value.as_bytes().get(4) != Some(&b'-')
+        || value.as_bytes().get(7) != Some(&b'-')
+    {
+        return None;
+    }
+    let year = value.get(..4)?.parse::<i32>().ok()?;
+    let month = value.get(5..7)?.parse::<u8>().ok()?;
+    let day = value.get(8..)?.parse::<u8>().ok()?;
+    if !value
+        .bytes()
+        .enumerate()
+        .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
+        || !(1..=12).contains(&month)
+        || !(1..=days_in_month(year, month)).contains(&day)
+    {
+        return None;
+    }
+    Some((year, month, day))
+}
+
+fn days_in_month(year: i32, month: u8) -> u8 {
+    match month {
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+fn emit_prices(prices: &[PriceRecordInput]) -> Result<String, String> {
+    let mut generated = String::from(
+        "#[expect(clippy::unreadable_literal, reason = \"preserve source price precision\")]\nstatic GENERATED_PRICES: &[PriceRecord] = &[\n",
+    );
+    for record in prices {
+        let (year, month, day) = parse_date(&record.date)
+            .ok_or_else(|| format!("invalid date in price record {:?}", record.id))?;
+        let per = match record.per {
+            PricePerInput::Second => "Per::Second",
+            PricePerInput::Minute => "Per::Minute",
+            PricePerInput::Hour => "Per::Hour",
+        };
+        let terms = match record.terms {
+            PriceTermsInput::OnDemand => "Terms::OnDemand",
+            PriceTermsInput::Spot => "Terms::Spot",
+        };
+        let _ = writeln!(
+            generated,
+            "    PriceRecord {{ id: {:?}, provider: {:?}, sku: {:?}, gpu: {:?}, currency: {:?}, amount: {:?}_f64, per: {per}, terms: {terms}, preemptible: {}, date: Date {{ year: {year}, month: {month}, day: {day} }}, source: {:?}, note: {:?} }},",
+            record.id,
+            record.provider,
+            record.sku,
+            record.gpu,
+            record.currency,
+            record.amount,
+            record.preemptible,
+            record.source,
+            record.note
+        );
+    }
+    generated.push_str("];\n");
+    Ok(generated)
 }
 
 fn profile_paths(profiles_dir: &Path) -> Result<ProfilePaths, String> {

@@ -4,11 +4,13 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
+use napkin::cost::{self, Job, Work};
 use napkin::estimate::{self, Mode, Workload};
 use napkin::fit;
+use napkin::price::{self, Date, STALE_AFTER_DAYS};
 use napkin::profile::{self, Basis, Dtype, Profile};
-use napkin::units::{self, fmt_duration, fmt_intensity};
+use napkin::units::{self, fmt_count, fmt_duration, fmt_intensity, fmt_money, fmt_sig};
 
 /// GPU napkin math: estimate workload performance from first principles.
 #[derive(Parser, Debug)]
@@ -87,6 +89,48 @@ enum Command {
         #[arg(long, default_value_t = 0.1)]
         headroom: f64,
     },
+    /// Estimate billed GPU cost from busy time and dated or supplied pricing.
+    #[command(group(ArgGroup::new("price_source").required(true).args(["price", "offer"])))]
+    Cost {
+        /// Number of GPUs you rent; napkin fit's minimum is a capacity floor, not a runtime.
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+        gpus: u32,
+        /// Time each GPU spends working at the modelled rate, with units (e.g. 10s).
+        #[arg(long)]
+        time: String,
+        /// Price per GPU-hour.
+        #[arg(long)]
+        price: Option<String>,
+        /// Use a dated built-in price record.
+        #[arg(long)]
+        offer: Option<String>,
+        /// Currency for --price.
+        #[arg(long, default_value = "USD", requires = "price")]
+        currency: String,
+        /// Fraction of on-GPU time spent working at the modelled rate.
+        #[arg(long)]
+        utilization: Option<f64>,
+        /// Cold-start time for each rented GPU, with units.
+        #[arg(long)]
+        startup: Option<String>,
+        /// Paid idle time after running, with units.
+        #[arg(long)]
+        idle: Option<String>,
+        /// Billing increment to round wall time up to, with units.
+        #[arg(long)]
+        granularity: Option<String>,
+        /// Completed amount of work.
+        #[arg(long, conflicts_with = "throughput")]
+        work: Option<String>,
+        /// Measured work per busy second.
+        #[arg(long, conflicts_with = "work")]
+        throughput: Option<String>,
+        /// Label for work units.
+        #[arg(long, default_value = "units")]
+        unit: String,
+    },
+    /// List dated GPU price records and their age.
+    Prices,
     /// Rewrite the `<!-- napkin ... -->` marker blocks in README.md.
     Readme {
         /// Exit non-zero if the marker blocks are stale.
@@ -152,6 +196,34 @@ fn run() -> Result<String, String> {
             extra,
             headroom,
         } => cmd_fit(gpu, params, *bits, extra.as_deref(), *headroom),
+        Command::Cost {
+            gpus,
+            time,
+            price,
+            offer,
+            currency,
+            utilization,
+            startup,
+            idle,
+            granularity,
+            work,
+            throughput,
+            unit,
+        } => cmd_cost(
+            *gpus,
+            time,
+            price.as_deref(),
+            offer.as_deref(),
+            currency,
+            *utilization,
+            startup.as_deref(),
+            idle.as_deref(),
+            granularity.as_deref(),
+            work.as_deref(),
+            throughput.as_deref(),
+            unit,
+        ),
+        Command::Prices => cmd_prices(),
         Command::Readme { check, path, .. } => cmd_readme(path, *check),
     }
 }
@@ -308,6 +380,265 @@ fn cmd_fit(
     Ok(out)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "keep each cost assumption visible as an independent CLI flag"
+)]
+fn cmd_cost(
+    gpus: u32,
+    time: &str,
+    price: Option<&str>,
+    offer: Option<&str>,
+    currency: &str,
+    utilization: Option<f64>,
+    startup: Option<&str>,
+    idle: Option<&str>,
+    granularity: Option<&str>,
+    work: Option<&str>,
+    throughput: Option<&str>,
+    unit: &str,
+) -> Result<String, String> {
+    if currency.len() != 3 || !currency.bytes().all(|byte| byte.is_ascii_uppercase()) {
+        return Err("currency must be exactly three uppercase ASCII letters".to_owned());
+    }
+    let (price_per_gpu_hour, first_line, price_line) = if let Some(record_id) = offer {
+        let record = price::find(record_id).ok_or_else(|| {
+            format!("no price record {record_id:?}; run `napkin prices` or pass --price")
+        })?;
+        let today =
+            Date::today().ok_or_else(|| "system clock is before the Unix epoch".to_owned())?;
+        let age = record.age_days(today);
+        let display_price = record.listed_price();
+        let terms = record.terms_label();
+        let first_line = format!(
+            "{gpus} {} · {} {} ({}): {display_price} = {}/GPU-hour",
+            if gpus == 1 { "GPU" } else { "GPUs" },
+            record.provider,
+            record.sku,
+            record.id,
+            fmt_money(record.per_gpu_hour(), record.currency)
+        );
+        let price_line = if record.is_stale(today) {
+            format!(
+                "price       STALE: dated {}, {age} days old (stale after {STALE_AFTER_DAYS} days); re-check {} or pass --price\n",
+                record.date, record.source
+            )
+        } else {
+            format!(
+                "price       {terms} · dated {}, {age} days old · {}\n",
+                record.date, record.source
+            )
+        };
+        (record.per_gpu_hour(), first_line, Some(price_line))
+    } else {
+        let price = price.ok_or_else(|| "pass exactly one of --price or --offer".to_owned())?;
+        let amount = units::parse_number(price).map_err(|error| error.to_string())?;
+        let first_line = format!(
+            "{gpus} {} · {}/GPU-hour (--price)",
+            if gpus == 1 { "GPU" } else { "GPUs" },
+            fmt_money(amount, currency)
+        );
+        (amount, first_line, None)
+    };
+    let busy_s = units::parse_duration(time).map_err(|error| error.to_string())?;
+    let utilization_value = utilization.unwrap_or(1.0);
+    let startup_s = startup
+        .map(units::parse_duration)
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or(0.0);
+    let idle_s = idle
+        .map(units::parse_duration)
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or(0.0);
+    let granularity_s = granularity
+        .map(units::parse_duration)
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let work = match (work, throughput) {
+        (Some(value), _) => Some(Work::Count(
+            units::parse_number(value).map_err(|error| error.to_string())?,
+        )),
+        (_, Some(value)) => Some(Work::Rate(
+            units::parse_number(value).map_err(|error| error.to_string())?,
+        )),
+        (None, None) => None,
+    };
+    let job = Job {
+        gpus,
+        busy_s,
+        utilization: utilization_value,
+        startup_s,
+        idle_s,
+        granularity_s,
+        work,
+    };
+    let result = cost::cost(&job, price_per_gpu_hour).map_err(|error| error.to_string())?;
+    let mut out = format!("{first_line}\n");
+    if let Some(line) = price_line {
+        out.push_str(&line);
+    }
+    CostDisplay {
+        utilization,
+        startup,
+        idle,
+        currency,
+        unit,
+    }
+    .append(&mut out, &job, &result);
+    Ok(out)
+}
+
+struct CostDisplay<'a> {
+    utilization: Option<f64>,
+    startup: Option<&'a str>,
+    idle: Option<&'a str>,
+    currency: &'a str,
+    unit: &'a str,
+}
+
+impl CostDisplay<'_> {
+    fn append(&self, out: &mut String, job: &Job, result: &cost::Cost) {
+        let _ = writeln!(
+            out,
+            "{:<12}{} per GPU (--time)",
+            "busy",
+            fmt_duration(job.busy_s, 3)
+        );
+        let utilization_source = if self.utilization.is_some() {
+            "--utilization"
+        } else {
+            "default; pass --utilization"
+        };
+        let _ = writeln!(
+            out,
+            "{:<12}{}% ({utilization_source})",
+            "utilization",
+            fmt_sig(job.utilization * 100.0, 2)
+        );
+        let _ = writeln!(
+            out,
+            "{:<12}{} = busy / utilization",
+            "running",
+            fmt_duration(result.running_s, 3)
+        );
+        let startup_source = if self.startup.is_some() {
+            "--startup"
+        } else {
+            "default; pass --startup"
+        };
+        let _ = writeln!(
+            out,
+            "{:<12}{} ({startup_source})",
+            "startup",
+            fmt_duration(job.startup_s, 3)
+        );
+        let idle_source = if self.idle.is_some() {
+            "--idle"
+        } else {
+            "default; pass --idle"
+        };
+        let _ = writeln!(
+            out,
+            "{:<12}{} ({idle_source})",
+            "idle",
+            fmt_duration(job.idle_s, 3)
+        );
+        let _ = writeln!(
+            out,
+            "{:<12}{} = startup + running + idle",
+            "wall",
+            fmt_duration(result.wall_s, 3)
+        );
+        let billing_note = job.granularity_s.map_or_else(
+            || "exact; pass --granularity".to_owned(),
+            |seconds| format!("rounded up to {}", fmt_duration(seconds, 3)),
+        );
+        let _ = writeln!(
+            out,
+            "{:<12}{} per GPU ({billing_note})",
+            "billed",
+            fmt_duration(result.billed_s, 3)
+        );
+        let gpu_label = if job.gpus == 1 { "GPU" } else { "GPUs" };
+        let _ = writeln!(
+            out,
+            "{:<12}{} = {} {gpu_label} × billed",
+            "GPU-hours",
+            fmt_sig(result.gpu_hours, 3),
+            job.gpus
+        );
+        let _ = writeln!(
+            out,
+            "{:<12}{} per job",
+            "cost",
+            fmt_money(result.cost, self.currency)
+        );
+        let _ = writeln!(
+            out,
+            "{:<12}{}% of billed GPU time is busy",
+            "useful",
+            fmt_sig(result.useful * 100.0, 2)
+        );
+        self.append_work(out, result);
+    }
+
+    fn append_work(&self, out: &mut String, result: &cost::Cost) {
+        if let Some(total) = result.work {
+            match total.source {
+                Work::Count(_) => {
+                    let _ = writeln!(
+                        out,
+                        "work        {} {} (--work)",
+                        fmt_count(total.units, 3),
+                        self.unit
+                    );
+                }
+                Work::Rate(rate) => {
+                    let _ = writeln!(
+                        out,
+                        "work        {} {} = {} {}/s × busy",
+                        fmt_count(total.units, 3),
+                        self.unit,
+                        fmt_count(rate, 3),
+                        self.unit
+                    );
+                }
+            }
+            write_per_dollar(out, total.per_dollar, self.unit, self.currency);
+        } else {
+            out.push_str(
+                "work        none (pass --work or --throughput: a workload rate, never peak FLOPs)\n",
+            );
+        }
+    }
+}
+
+fn write_per_dollar(out: &mut String, value: f64, unit: &str, currency: &str) {
+    let currency = if currency == "USD" { "$" } else { currency };
+    let _ = writeln!(out, "per dollar  {} {unit}/{currency}", fmt_count(value, 3));
+}
+
+fn cmd_prices() -> Result<String, String> {
+    let today = Date::today().ok_or_else(|| "system clock is before the Unix epoch".to_owned())?;
+    let mut out = napkin::table::prices(price::builtin());
+    out.push('\n');
+    let _ = writeln!(
+        out,
+        "today {today}; records older than {STALE_AFTER_DAYS} days are stale"
+    );
+    for record in price::builtin() {
+        let age = record.age_days(today);
+        if record.is_stale(today) {
+            let _ = writeln!(out, "{}  STALE, {age} days old", record.id);
+        } else {
+            let _ = writeln!(out, "{}  {age} days old", record.id);
+        }
+    }
+    Ok(out)
+}
+
 const MARKER_PREFIX: &str = "<!-- napkin ";
 const MARKER_END: &str = "<!-- /napkin -->";
 
@@ -316,6 +647,7 @@ fn render_marker(command: &str) -> Result<String, String> {
     match tokens.as_slice() {
         ["table", "--gpu", gpu] => cmd_table(gpu, false),
         ["compare"] => Ok(cmd_compare(false)),
+        ["prices"] => Ok(napkin::table::prices(price::builtin())),
         _ => Err(format!("unsupported marker command {command:?}")),
     }
 }
