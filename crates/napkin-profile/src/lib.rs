@@ -203,14 +203,115 @@ pub struct Measured {
     /// cuBLAS `GemmEx` 8192^3 (fp16, bf16, tf32, fp32).
     pub compute_tflops: BTreeMap<Dtype, f64>,
     pub gemm_shape: [u32; 3],
+    /// Per-shape cuBLASLt results stored alongside, never replacing the
+    /// `compute_tflops` 8192³ `GemmEx` peak. Empty in older profiles.
+    #[serde(default)]
+    pub gemm_shapes: Vec<GemmShape>,
     /// Every check must be true or `napkin-bench` exits non-zero.
     pub checks: BTreeMap<String, bool>,
-    /// Raw per-round samples keyed by metric field name.
+    /// Raw per-round durations in milliseconds, keyed by metric field name.
     pub samples_ms: BTreeMap<String, Vec<f64>>,
     /// GPU 0 clocks, power, temperature and clock-limit reasons for each
     /// timed GEMM round; None in profiles captured before it was recorded.
     #[serde(default)]
     pub gpu_state: Option<GpuState>,
+}
+
+/// One cuBLASLt GEMM from the shape suite, D (M × N) = op(A) (M × K) ·
+/// op(B) (K × N), column-major, alpha 1 beta 0.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GemmShape {
+    /// Suite label, e.g. `"decode-m8"`.
+    pub name: String,
+    /// Output rows M, output columns N, and reduction dimension K.
+    pub m: u32,
+    pub n: u32,
+    pub k: u32,
+    /// Element type of A, B, C, and D.
+    pub dtype: Dtype,
+    /// cuBLASLt compute type, e.g. `"CUBLAS_COMPUTE_32F"`.
+    pub compute_type: String,
+    /// cuBLASLt scale type, e.g. `"CUDA_R_32F"`.
+    pub scale_type: String,
+    /// Operation applied to A, e.g. `"T"` or `"N"`.
+    pub trans_a: String,
+    /// Operation applied to B, e.g. `"T"` or `"N"`.
+    pub trans_b: String,
+    /// Leading dimensions of A, B, and C/D in elements.
+    pub lda: u32,
+    pub ldb: u32,
+    pub ldc: u32,
+    /// cuBLASLt epilogue, e.g. `"CUBLASLT_EPILOGUE_DEFAULT"`.
+    pub epilogue: String,
+    /// cuBLASLt library version source, e.g. `"cuBLASLt 120901 (cublasLtGetVersion)"`.
+    pub library: String,
+    /// Algorithm attributes selected by the heuristic.
+    pub algorithm: GemmAlgo,
+    /// Workspace limit passed to the heuristic, in bytes.
+    pub workspace_limit_bytes: u64,
+    /// Decimal TFLOP/s: `flops()` divided by median round time in milliseconds.
+    pub tflops: f64,
+    /// Sampled-output comparison against a float64 CPU reference computed
+    /// from the dtype-rounded inputs.
+    pub check: GemmCheck,
+}
+
+impl GemmShape {
+    /// Count of multiply-add FLOPs, with each multiply and add counted once.
+    #[must_use]
+    pub fn flops(&self) -> f64 {
+        2.0 * f64::from(self.m) * f64::from(self.n) * f64::from(self.k)
+    }
+
+    /// Per-round timing key used in `Measured::samples_ms`.
+    #[must_use]
+    pub fn samples_key(&self) -> String {
+        format!("gemm_shape_{}_{}", self.name, self.dtype)
+    }
+}
+
+/// Raw enum values and workspace/waves returned by the cuBLASLt heuristic.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GemmAlgo {
+    /// cuBLASLt algorithm ID.
+    pub id: i32,
+    /// cuBLASLt tile configuration ID.
+    pub tile: i32,
+    /// Kernel pipeline stage configuration.
+    pub stages: i32,
+    /// Split-K factor.
+    pub split_k: i32,
+    /// Reduction scheme enum value.
+    pub reduction_scheme: i32,
+    /// CTA swizzling enum value.
+    pub cta_swizzling: i32,
+    /// Custom algorithm option enum value.
+    pub custom_option: i32,
+    /// Heuristic-selected workspace size, in bytes.
+    pub workspace_bytes: u64,
+    /// Heuristic's estimated number of waves.
+    pub waves: f64,
+}
+
+/// Output comparison against a float64 reference, using dtype-rounded inputs.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GemmCheck {
+    /// Number of deterministically sampled output elements.
+    pub sampled: u32,
+    /// Largest absolute error among sampled outputs.
+    pub max_abs_error: f64,
+    /// Relative tolerance used by the pass criterion.
+    pub rtol: f64,
+    /// Absolute tolerance used by the pass criterion.
+    pub atol: f64,
+    /// Whether every sampled output met `atol + rtol × |reference|`.
+    pub passed: bool,
+}
+
+/// Decimal TFLOP/s for `flops` work completed in `ms` milliseconds.
+#[must_use]
+pub fn tflops(flops: f64, ms: f64) -> f64 {
+    flops / (ms / 1e3) / 1e12
 }
 
 impl Measured {
@@ -334,4 +435,14 @@ pub struct Rates {
     pub g2g_latency_us: Option<f64>,
     pub launch_us: Option<f64>,
     pub basis: Basis,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tflops;
+
+    #[test]
+    fn decimal_tflops_uses_milliseconds() {
+        assert_eq!(tflops(1e12, 2.0), 500.0);
+    }
 }

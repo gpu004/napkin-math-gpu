@@ -12,6 +12,7 @@ cudarc = { version = "0.19", default-features = false, features = [
     "std",
     "driver",
     "cublas",
+    "cublaslt",
     "nvrtc",
     "f16",
     "cuda-12090",

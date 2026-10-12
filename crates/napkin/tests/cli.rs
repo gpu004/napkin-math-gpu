@@ -37,6 +37,63 @@ fn estimate_runs_on_datasheet_gpu() {
 }
 
 #[test]
+fn gemm_estimate_reports_derived_work_and_unmatched_shape() {
+    let (stdout, stderr, code) = napkin(&[
+        "estimate",
+        "--gpu",
+        "h100",
+        "--dtype",
+        "bf16",
+        "--gemm",
+        "4096x4096x4096",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("GEMM FLOPs  2 × 4096 × 4096 × 4096"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("minimum HBM (A+B+C)"), "{stdout}");
+    assert!(
+        stdout.contains("no measured bf16 GEMM shape 4096x4096x4096"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("used 8192³ peak"), "{stdout}");
+    assert!(
+        stdout.contains("measured shapes: none; no interpolation"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn tflops_override_is_reported_as_the_compute_source() {
+    let (stdout, stderr, code) = napkin(&[
+        "estimate", "--gpu", "h100", "--dtype", "bf16", "--tflops", "300", "--flops", "1e12",
+        "--bytes", "1e9",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("(compute: --tflops override at 300 TFLOP/s)"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn gemm_estimate_rejects_bad_dimensions_and_ceiling() {
+    let (_, stderr, code) = napkin(&["estimate", "--gpu", "h100", "--gemm", "0x2x3"]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("three positive dimensions"), "{stderr}");
+    let (_, stderr, code) = napkin(&["estimate", "--gpu", "h100", "--gemm", "8x8x8", "--ceiling"]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("cannot be used with"), "{stderr}");
+    let (_, stderr, code) = napkin(&[
+        "estimate", "--gpu", "h100", "--gemm", "8x8x8", "--tflops", "300", "--flops", "1e12",
+        "--bytes", "1e9",
+    ]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("cannot be used with"), "{stderr}");
+}
+
+#[test]
 fn estimate_rejects_h2d_on_datasheet_gpu() {
     let (_, stderr, code) = napkin(&[
         "estimate",

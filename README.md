@@ -41,12 +41,14 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 | Elementwise add |  | 3 TB/s | 300 ns | 300 μs |
 | GPU ↔ GPU, NVLink one-way | 10 μs | 400 GB/s | 3 μs | 3 ms |
 
-| Dense GEMM | Throughput | 1 GFLOP | 1 TFLOP | Ridge point |
+| Dense GEMM, 8192³ | Throughput | 1 GFLOP | 1 TFLOP | Ridge point |
 | --- | ---: | ---: | ---: | ---: |
 | fp16 | 700 TFLOP/s † | 1 μs | 1 ms | 220 FLOP/B |
 | bf16 | 700 TFLOP/s † | 1 μs | 1 ms | 230 FLOP/B |
 | tf32 | 400 TFLOP/s † | 3 μs | 3 ms | 120 FLOP/B |
 | fp32 | 50 TFLOP/s | 20 μs | 20 ms | 17 FLOP/B |
+
+Dense GEMM rows are cuBLAS `GemmEx` 8192³ peaks, not universal rates for arbitrary shapes.
 
 † Rounds disagree by more than 5%: host RAM copy 13%, host → device 24%, device → host 6.4%, fp16 GEMM 10%, bf16 GEMM 14%, tf32 GEMM 13%. Spread is the slowest of the 7 rounds over the fastest, minus one: the observed range, not a confidence interval. The cell shows the median round.
 
@@ -472,6 +474,8 @@ napkin gpus                                       # profiles and their basis
 napkin table --gpu h100                           # the tables above
 napkin compare                                    # every GPU side by side
 napkin estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB [--h2d 2GB]
+napkin estimate --gpu h100 --dtype bf16 --gemm 4096x4096x4096
+napkin estimate --gpu h100 --dtype bf16 --tflops 300 --flops 1e12 --bytes 1e9
                 [--h2d-copies 1] [--d2h ..] [--d2h-copies ..] [--host ..]
                 [--g2g ..] [--g2g-copies ..] [--copy-mode sync|async]
                 [--launches 20] [--overlap] [--ceiling]
@@ -488,6 +492,13 @@ napkin collective --gpu h100 --count 2 --topology nvlink --op all-reduce
 napkin readme --write README.md PROBLEMS.md       # regenerate the marker blocks
 napkin validate [--write VALIDATION.md | --check VALIDATION.md]
 ```
+
+`--gemm MxNxK` (or `M×N×K`) derives dense FLOPs and minimum A/B/C traffic.
+It uses a measured cuBLASLt rate only for an exact shape and dtype match;
+otherwise it labels the estimate as unmatched and uses the separate 8192³
+cuBLAS `GemmEx` peak. Napkin does not interpolate between shapes.
+`--tflops` supplies an explicit positive, finite decimal TFLOP/s rate and
+cannot be combined with `--gemm`. `--gemm` cannot be combined with `--ceiling`.
 
 ## Benchmarks
 
@@ -514,7 +525,7 @@ napkin readme --write README.md PROBLEMS.md  # refreshes the tables
 - `g2g_gbps`: 512 MiB peer copy, slower of the two directions; `None` with
   fewer than 2 GPUs or no peer access.
 - `g2g_latency_us`: 4-byte peer copy plus stream synchronize, wall clock.
-- `compute_tflops`: cuBLAS GemmEx 8192³, `2·N³` FLOPs counted, validated
+- `compute_tflops`: the generic cuBLAS `GemmEx` 8192³ peak, `2·N³` FLOPs counted, validated
   against a CPU float64 reference per dtype. Each dtype first runs untimed
   GEMMs for 1 s, then times 7 rounds sized from the last warm-up batch to last about
   200 ms each (each round's measured length is stored as `wall_ms`). Tensor Core
@@ -525,11 +536,20 @@ napkin readme --write README.md PROBLEMS.md  # refreshes the tables
   ([#5](https://github.com/gpu004/napkin-math-gpu/issues/5)). The longer
   warm-up reports the sustained rate under the power cap, which is the rate a
   long training or prefill GEMM gets.
+- `gemm_shapes`: separate cuBLASLt measurements for fp16 and bf16 `square`
+  (8192×8192×8192), `prefill` (4096×28672×8192), `decode-m8`
+  (8×8192×8192), `decode-m64` (64×8192×8192), and `square-k8191`
+  (8192×8192×8191). Each records TN column-major layout, fp32 accumulation,
+  the cuBLASLt version and heuristic-selected algorithm, the 32 MiB heuristic
+  workspace limit, achieved rate, and a deterministic 256-output check against
+  a float64 reference. The heuristic is queried once before warm-up; the
+  selected algorithm is reused by all timed calls. Shape-specific rates coexist
+  with, and never replace, the 8192³ peak.
 - `gpu_state`: NVML (`libnvidia-ml`, loaded at run time) polls the GEMM GPU
   every 5 ms during the timed rounds and stores, per round, its SM and memory
   clocks, temperature, average power from the energy counter, and how often
   each clock-limit reason (e.g. `sw_power_cap`) was active. `napkin table`
-  prints a row per dtype.
+  prints a row per dtype and shape.
 - Round spread: every metric keeps its per-round samples in `samples_ms`, and
   the tables show the median round. When a metric's slowest round is more than
   5% slower than its fastest, `napkin table` marks the cell with † and names

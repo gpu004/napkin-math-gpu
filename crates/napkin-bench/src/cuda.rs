@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 use cudarc::cublas::result::CublasError;
 use cudarc::cublas::safe::CudaBlas;
 use cudarc::cublas::sys;
+use cudarc::cublaslt::sys::cublasLtMatmulAlgoConfigAttributes_t as LtAlgoAttr;
+use cudarc::cublaslt::{result as lt_result, sys as ltsys};
 use cudarc::driver::result::DriverError;
 use cudarc::driver::safe::{
     CudaContext, CudaFunction, CudaSlice, CudaStream, DevicePtr, DevicePtrMut, LaunchConfig,
@@ -18,7 +20,7 @@ use cudarc::driver::safe::{
 use cudarc::driver::sys as dsys;
 use cudarc::nvrtc::compile_ptx;
 use half::{bf16, f16};
-use napkin_profile::{Dtype, Measured};
+use napkin_profile::{Dtype, GemmAlgo, GemmCheck, GemmShape, Measured, RoundState, tflops};
 
 use crate::gpu_state::{Monitor, Window, round_states};
 
@@ -470,6 +472,528 @@ fn gemm_check(
         }
     }
     Ok(ok)
+}
+
+const GEMM_SHAPE_WORKSPACE_BYTES: usize = 32 * MIB;
+
+struct LtHandle(ltsys::cublasLtHandle_t);
+
+impl LtHandle {
+    fn new() -> Result<Self, BenchError> {
+        lt_result::create_handle()
+            .map(Self)
+            .map_err(|e| BenchError(format!("cublasLtCreate: {e}")))
+    }
+}
+
+impl Drop for LtHandle {
+    fn drop(&mut self) {
+        let _ = unsafe { ltsys::cublasLtDestroy(self.0).result() };
+    }
+}
+
+struct GemmShapeCase {
+    name: &'static str,
+    m: u32,
+    n: u32,
+    k: u32,
+}
+
+fn gemm_shape_cases() -> [GemmShapeCase; 5] {
+    [
+        GemmShapeCase {
+            name: "square",
+            m: 8192,
+            n: 8192,
+            k: 8192,
+        },
+        GemmShapeCase {
+            name: "prefill",
+            m: 4096,
+            n: 28672,
+            k: 8192,
+        },
+        GemmShapeCase {
+            name: "decode-m8",
+            m: 8,
+            n: 8192,
+            k: 8192,
+        },
+        GemmShapeCase {
+            name: "decode-m64",
+            m: 64,
+            n: 8192,
+            k: 8192,
+        },
+        GemmShapeCase {
+            name: "square-k8191",
+            m: 8192,
+            n: 8192,
+            k: 8191,
+        },
+    ]
+}
+
+struct LtMatmulDesc(ltsys::cublasLtMatmulDesc_t);
+
+impl LtMatmulDesc {
+    fn new() -> Result<Self, BenchError> {
+        let desc = lt_result::create_matmul_desc(
+            ltsys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+            ltsys::cudaDataType_t::CUDA_R_32F,
+        )
+        .map_err(|e| BenchError(format!("cublasLtMatmulDescCreate: {e}")))?;
+        let desc = Self(desc);
+        let trans_a = sys::cublasOperation_t::CUBLAS_OP_T;
+        let trans_b = sys::cublasOperation_t::CUBLAS_OP_N;
+        for (attr, value) in [
+            (
+                ltsys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_TRANSA,
+                &trans_a,
+            ),
+            (
+                ltsys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_TRANSB,
+                &trans_b,
+            ),
+        ] {
+            let result = unsafe {
+                ltsys::cublasLtMatmulDescSetAttribute(
+                    desc.0,
+                    attr,
+                    std::ptr::from_ref(value).cast(),
+                    std::mem::size_of_val(value),
+                )
+            };
+            lt_status(result, "cublasLtMatmulDescSetAttribute")?;
+        }
+        Ok(desc)
+    }
+}
+
+impl Drop for LtMatmulDesc {
+    fn drop(&mut self) {
+        let _ = unsafe { ltsys::cublasLtMatmulDescDestroy(self.0).result() };
+    }
+}
+
+struct LtMatrixLayout(ltsys::cublasLtMatrixLayout_t);
+
+impl LtMatrixLayout {
+    fn new(
+        data_type: sys::cudaDataType_t,
+        rows: u32,
+        cols: u32,
+        leading_dimension: u32,
+    ) -> Result<Self, BenchError> {
+        let layout = lt_result::create_matrix_layout(
+            lt_data_type(data_type)?,
+            u64::from(rows),
+            u64::from(cols),
+            i64::from(leading_dimension),
+        )
+        .map_err(|e| BenchError(format!("cublasLtMatrixLayoutCreate: {e}")))?;
+        Ok(Self(layout))
+    }
+}
+
+impl Drop for LtMatrixLayout {
+    fn drop(&mut self) {
+        let _ = unsafe { ltsys::cublasLtMatrixLayoutDestroy(self.0).result() };
+    }
+}
+
+fn lt_data_type(data_type: sys::cudaDataType_t) -> Result<ltsys::cudaDataType_t, BenchError> {
+    match data_type {
+        sys::cudaDataType_t::CUDA_R_16F => Ok(ltsys::cudaDataType_t::CUDA_R_16F),
+        sys::cudaDataType_t::CUDA_R_16BF => Ok(ltsys::cudaDataType_t::CUDA_R_16BF),
+        sys::cudaDataType_t::CUDA_R_32F => Ok(ltsys::cudaDataType_t::CUDA_R_32F),
+        _ => Err(BenchError(format!(
+            "unsupported cuBLASLt shape dtype: {data_type:?}"
+        ))),
+    }
+}
+
+struct LtPreference(ltsys::cublasLtMatmulPreference_t);
+
+impl LtPreference {
+    fn new(workspace_bytes: usize) -> Result<Self, BenchError> {
+        let preference = lt_result::create_matmul_pref()
+            .map_err(|e| BenchError(format!("cublasLtMatmulPreferenceCreate: {e}")))?;
+        let preference = Self(preference);
+        let result = unsafe {
+            ltsys::cublasLtMatmulPreferenceSetAttribute(
+                preference.0,
+                ltsys::cublasLtMatmulPreferenceAttributes_t::CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+                std::ptr::from_ref(&workspace_bytes).cast(),
+                std::mem::size_of_val(&workspace_bytes),
+            )
+        };
+        lt_status(result, "cublasLtMatmulPreferenceSetAttribute")?;
+        Ok(preference)
+    }
+}
+
+impl Drop for LtPreference {
+    fn drop(&mut self) {
+        let _ = unsafe { ltsys::cublasLtMatmulPreferenceDestroy(self.0).result() };
+    }
+}
+
+fn lt_status(status: ltsys::cublasStatus_t, operation: &str) -> Result<(), BenchError> {
+    status
+        .result()
+        .map_err(|e| BenchError(format!("{operation}: {e}")))
+}
+
+fn lt_algo_attribute<T: Copy>(
+    algo: &ltsys::cublasLtMatmulAlgo_t,
+    attribute: ltsys::cublasLtMatmulAlgoConfigAttributes_t,
+) -> Result<T, BenchError> {
+    let mut value = std::mem::MaybeUninit::<T>::uninit();
+    let mut written = 0;
+    let status = unsafe {
+        ltsys::cublasLtMatmulAlgoConfigGetAttribute(
+            algo,
+            attribute,
+            value.as_mut_ptr().cast(),
+            std::mem::size_of::<T>(),
+            &raw mut written,
+        )
+    };
+    lt_status(status, "cublasLtMatmulAlgoConfigGetAttribute")?;
+    if written != std::mem::size_of::<T>() {
+        return Err(BenchError(format!(
+            "cuBLASLt algorithm attribute wrote {written} bytes, expected {}",
+            std::mem::size_of::<T>()
+        )));
+    }
+    Ok(unsafe { value.assume_init() })
+}
+
+fn read_lt_algo(algo: &ltsys::cublasLtMatmulAlgo_t) -> Result<GemmAlgo, BenchError> {
+    Ok(GemmAlgo {
+        id: lt_algo_attribute(algo, LtAlgoAttr::CUBLASLT_ALGO_CONFIG_ID)?,
+        tile: lt_algo_attribute(algo, LtAlgoAttr::CUBLASLT_ALGO_CONFIG_TILE_ID)?,
+        stages: lt_algo_attribute(algo, LtAlgoAttr::CUBLASLT_ALGO_CONFIG_STAGES_ID)?,
+        split_k: lt_algo_attribute(algo, LtAlgoAttr::CUBLASLT_ALGO_CONFIG_SPLITK_NUM)?,
+        reduction_scheme: lt_algo_attribute(
+            algo,
+            LtAlgoAttr::CUBLASLT_ALGO_CONFIG_REDUCTION_SCHEME,
+        )?,
+        cta_swizzling: lt_algo_attribute(algo, LtAlgoAttr::CUBLASLT_ALGO_CONFIG_CTA_SWIZZLING)?,
+        custom_option: lt_algo_attribute(algo, LtAlgoAttr::CUBLASLT_ALGO_CONFIG_CUSTOM_OPTION)?,
+        workspace_bytes: 0,
+        waves: 0.0,
+    })
+}
+
+fn rounded_inputs(spec: &GemmSpec, values: &mut [f32]) {
+    match spec.atype {
+        sys::cudaDataType_t::CUDA_R_16F => {
+            for value in values.iter_mut() {
+                *value = f16::from_f32(*value).to_f32();
+            }
+        }
+        sys::cudaDataType_t::CUDA_R_16BF => {
+            for value in values.iter_mut() {
+                *value = bf16::from_f32(*value).to_f32();
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sample_gemm_output(
+    shape: &GemmShapeCase,
+    spec: &GemmSpec,
+    a: &[f32],
+    b: &[f32],
+    output: &[f32],
+) -> GemmCheck {
+    let output_elements =
+        usize::try_from(shape.m).unwrap_or(0) * usize::try_from(shape.n).unwrap_or(0);
+    let sampled = 256_usize.min(output_elements);
+    let mut max_abs_error: f64 = 0.0;
+    let mut passed = true;
+    for sample in 0..sampled {
+        let index = sample * output_elements / sampled;
+        let row = index % usize::try_from(shape.m).unwrap_or(1);
+        let col = index / usize::try_from(shape.m).unwrap_or(1);
+        let mut reference = 0.0_f64;
+        for k in 0..usize::try_from(shape.k).unwrap_or(0) {
+            reference += f64::from(a[row * usize::try_from(shape.k).unwrap_or(0) + k])
+                * f64::from(b[col * usize::try_from(shape.k).unwrap_or(0) + k]);
+        }
+        let error = (f64::from(output[index]) - reference).abs();
+        max_abs_error = max_abs_error.max(error);
+        passed &= error <= spec.atol + spec.rtol * reference.abs();
+    }
+    GemmCheck {
+        sampled: u32::try_from(sampled).unwrap_or(u32::MAX),
+        max_abs_error,
+        rtol: spec.rtol,
+        atol: spec.atol,
+        passed,
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "cuBLASLt matmul needs its full descriptor set"
+)]
+fn lt_matmul(
+    handle: ltsys::cublasLtHandle_t,
+    desc: &LtMatmulDesc,
+    a: &CudaSlice<u8>,
+    a_layout: &LtMatrixLayout,
+    b: &CudaSlice<u8>,
+    b_layout: &LtMatrixLayout,
+    c: &CudaSlice<u8>,
+    c_layout: &LtMatrixLayout,
+    d: &mut CudaSlice<u8>,
+    workspace: &mut CudaSlice<u8>,
+    algo: &ltsys::cublasLtMatmulAlgo_t,
+    stream: &Arc<CudaStream>,
+) -> Result<(), BenchError> {
+    let (a_ptr, _a_guard) = a.device_ptr(stream);
+    let (b_ptr, _b_guard) = b.device_ptr(stream);
+    let (c_ptr, _c_guard) = c.device_ptr(stream);
+    let (d_ptr, _d_guard) = d.device_ptr_mut(stream);
+    let (workspace_ptr, _workspace_guard) = workspace.device_ptr_mut(stream);
+    let alpha: f32 = 1.0;
+    let beta: f32 = 0.0;
+    let result = unsafe {
+        ltsys::cublasLtMatmul(
+            handle,
+            desc.0,
+            std::ptr::from_ref(&alpha).cast(),
+            a_ptr as *const std::ffi::c_void,
+            a_layout.0,
+            b_ptr as *const std::ffi::c_void,
+            b_layout.0,
+            std::ptr::from_ref(&beta).cast(),
+            c_ptr as *const std::ffi::c_void,
+            c_layout.0,
+            d_ptr as *mut std::ffi::c_void,
+            c_layout.0,
+            algo,
+            workspace_ptr as *mut std::ffi::c_void,
+            GEMM_SHAPE_WORKSPACE_BYTES,
+            stream.cu_stream() as ltsys::cudaStream_t,
+        )
+    };
+    lt_status(result, "cublasLtMatmul")
+}
+
+struct GemmShapeBuffers {
+    a_host: Vec<f32>,
+    b_host: Vec<f32>,
+    a: CudaSlice<u8>,
+    b: CudaSlice<u8>,
+    c: CudaSlice<u8>,
+    d: CudaSlice<u8>,
+    a_layout: LtMatrixLayout,
+    b_layout: LtMatrixLayout,
+    c_layout: LtMatrixLayout,
+}
+
+impl GemmShapeBuffers {
+    fn new(
+        stream: &Arc<CudaStream>,
+        shape: &GemmShapeCase,
+        spec: &GemmSpec,
+    ) -> Result<Self, BenchError> {
+        let a_len = usize::try_from(shape.k)
+            .ok()
+            .and_then(|k| usize::try_from(shape.m).ok().and_then(|m| k.checked_mul(m)))
+            .ok_or_else(|| {
+                BenchError("GEMM A dimensions overflow host address space".to_owned())
+            })?;
+        let b_len = usize::try_from(shape.k)
+            .ok()
+            .and_then(|k| usize::try_from(shape.n).ok().and_then(|n| k.checked_mul(n)))
+            .ok_or_else(|| {
+                BenchError("GEMM B dimensions overflow host address space".to_owned())
+            })?;
+        let c_len = usize::try_from(shape.m)
+            .ok()
+            .and_then(|m| usize::try_from(shape.n).ok().and_then(|n| m.checked_mul(n)))
+            .ok_or_else(|| {
+                BenchError("GEMM C dimensions overflow host address space".to_owned())
+            })?;
+        let seed = u64::from(shape.m) << 32 ^ u64::from(shape.n) << 16 ^ u64::from(shape.k);
+        let mut a_host = random_f32(a_len, seed ^ 0xA51);
+        let mut b_host = random_f32(b_len, seed ^ 0xB52);
+        rounded_inputs(spec, &mut a_host);
+        rounded_inputs(spec, &mut b_host);
+        let a = upload_as_dtype(stream, &a_host, spec)?;
+        let b = upload_as_dtype(stream, &b_host, spec)?;
+        let element_bytes = if spec.ctype == sys::cudaDataType_t::CUDA_R_32F {
+            4
+        } else {
+            2
+        };
+        let result_bytes = c_len.checked_mul(element_bytes).ok_or_else(|| {
+            BenchError("GEMM output size overflows host address space".to_owned())
+        })?;
+        let c = unsafe { stream.alloc::<u8>(result_bytes) }?;
+        let d = unsafe { stream.alloc::<u8>(result_bytes) }?;
+        let a_layout = LtMatrixLayout::new(spec.atype, shape.k, shape.m, shape.k)?;
+        let b_layout = LtMatrixLayout::new(spec.atype, shape.k, shape.n, shape.k)?;
+        let c_layout = LtMatrixLayout::new(spec.ctype, shape.m, shape.n, shape.m)?;
+        Ok(Self {
+            a_host,
+            b_host,
+            a,
+            b,
+            c,
+            d,
+            a_layout,
+            b_layout,
+            c_layout,
+        })
+    }
+}
+
+struct SelectedLtAlgorithm {
+    heuristic: ltsys::cublasLtMatmulHeuristicResult_t,
+    metadata: GemmAlgo,
+}
+
+fn select_lt_algorithm(
+    handle: ltsys::cublasLtHandle_t,
+    desc: &LtMatmulDesc,
+    layouts: (&LtMatrixLayout, &LtMatrixLayout, &LtMatrixLayout),
+    preference: &LtPreference,
+    shape: &GemmShapeCase,
+    spec: &GemmSpec,
+) -> Result<SelectedLtAlgorithm, BenchError> {
+    let (a_layout, b_layout, c_layout) = layouts;
+    let mut heuristic = std::mem::MaybeUninit::<ltsys::cublasLtMatmulHeuristicResult_t>::uninit();
+    let mut returned_algorithms = 0;
+    let status = unsafe {
+        ltsys::cublasLtMatmulAlgoGetHeuristic(
+            handle,
+            desc.0,
+            a_layout.0,
+            b_layout.0,
+            c_layout.0,
+            c_layout.0,
+            preference.0,
+            1,
+            heuristic.as_mut_ptr(),
+            &raw mut returned_algorithms,
+        )
+    };
+    lt_status(status, "cublasLtMatmulAlgoGetHeuristic")?;
+    if returned_algorithms != 1 {
+        return Err(BenchError(format!(
+            "cuBLASLt returned {returned_algorithms} heuristic algorithms for {} {}",
+            shape.name, spec.dtype
+        )));
+    }
+    let heuristic = unsafe { heuristic.assume_init() };
+    if heuristic.state != ltsys::cublasStatus_t::CUBLAS_STATUS_SUCCESS {
+        return Err(BenchError(format!(
+            "cuBLASLt heuristic selected an unusable algorithm for {} {}: {:?}",
+            shape.name, spec.dtype, heuristic.state
+        )));
+    }
+    let mut metadata = read_lt_algo(&heuristic.algo)?;
+    metadata.workspace_bytes = u64::try_from(heuristic.workspaceSize).unwrap_or(u64::MAX);
+    metadata.waves = f64::from(heuristic.wavesCount);
+    Ok(SelectedLtAlgorithm {
+        heuristic,
+        metadata,
+    })
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "measurement reuses the shared CUDA timing machinery"
+)]
+fn measure_gemm_shape(
+    ctx: &Arc<CudaContext>,
+    stream: &Arc<CudaStream>,
+    monitor: &Monitor,
+    handle: ltsys::cublasLtHandle_t,
+    workspace: &mut CudaSlice<u8>,
+    shape: &GemmShapeCase,
+    spec: &GemmSpec,
+    library: &str,
+    cfg: &Config,
+) -> Result<(GemmShape, Vec<f64>, Vec<RoundState>), BenchError> {
+    let mut buffers = GemmShapeBuffers::new(stream, shape, spec)?;
+    let desc = LtMatmulDesc::new()?;
+    let preference = LtPreference::new(GEMM_SHAPE_WORKSPACE_BYTES)?;
+    let selected = select_lt_algorithm(
+        handle,
+        &desc,
+        (&buffers.a_layout, &buffers.b_layout, &buffers.c_layout),
+        &preference,
+        shape,
+        spec,
+    )?;
+    let (rounds, polls) = monitor
+        .watch(|| {
+            sustained_rounds(
+                ctx,
+                stream,
+                cfg.gemm_warmup,
+                cfg.gemm_round,
+                cfg.rounds,
+                || {
+                    lt_matmul(
+                        handle,
+                        &desc,
+                        &buffers.a,
+                        &buffers.a_layout,
+                        &buffers.b,
+                        &buffers.b_layout,
+                        &buffers.c,
+                        &buffers.c_layout,
+                        &mut buffers.d,
+                        workspace,
+                        &selected.heuristic.algo,
+                        stream,
+                    )
+                },
+            )
+        })
+        .map_err(BenchError)?;
+    let (rounds, windows): (Vec<f64>, Vec<Window>) = rounds?.into_iter().unzip();
+    let measured_check = sample_gemm_output(
+        shape,
+        spec,
+        &buffers.a_host,
+        &buffers.b_host,
+        &read_as_f32(stream, &buffers.d, spec)?,
+    );
+    let median_ms = crate::stats::median(&mut rounds.clone());
+    let result = GemmShape {
+        name: shape.name.to_owned(),
+        m: shape.m,
+        n: shape.n,
+        k: shape.k,
+        dtype: spec.dtype,
+        compute_type: "CUBLAS_COMPUTE_32F".to_owned(),
+        scale_type: "CUDA_R_32F".to_owned(),
+        trans_a: "T".to_owned(),
+        trans_b: "N".to_owned(),
+        lda: shape.k,
+        ldb: shape.k,
+        ldc: shape.m,
+        epilogue: "CUBLASLT_EPILOGUE_DEFAULT".to_owned(),
+        library: library.to_owned(),
+        algorithm: selected.metadata,
+        workspace_limit_bytes: u64::try_from(GEMM_SHAPE_WORKSPACE_BYTES).unwrap_or(u64::MAX),
+        tflops: tflops(
+            2.0 * f64::from(shape.m) * f64::from(shape.n) * f64::from(shape.k),
+            median_ms,
+        ),
+        check: measured_check,
+    };
+    Ok((result, rounds, round_states(&polls, &windows)))
 }
 
 fn peer_supported(a: &Arc<CudaContext>, b: &Arc<CudaContext>) -> Result<bool, BenchError> {
@@ -1047,16 +1571,54 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         gemm_states.insert(key.clone(), round_states(&polls, &windows));
         let ms = record(&key, &gemm_samples);
         let flops = 2.0 * (n as f64).powi(3);
-        let tflops = flops / (ms / 1e3) / 1e12;
-        compute_tflops.insert(spec.dtype, tflops);
+        let peak_tflops = tflops(flops, ms);
+        compute_tflops.insert(spec.dtype, peak_tflops);
         progress(
             &format!("gemm_{}", spec.dtype),
-            &format!("{tflops:.0} TFLOP/s"),
+            &format!("{peak_tflops:.0} TFLOP/s"),
         );
         checks.insert(
             format!("gemm_{}_check", spec.dtype),
             gemm_check(&blas, &stream0, &spec)?,
         );
+    }
+    drop(a_host);
+    drop(b_host);
+
+    let lt_handle = LtHandle::new()?;
+    let mut lt_workspace = unsafe { stream0.alloc::<u8>(GEMM_SHAPE_WORKSPACE_BYTES) }?;
+    let library_version = unsafe { ltsys::cublasLtGetVersion() };
+    let library = format!("cuBLASLt {library_version} (cublasLtGetVersion)");
+    let mut gemm_shapes = Vec::new();
+    for shape in gemm_shape_cases() {
+        for spec in gemm_specs()
+            .into_iter()
+            .filter(|spec| matches!(spec.dtype, Dtype::Fp16 | Dtype::Bf16))
+        {
+            let (measurement, samples, states) = measure_gemm_shape(
+                &ctx0,
+                &stream0,
+                &monitor,
+                lt_handle.0,
+                &mut lt_workspace,
+                &shape,
+                &spec,
+                &library,
+                cfg,
+            )?;
+            let key = measurement.samples_key();
+            let median_ms = record(&key, &samples);
+            gemm_states.insert(key.clone(), states);
+            checks.insert(format!("{key}_check"), measurement.check.passed);
+            progress(
+                &key,
+                &format!(
+                    "{:.0} TFLOP/s ({median_ms:.3} ms median)",
+                    measurement.tflops
+                ),
+            );
+            gemm_shapes.push(measurement);
+        }
     }
 
     let (cc_major, cc_minor) = ctx0.compute_capability()?;
@@ -1103,6 +1665,7 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
             let n32 = u32::try_from(n).unwrap_or(0);
             [n32, n32, n32]
         },
+        gemm_shapes,
         checks,
         samples_ms,
         gpu_state: Some(

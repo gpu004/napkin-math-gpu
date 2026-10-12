@@ -183,7 +183,7 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
     emit(
         &mut out,
         &[
-            "Dense GEMM",
+            "Dense GEMM, 8192³",
             "Throughput",
             "1 GFLOP",
             "1 TFLOP",
@@ -194,7 +194,11 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
     for dtype in [Dtype::Fp16, Dtype::Bf16, Dtype::Tf32, Dtype::Fp32] {
         emit_gemm_row(&mut out, m, dtype, sig, exact);
     }
+    out.push_str(
+        "\nDense GEMM rows are cuBLAS `GemmEx` 8192³ peaks, not universal rates for arbitrary shapes.\n",
+    );
     spread_footnote(&mut out, m);
+    emit_gemm_shape_rows(&mut out, m, sig, exact);
     if let Some(state) = &m.gpu_state {
         gpu_state_table(&mut out, state);
     }
@@ -204,7 +208,7 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
 /// Names every flagged metric with its round spread, e.g.
 /// "† Rounds disagree by more than 5%: fp16 GEMM 15%, bf16 GEMM 17%. ..."
 fn spread_footnote(out: &mut String, m: &Measured) {
-    let spreads: Vec<String> = SAMPLE_NAMES
+    let mut spreads: Vec<String> = SAMPLE_NAMES
         .iter()
         .filter_map(|(key, name)| {
             m.round_spread(key)
@@ -212,6 +216,18 @@ fn spread_footnote(out: &mut String, m: &Measured) {
                 .map(|spread| format!("{name} {}%", fmt_sig(spread * 100.0, 2)))
         })
         .collect();
+    spreads.extend(m.gemm_shapes.iter().filter_map(|shape| {
+        m.round_spread(&shape.samples_key())
+            .filter(|spread| *spread > SPREAD_FLAG)
+            .map(|spread| {
+                format!(
+                    "{} {} GEMM {}%",
+                    shape.name,
+                    shape.dtype,
+                    fmt_sig(spread * 100.0, 2)
+                )
+            })
+    }));
     if spreads.is_empty() {
         return;
     }
@@ -223,6 +239,64 @@ fn spread_footnote(out: &mut String, m: &Measured) {
         SPREAD_FLAG * 100.0,
         spreads.join(", "),
         m.rounds,
+    );
+}
+
+fn emit_gemm_shape_rows(out: &mut String, m: &Measured, sig: u32, exact: bool) {
+    if m.gemm_shapes.is_empty() {
+        return;
+    }
+    out.push('\n');
+    emit(
+        out,
+        &[
+            "cuBLASLt GEMM shape",
+            "Dimensions (M×N×K)",
+            "dtype",
+            "Throughput",
+            "% of 8192³ peak",
+            "1 TFLOP",
+        ],
+    );
+    emit(out, &["---", "---:", "---", "---:", "---:", "---:"]);
+    let mut shapes: Vec<_> = m.gemm_shapes.iter().collect();
+    shapes.sort_by_key(|shape| (&shape.name, shape.dtype));
+    for shape in shapes {
+        let rate = if exact {
+            shape.tflops
+        } else {
+            round_sig(shape.tflops, SIG)
+        };
+        let dimensions = format!("{}×{}×{}", shape.m, shape.n, shape.k);
+        let key = shape.samples_key();
+        let peak_percent = m
+            .compute_tflops
+            .get(&shape.dtype)
+            .map(|peak| fmt_sig(shape.tflops / peak * 100.0, if exact { 3 } else { SIG }))
+            .unwrap_or_default();
+        emit(
+            out,
+            &[
+                &shape.name,
+                &dimensions,
+                &shape.dtype.to_string(),
+                &mark(m, &[&key], fmt_tflops(shape.tflops, sig)),
+                &peak_percent,
+                &fmt_duration(1.0 / rate, sig),
+            ],
+        );
+    }
+    let mut libraries: Vec<_> = m
+        .gemm_shapes
+        .iter()
+        .map(|shape| shape.library.as_str())
+        .collect();
+    libraries.sort_unstable();
+    libraries.dedup();
+    let _ = writeln!(
+        out,
+        "\n{}: TN column-major, fp32 accumulation and CUDA_R_32F scaling, 32 MiB heuristic workspace; query once before warm-up and reuse the selected algorithm.",
+        libraries.join(", ")
     );
 }
 
@@ -593,6 +667,63 @@ mod tests {
         let profile = h100_with(&[("gemm_fp16", vec![1.40, 1.41, 1.42])], None);
         let table = numbers(&profile, false).unwrap();
         assert!(!table.contains('†'), "{table}");
+    }
+
+    #[test]
+    fn renders_shape_rates_and_names_their_spread() {
+        let mut profile = h100_with(&[("gemm_shape_prefill_bf16", vec![2.0, 2.2])], None);
+        profile
+            .measured
+            .as_mut()
+            .unwrap()
+            .gemm_shapes
+            .push(crate::profile::GemmShape {
+                name: "prefill".to_owned(),
+                m: 4096,
+                n: 28672,
+                k: 8192,
+                dtype: Dtype::Bf16,
+                compute_type: "CUBLAS_COMPUTE_32F".to_owned(),
+                scale_type: "CUDA_R_32F".to_owned(),
+                trans_a: "T".to_owned(),
+                trans_b: "N".to_owned(),
+                lda: 8192,
+                ldb: 8192,
+                ldc: 4096,
+                epilogue: "CUBLASLT_EPILOGUE_DEFAULT".to_owned(),
+                library: "cuBLASLt 120901".to_owned(),
+                algorithm: crate::profile::GemmAlgo {
+                    id: 1,
+                    tile: 1,
+                    stages: 1,
+                    split_k: 0,
+                    reduction_scheme: 0,
+                    cta_swizzling: 0,
+                    custom_option: 0,
+                    workspace_bytes: 0,
+                    waves: 1.0,
+                },
+                workspace_limit_bytes: 32 * 1024 * 1024,
+                tflops: 123.0,
+                check: crate::profile::GemmCheck {
+                    sampled: 256,
+                    max_abs_error: 0.1,
+                    rtol: 0.08,
+                    atol: 1.0,
+                    passed: true,
+                },
+            });
+        let table = numbers(&profile, true).unwrap();
+        assert!(table.contains("| Dense GEMM, 8192³ |"), "{table}");
+        assert!(
+            table.contains("| prefill | 4096×28672×8192 | bf16 | 123 TFLOP/s † |"),
+            "{table}"
+        );
+        assert!(table.contains("prefill bf16 GEMM 10%."), "{table}");
+        assert!(
+            table.contains("cuBLASLt 120901: TN column-major"),
+            "{table}"
+        );
     }
 
     #[test]
