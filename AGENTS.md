@@ -8,8 +8,9 @@
 - `napkin-profile` is the shared profile contract; `napkin-bench` may import only
   `Measured`, `Dtype`, and the GPU-state types `Measured` contains (`GpuState`,
   `RoundState`, `Span`).
-- README number blocks are generated. Never hand-edit inside `<!-- napkin ... -->` markers; after changing
-  profiles, table rendering, or anything a marker embeds, run `cargo run -p napkin -- readme --write README.md`.
+- README.md and PROBLEMS.md number blocks are generated. Never hand-edit inside `<!-- napkin ... -->` markers; after changing
+  profiles, table rendering, or anything a marker embeds, run `cargo run -p napkin -- readme --write README.md PROBLEMS.md`.
+- PROBLEMS.md solutions use rounded teaching constants pinned in `crates/napkin/tests/readme.rs`. When a profile or price update moves one, that test fails: update the problem's arithmetic and the test together.
 - GPU prices live in `prices/*.json`, never in hardware profiles. Every record needs a date and a source URL that you curl-checked; `napkin cost` never falls back to a default price.
 
 ## Development guidelines

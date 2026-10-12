@@ -456,6 +456,13 @@ utilizations the H100 is. With measured rates, the B200 wins only while its
 utilization stays above `(691 / 3.95) / (1325 / 6.25) ≈ 0.83` of the H100's;
 here it is `0.3 / 0.5 = 0.6`.
 
+## Practice problems
+
+[PROBLEMS.md](PROBLEMS.md) has seven problems with worked solutions hidden
+until you open them: HBM traffic for a copy versus an add, tiny-copy latency,
+a roofline crossover, KV-cache capacity, kernel fusion, decode batching, and
+cost per token. Try each on paper first.
+
 ## Usage
 
 ```sh
@@ -478,7 +485,7 @@ napkin cost --gpus 2 --time 10s --price 3       # or --offer modal-h100
 napkin prices                                     # dated price records and their age
 napkin collective --gpu h100 --count 2 --topology nvlink --op all-reduce
                    --bytes 16KiB [--dtype bf16]       # NCCL Tests curves only
-napkin readme --write README.md                   # regenerate the marker blocks
+napkin readme --write README.md PROBLEMS.md       # regenerate the marker blocks
 ```
 
 ## Benchmarks
@@ -487,7 +494,7 @@ The numbers come from `napkin-bench` (Rust + cudarc), run on Modal:
 
 ```sh
 modal run modal/bench.py --gpu h100     # writes profiles/h100.measured.json
-napkin readme --write README.md         # refreshes the tables
+napkin readme --write README.md PROBLEMS.md  # refreshes the tables
 ```
 
 - `launch_us`: back-to-back empty-kernel launches, CUDA-event timed.
