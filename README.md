@@ -203,7 +203,7 @@ $ napkin estimate --gpu h100 --dtype bf16 --flops 1.17T --bytes 147GB
 hypothetical: the 147 GB working set exceeds 72 GB usable on one H100 SXM 80GB,
 so both estimates assume one GPU's bandwidth and compute. Sharding needs at least 3 GPUs;
 it divides weights and KV, not per-GPU memory, and a tensor-parallel speedup needs
-a communication term (--g2g) before you claim one.
+a communication term (napkin collective) before you claim one.
 ```
 <!-- /napkin -->
 
@@ -282,6 +282,15 @@ parallelism each GPU reads an eighth of the weights and KV per decode step,
 140 GB / 8 + 6.71 GB / 8 = 18.3 GB, and does an eighth of the FLOPs:
 
 <!-- napkin example estimate --gpu h100 --dtype bf16 --flops 146G --bytes 18.3GB -->
+```text
+$ napkin estimate --gpu h100 --dtype bf16 --flops 146G --bytes 18.3GB
+H100 SXM 80GB · bf16 · measured 2026-10-12
+intensity   8 FLOP/B   ridge 240 FLOP/B   memory-bound
+compute     200 μs
+memory      6.1 ms
+device      6.1 ms
+total       6.1 ms   memory-bound
+```
 <!-- /napkin -->
 
 Sharding adds communication one GPU never did. Each of the 80 layers ends its
@@ -291,6 +300,17 @@ Their cost comes from an NCCL Tests curve measured on exactly this setup, eight
 H100s on NVLink:
 
 <!-- napkin example collective --gpu h100 --count 8 --topology nvlink --op all-reduce --bytes 128KiB -->
+```text
+$ napkin collective --gpu h100 --count 8 --topology nvlink --op all-reduce --bytes 128KiB
+H100 SXM 80GB × 8 · nvlink · AllReduce · bf16 sum · 128 KiB (per-rank buffer)
+regime      latency (fixed per-call cost is at least half the time)
+time        38.9 μs
+collective  algbw 3.37 GB/s · busbw 5.89 GB/s (busbw = algbw × 2(n-1)/n)
+curve       128 KiB 38.9 μs · floor 36.8 μs · peak busbw 479 GB/s at 4 GiB
+peer copy   395 GB/s measured (napkin-bench cuMemcpyPeer, one GPU pair; not used here)
+nvlink      900 GB/s per-GPU datasheet aggregate, both directions (not used here)
+evidence    NCCL 2.27.3 · nccl-tests v2.21.1 (afd59ab) · H100!:8 · 2026-10-12 · profiles/nccl-tests/h100x8
+```
 <!-- /napkin -->
 
 ```text

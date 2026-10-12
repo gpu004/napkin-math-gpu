@@ -1282,7 +1282,9 @@ mod tests {
     fn collective_example_marker_renders_user_facing_command_output() -> Result<(), String> {
         let command = "example collective --gpu h100 --count 2 --topology nvlink --op all-reduce --bytes 16KiB";
         let output = render_marker(command)?;
-        assert!(output.starts_with(&format!("```text\n$ napkin {command}\n")));
+        assert!(output.starts_with(
+            "```text\n$ napkin collective --gpu h100 --count 2 --topology nvlink --op all-reduce --bytes 16KiB\n"
+        ));
         assert!(output.contains("H100 SXM 80GB × 2 · nvlink · AllReduce · bf16 sum · 16 KiB"));
         assert!(output.ends_with("\n```\n"));
         Ok(())
