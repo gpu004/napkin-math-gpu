@@ -190,6 +190,6 @@ modal shell --add-python 3.12 --add-local . -c \
    python -m compileall gpu_napkin.py napkin_profile.py modal_benchmark.py render_results.py'
 ```
 
-The repository bundles an MIT-licensed upstream
-[Napkin Math snapshot](reference/napkin-math) for study. Its numbers are not
-substituted for GPU evidence.
+The upstream [Napkin Math](https://github.com/sirupsen/napkin-math) project is
+the CPU-side inspiration for this repository. Its numbers are not substituted
+for GPU evidence.
