@@ -356,6 +356,41 @@ fn readme_rewrites_stale_file() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn readme_checks_every_path() -> Result<(), Box<dyn std::error::Error>> {
+    let current = stale_readme("current", "no markers\n")?;
+    let stale1 = stale_readme(
+        "stale1",
+        "<!-- napkin compare -->\nstale\n<!-- /napkin -->\n",
+    )?;
+    let stale2 = stale_readme(
+        "stale2",
+        "<!-- napkin compare -->\nstale\n<!-- /napkin -->\n",
+    )?;
+    let current_arg = current.0.to_string_lossy().into_owned();
+    let stale1_arg = stale1.0.to_string_lossy().into_owned();
+    let stale2_arg = stale2.0.to_string_lossy().into_owned();
+
+    let (_, stderr, code) = napkin(&["readme", "--check", &current_arg, &stale1_arg, &stale2_arg]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains(&stale1_arg), "{stderr}");
+    assert!(stderr.contains(&stale2_arg), "{stderr}");
+    assert!(!stderr.contains(&current_arg), "{stderr}");
+    assert_eq!(fs::read_to_string(&current.0)?, "no markers\n");
+    for stale in [&stale1, &stale2] {
+        assert_eq!(
+            fs::read_to_string(&stale.0)?,
+            "<!-- napkin compare -->\nstale\n<!-- /napkin -->\n"
+        );
+    }
+
+    let (_, stderr, code) = napkin(&["readme", &current_arg, &stale1_arg, &stale2_arg]);
+    assert_eq!(code, 0, "{stderr}");
+    let (_, stderr, code) = napkin(&["readme", "--check", &current_arg, &stale1_arg, &stale2_arg]);
+    assert_eq!(code, 0, "{stderr}");
+    Ok(())
+}
+
+#[test]
 fn readme_example_marker_runs_cli_and_rewrites_body() -> Result<(), Box<dyn std::error::Error>> {
     let path = stale_readme(
         "example",

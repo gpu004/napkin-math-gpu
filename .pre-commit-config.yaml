@@ -43,10 +43,10 @@ repos:
         pass_filenames: false
       - id: readme-check
         name: README generated blocks
-        entry: cargo run -q --locked -p napkin -- readme --check README.md
+        entry: cargo run -q --locked -p napkin -- readme --check README.md PROBLEMS.md
         language: system
         pass_filenames: false
-        files: ^(README\.md|profiles/|crates/napkin/)
+        files: ^(README\.md|PROBLEMS\.md|profiles/|prices/|crates/napkin/)
       - id: conventional-commit
         name: conventional commit message
         entry: sh scripts/commit-msg.sh

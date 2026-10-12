@@ -475,7 +475,7 @@ napkin cost --gpus 2 --time 10s --price 3       # or --offer modal-h100
 napkin prices                                     # dated price records and their age
 napkin collective --gpu h100 --count 2 --topology nvlink --op all-reduce
                    --bytes 16KiB [--dtype bf16]       # NCCL Tests curves only
-napkin readme --write README.md                   # regenerate the marker blocks
+napkin readme --write README.md PROBLEMS.md       # regenerate the marker blocks
 ```
 
 ## Benchmarks
@@ -484,7 +484,7 @@ The numbers come from `napkin-bench` (Rust + cudarc), run on Modal:
 
 ```sh
 modal run modal/bench.py --gpu h100     # writes profiles/h100.measured.json
-napkin readme --write README.md         # refreshes the tables
+napkin readme --write README.md PROBLEMS.md  # refreshes the tables
 ```
 
 - `launch_us`: back-to-back empty-kernel launches, CUDA-event timed.
