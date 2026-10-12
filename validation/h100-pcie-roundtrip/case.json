@@ -45,7 +45,7 @@
     "pinned host memory and copy-engine copies, as in the calibration"
   ],
   "excludes": [
-    "the host wait: NVBandwidth times copies with CUDA events while a spin kernel holds the stream, so its time excludes the issue and synchronize cost that napkin's one async latency charges (2 × 9.8 μs)",
+    "the host wait: NVBandwidth times copies with CUDA events while a spin kernel holds the stream, so its time excludes the issue and synchronize cost that napkin's one async latency charges (8.8 μs h2d + 9.4 μs d2h)",
     "NUMA placement: --disableAffinity is required on Modal, so host buffers are not pinned to the GPU's NUMA node",
     "pageable memory, which would add a staging copy",
     "overlap of upload and download: the job is serial by construction"
