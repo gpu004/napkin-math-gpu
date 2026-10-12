@@ -174,17 +174,17 @@ enum Command {
     Prices,
     /// Derive memory, prefill and decode inputs for a transformer from explicit architecture and workload flags.
     Llm(LlmArgs),
-    /// Rewrite the `<!-- napkin ... -->` marker blocks in README.md.
+    /// Rewrite the `<!-- napkin ... -->` marker blocks in Markdown files (README.md by default).
     Readme {
         /// Exit non-zero if the marker blocks are stale.
         #[arg(long)]
         check: bool,
-        /// Rewrite the file in place (default when neither flag is given).
+        /// Rewrite the files in place (default when neither flag is given).
         #[arg(long, conflicts_with = "check")]
         write: bool,
-        /// Markdown file to update.
-        #[arg(default_value = "README.md")]
-        path: PathBuf,
+        /// Markdown files to update.
+        #[arg(default_value = "README.md", num_args = 1..)]
+        paths: Vec<PathBuf>,
     },
 }
 
@@ -342,7 +342,7 @@ fn dispatch(command: &Command) -> Result<String, String> {
             unit,
         ),
         Command::Prices => cmd_prices(),
-        Command::Readme { check, path, .. } => cmd_readme(path, *check),
+        Command::Readme { check, paths, .. } => cmd_readme(paths, *check),
     }
 }
 
@@ -1253,25 +1253,35 @@ fn rewrite_markers(content: &str) -> Result<String, String> {
     Ok(out)
 }
 
-fn cmd_readme(path: &std::path::Path, check: bool) -> Result<String, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    let updated = rewrite_markers(&content)?;
-    if check {
-        if updated == content {
-            return Ok(format!("{}: napkin blocks are current\n", path.display()));
+fn cmd_readme(paths: &[PathBuf], check: bool) -> Result<String, String> {
+    let mut out = String::new();
+    let mut stale = Vec::new();
+    for path in paths {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let updated = rewrite_markers(&content)?;
+        if check {
+            if updated == content {
+                let _ = writeln!(out, "{}: napkin blocks are current", path.display());
+            } else {
+                stale.push(format!(
+                    "{}: napkin blocks are stale; run `napkin readme --write`",
+                    path.display()
+                ));
+            }
+        } else if updated != content {
+            std::fs::write(path, &updated)
+                .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+            let _ = writeln!(out, "{}: napkin blocks updated", path.display());
+        } else {
+            let _ = writeln!(out, "{}: already current", path.display());
         }
-        return Err(format!(
-            "{}: napkin blocks are stale; run `napkin readme --write`",
-            path.display()
-        ));
     }
-    if updated != content {
-        std::fs::write(path, &updated)
-            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-        return Ok(format!("{}: napkin blocks updated\n", path.display()));
+    if stale.is_empty() {
+        Ok(out)
+    } else {
+        Err(stale.join("\n"))
     }
-    Ok(format!("{}: already current\n", path.display()))
 }
 
 #[cfg(test)]
