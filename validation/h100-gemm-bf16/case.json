@@ -17,6 +17,8 @@
     "launches = 1: one cuBLAS kernel per GEMM"
   ],
   "observation": {
+    "kind": "timer",
+    "file": "timer.json",
     "tool": "PyTorch torch.utils.benchmark.Timer around torch.mm (cuBLAS)",
     "metric": "median wall time per GEMM; the Timer synchronizes CUDA before reading the clock"
   },

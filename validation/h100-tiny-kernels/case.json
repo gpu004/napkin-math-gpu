@@ -17,6 +17,8 @@
     "launches = 10,000: one elementwise kernel per add_ (checked with torch.profiler)"
   ],
   "observation": {
+    "kind": "timer",
+    "file": "timer.json",
     "tool": "PyTorch torch.utils.benchmark.Timer around the loop; torch.profiler for the kernel count",
     "metric": "median wall time of the whole 10,000-op loop including the final synchronize"
   },

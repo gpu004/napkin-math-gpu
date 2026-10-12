@@ -8,8 +8,14 @@
     "dtype": "fp32",
     "flops": 0,
     "hbm_bytes": 0,
-    "h2d": { "bytes": 17179869184, "copies": 16 },
-    "d2h": { "bytes": 17179869184, "copies": 16 },
+    "h2d": {
+      "bytes": 17179869184,
+      "copies": 16
+    },
+    "d2h": {
+      "bytes": 17179869184,
+      "copies": 16
+    },
     "copy_mode": "async",
     "mode": "serial"
   },
@@ -19,6 +25,12 @@
     "serial: the download starts after the upload finishes, so the two transfer stages add"
   ],
   "observation": {
+    "kind": "nvbandwidth",
+    "file": "nvbandwidth.json",
+    "testcases": [
+      "host_to_device_memcpy_ce",
+      "device_to_host_memcpy_ce"
+    ],
     "tool": "NVIDIA NVBandwidth v0.10.0 (commit 82fc4e8c), copy-engine memcpy testcases",
     "metric": "median CE bandwidth per direction over --testSamples 7, converted to time as bytes / bandwidth; observed time = upload + download"
   },

@@ -4,9 +4,9 @@ repos:
   - repo: builtin
     hooks:
       - id: trailing-whitespace
-        exclude: ^profiles/nccl-tests/
+        exclude: ^(profiles/nccl-tests/|validation/[^/]+/(run\.json|timer\.(json|txt)|nvbandwidth\.json|nvidia-smi\.csv|profiler\.txt)$)
       - id: end-of-file-fixer
-        exclude: ^profiles/nccl-tests/
+        exclude: ^(profiles/nccl-tests/|validation/[^/]+/(run\.json|timer\.(json|txt)|nvbandwidth\.json|nvidia-smi\.csv|profiler\.txt)$)
       - id: check-toml
       - id: check-yaml
       - id: check-json

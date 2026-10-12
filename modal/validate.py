@@ -94,6 +94,14 @@ def _smi(*args: str) -> str:
     return subprocess.run(["nvidia-smi", *args], capture_output=True, text=True, check=True).stdout
 
 
+def _cuda_driver_version() -> str:
+    import ctypes
+
+    version = ctypes.c_int()
+    ctypes.CDLL("libcuda.so.1").cuDriverGetVersion(ctypes.byref(version))
+    return f"{version.value // 1000}.{version.value % 1000 // 10}"
+
+
 class Monitor:
     """Samples nvidia-smi every 100 ms while a case runs; keeps the raw CSV."""
 
@@ -242,7 +250,7 @@ def run_cases() -> dict[str, dict[str, str]]:
         "image": "nvidia/cuda:12.9.1-devel-ubuntu24.04",
         "gpus": gpus,
         "driver": gpus[0]["driver_version"],
-        "cuda_driver": _smi().split("CUDA Version:")[1].split()[0],
+        "cuda_driver": _cuda_driver_version(),
         "torch": torch.__version__,
         "torch_cuda": torch.version.cuda,
         "cublas": importlib.metadata.version("nvidia-cublas-cu12"),

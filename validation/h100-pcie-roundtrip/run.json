@@ -1,0 +1,62 @@
+{
+  "case": "h100-pcie-roundtrip",
+  "captured_at": "2026-10-12T22:38:59Z",
+  "tool": "nvbandwidth",
+  "repository": "https://github.com/NVIDIA/nvbandwidth",
+  "tag": "v0.10.0",
+  "commit": "82fc4e8c6afa0babb8687793678f615b3b8d793e",
+  "version_output": "nvbandwidth Version: v0.10.0\nBuilt from Git version: v0.10",
+  "command": [
+    "nvbandwidth",
+    "--format",
+    "json",
+    "--disableAffinity",
+    "--bufferSize",
+    "1024",
+    "--loopCount",
+    "16",
+    "--testSamples",
+    "7",
+    "--testcase",
+    "host_to_device_memcpy_ce",
+    "device_to_host_memcpy_ce"
+  ],
+  "exit_code": 0,
+  "stderr": "",
+  "monitor": {
+    "samples": 361,
+    "sm_clock_mhz": {
+      "min": 1800.0,
+      "max": 1980.0
+    },
+    "power_w": {
+      "min": 129.24,
+      "max": 656.36
+    },
+    "pcie_gen_peak": 5.0,
+    "pcie_width_peak": 16.0,
+    "pcie_gen_max": 5.0,
+    "pcie_width_max": 16.0
+  },
+  "modal_request": "H100!",
+  "image": "nvidia/cuda:12.9.1-devel-ubuntu24.04",
+  "gpus": [
+    {
+      "index": "0",
+      "name": "NVIDIA H100 80GB HBM3",
+      "uuid": "GPU-4f5d4db8-4b57-2a96-0650-3f51162988ae",
+      "pci.bus_id": "[Unknown Error]",
+      "driver_version": "610.57.04",
+      "memory.total": "81559 MiB",
+      "vbios_version": "96.00.D0.00.02"
+    }
+  ],
+  "driver": "610.57.04",
+  "cuda_driver": "13.3",
+  "torch": "2.8.0+cu129",
+  "torch_cuda": "12.9",
+  "cublas": "12.9.1.4",
+  "clocks_query": "\n==============NVSMI LOG==============\n\nTimestamp                                              : Mon Oct 12 22:38:39 2026\nDriver Version                                         : 610.57.04 [Deprecated; will be removed in CUDA 14.0. Use KMD Version instead]\nCUDA Version                                           : 13.3 [Deprecated; will be removed in CUDA 14.0. Use CUDA UMD Version instead]\nKMD Version                                            : 610.57.04\nCUDA UMD Version                                       : 13.3\n\nAttached GPUs                                          : 1\nGPU 00000000:33:00.0\n    Clocks\n        Graphics                                       : 345 MHz\n        SM                                             : 345 MHz\n        Memory                                         : 2619 MHz\n        Video                                          : 765 MHz\n    Applications Clocks\n        Graphics                                       : Requested functionality has been deprecated\n        Memory                                         : Requested functionality has been deprecated\n    Default Applications Clocks\n        Graphics                                       : Requested functionality has been deprecated\n        Memory                                         : Requested functionality has been deprecated\n    Deferred Clocks\n        Memory                                         : N/A\n    Max Clocks\n        Graphics                                       : 1980 MHz\n        SM                                             : 1980 MHz\n        Memory                                         : 2619 MHz\n        Video                                          : 1545 MHz\n    Max Customer Boost Clocks\n        Graphics                                       : 1980 MHz\n    SM Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Memory Clock Samples\n        Duration                                       : Not Found\n        Number of Samples                              : Not Found\n        Max                                            : Not Found\n        Min                                            : Not Found\n        Avg                                            : Not Found\n    Clock Policy\n        Auto Boost                                     : N/A\n        Auto Boost Default                             : N/A\n\n",
+  "case_seconds": 36.9,
+  "container_seconds_so_far": 56.8
+}

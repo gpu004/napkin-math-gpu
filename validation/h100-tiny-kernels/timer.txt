@@ -1,0 +1,8 @@
+<torch.utils.benchmark.utils.common.Measurement object at 0x2b490001de80>
+stmt:
+  for _ in range(10000):
+      x.add_(1.0)
+
+  Median: 61.60 ms
+  IQR:    0.10 ms (61.55 to 61.66)
+  9 measurements, 10 runs per measurement, 1 thread

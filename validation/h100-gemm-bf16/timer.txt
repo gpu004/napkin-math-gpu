@@ -1,0 +1,5 @@
+<torch.utils.benchmark.utils.common.Measurement object at 0x2b461e64b800>
+torch.mm(a, b, out=c)
+  Median: 11.22 ms
+  IQR:    0.05 ms (11.22 to 11.27)
+  89 measurements, 10 runs per measurement, 1 thread
