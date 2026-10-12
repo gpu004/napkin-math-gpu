@@ -68,14 +68,14 @@ Read through NVML 13.580.95.05 via nvml-wrapper 0.13 every 5 ms on the GPU that 
 | A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 150 FLOP/B | 600 GB/s | 10 GB/s Gen4 x16 | 3 μs | measured 2026-10-12 |
 | H100 SXM 80GB | 80 GB | 3 TB/s | 700 TFLOP/s | 230 FLOP/B | 900 GB/s | 50 GB/s Gen5 x16 | 2 μs | measured 2026-10-12 |
 | B200 SXM 180GB | 180 GB | 6 TB/s | 1 PFLOP/s | 210 FLOP/B | 2 TB/s | 60 GB/s Gen5 x16 | 3 μs | measured 2026-10-12 |
-| B300 SXM 288GB | 288 GB | 6 TB/s | 1 PFLOP/s | 220 FLOP/B | 2 TB/s | 60 GB/s Gen6 x16 | 3 μs | measured 2026-10-12 |
+| B300 SXM 288GB | 288 GB | 6 TB/s | 1 PFLOP/s | 220 FLOP/B | 2 TB/s | 60 GB/s Gen5 x16 (GPU Gen6) | 4 μs | measured 2026-10-12 |
 
 | GPU | HBM measured / ceiling | BF16 measured / ceiling |
 | --- | ---: | ---: |
 | A100 SXM 80GB | 1740 / 2039 GB/s (85%) | 264 / 312 TFLOP/s (85%) |
 | H100 SXM 80GB | 3002 / 3350 GB/s (90%) | 691 / 990 TFLOP/s (70%) |
 | B200 SXM 180GB | 6414 / 8000 GB/s (80%) | 1325 / 2250 TFLOP/s (59%) |
-| B300 SXM 288GB | 6398 / 8000 GB/s (80%) | 1426 / 2250 TFLOP/s (63%) |
+| B300 SXM 288GB | 6494 / 8000 GB/s (81%) | 1423 / 2250 TFLOP/s (63%) |
 <!-- /napkin -->
 
 Modal request semantics matter: `H100!` pins an H100 — a plain `H100` request
