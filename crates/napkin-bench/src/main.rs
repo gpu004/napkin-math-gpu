@@ -3,6 +3,7 @@
 //! correctness check fails.
 
 mod cuda;
+mod gpu_state;
 mod stats;
 
 use std::process::ExitCode;

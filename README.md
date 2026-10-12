@@ -11,8 +11,8 @@ Eskildsen's [Napkin Math](https://github.com/sirupsen/napkin-math).
 
 Below are numbers rounded for memorization, not faux precision.
 All four GPUs were measured on Modal on 2026-10-12 by `napkin-bench` (Rust +
-cudarc, CUDA-event timing, CUDA 12.9, driver 580.95.05 on A100/H100 and
-610.57.04 on B200/B300): `H100!:2`, `A100-80GB:2`, `B200:2`, and `B300:2`.
+cudarc, CUDA-event timing, CUDA 12.9, driver 580.95.05 on H100 and
+610.57.04 on A100/B200/B300): `H100!:2`, `A100-80GB:2`, `B200:2`, and `B300:2`.
 Each request returned two GPUs; the GPU↔GPU row is a `cuMemcpyPeerAsync` copy
 between them with peer access enabled — NVLink where the hardware has it.
 Host copies ran on A100 at PCIe Gen4 x16, H100 and B200 at Gen5 x16, and B300
@@ -30,9 +30,9 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 | --- | ---: | ---: | ---: | ---: |
 | Kernel launch (back-to-back) | 2 μs |  |  |  |
 | Launch + sync round trip | 7 μs |  |  |  |
-| Pinned host RAM copy |  | 100 GB/s | 10 μs | 10 ms |
-| Host → device, pinned | 10 μs | 60 GB/s | 20 μs | 20 ms |
-| Device → host, pinned | 10 μs | 60 GB/s | 20 μs | 20 ms |
+| Pinned host RAM copy |  | 100 GB/s † | 10 μs | 10 ms |
+| Host → device, pinned | 9 μs | 50 GB/s † | 20 μs | 20 ms |
+| Device → host, pinned | 9 μs | 60 GB/s † | 20 μs | 20 ms |
 | HBM random read (pointer chase) | 300 ns |  |  |  |
 | HBM copy (read + write) |  | 3 TB/s | 300 ns | 300 μs |
 | Elementwise add |  | 3 TB/s | 300 ns | 300 μs |
@@ -40,10 +40,21 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 
 | Dense GEMM | Throughput | 1 GFLOP | 1 TFLOP | Ridge point |
 | --- | ---: | ---: | ---: | ---: |
-| fp16 | 700 TFLOP/s | 1 μs | 1 ms | 240 FLOP/B |
-| bf16 | 700 TFLOP/s | 1 μs | 1 ms | 240 FLOP/B |
-| tf32 | 400 TFLOP/s | 3 μs | 3 ms | 120 FLOP/B |
+| fp16 | 700 TFLOP/s † | 1 μs | 1 ms | 220 FLOP/B |
+| bf16 | 700 TFLOP/s † | 1 μs | 1 ms | 230 FLOP/B |
+| tf32 | 400 TFLOP/s † | 3 μs | 3 ms | 120 FLOP/B |
 | fp32 | 50 TFLOP/s | 20 μs | 20 ms | 17 FLOP/B |
+
+† Rounds disagree by more than 5%: host RAM copy 13%, host → device 24%, device → host 6.4%, fp16 GEMM 10%, bf16 GEMM 14%, tf32 GEMM 13%. Spread is the slowest of the 7 rounds over the fastest, minus one: the observed range, not a confidence interval. The cell shows the median round.
+
+| GEMM rounds | SM clock | Memory clock | Power | Temperature | Clock limits |
+| --- | ---: | ---: | ---: | ---: | --- |
+| fp16 | 1140–1350 MHz | 2619 MHz | 622 W | 51–57 °C | sw_power_cap 100% |
+| bf16 | 1170–1425 MHz | 2619 MHz | 710 W | 56–62 °C | sw_power_cap 100% |
+| tf32 | 1200–1470 MHz | 2619 MHz | 719 W | 57–62 °C | sw_power_cap 100% |
+| fp32 | 1905–1980 MHz | 2619 MHz | 710 W | 64–66 °C | sw_power_cap 86% |
+
+Read through NVML 13.580.95.05 via nvml-wrapper 0.13 every 5 ms on the GPU that ran the GEMMs, during the timed rounds only. Board limits: 700 W, SM clock 1980 MHz, memory clock 2619 MHz. Power is the median round's energy-counter change between its first and last counter update; the counter updates only a few times per round, so a single round in `gpu_state` can read above the board limit. Clock limits give the share of polls that reported each NVML clock-limit reason.
 <!-- /napkin -->
 
 ## Other GPUs
@@ -51,17 +62,17 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 <!-- napkin compare -->
 | GPU | Memory | HBM | Dense BF16 | BF16 ridge | NVLink | Host link | Launch | Basis |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 150 FLOP/B | 600 GB/s | 30 GB/s | 3 μs | measured 2026-10-12 |
-| H100 SXM 80GB | 80 GB | 3 TB/s | 700 TFLOP/s | 240 FLOP/B | 900 GB/s | 60 GB/s | 2 μs | measured 2026-10-12 |
-| B200 SXM 180GB | 180 GB | 6 TB/s | 2 PFLOP/s | 250 FLOP/B | 2 TB/s | 60 GB/s | 4 μs | measured 2026-10-12 |
-| B300 SXM 288GB | 288 GB | 6 TB/s | 2 PFLOP/s | 280 FLOP/B | 2 TB/s | 50 GB/s | 3 μs | measured 2026-10-12 |
+| A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 150 FLOP/B | 600 GB/s | 10 GB/s | 3 μs | measured 2026-10-12 |
+| H100 SXM 80GB | 80 GB | 3 TB/s | 700 TFLOP/s | 230 FLOP/B | 900 GB/s | 50 GB/s | 2 μs | measured 2026-10-12 |
+| B200 SXM 180GB | 180 GB | 6 TB/s | 1 PFLOP/s | 210 FLOP/B | 2 TB/s | 60 GB/s | 3 μs | measured 2026-10-12 |
+| B300 SXM 288GB | 288 GB | 6 TB/s | 1 PFLOP/s | 220 FLOP/B | 2 TB/s | 60 GB/s | 3 μs | measured 2026-10-12 |
 
 | GPU | HBM measured / ceiling | BF16 measured / ceiling |
 | --- | ---: | ---: |
-| A100 SXM 80GB | 1738 / 2039 GB/s (85%) | 265 / 312 TFLOP/s (85%) |
-| H100 SXM 80GB | 3003 / 3350 GB/s (90%) | 734 / 990 TFLOP/s (74%) |
-| B200 SXM 180GB | 6322 / 8000 GB/s (79%) | 1585 / 2250 TFLOP/s (70%) |
-| B300 SXM 288GB | 6487 / 8000 GB/s (81%) | 1823 / 2250 TFLOP/s (81%) |
+| A100 SXM 80GB | 1740 / 2039 GB/s (85%) | 264 / 312 TFLOP/s (85%) |
+| H100 SXM 80GB | 3002 / 3350 GB/s (90%) | 691 / 990 TFLOP/s (70%) |
+| B200 SXM 180GB | 6414 / 8000 GB/s (80%) | 1325 / 2250 TFLOP/s (59%) |
+| B300 SXM 288GB | 6398 / 8000 GB/s (80%) | 1426 / 2250 TFLOP/s (63%) |
 <!-- /napkin -->
 
 Modal request semantics matter: `H100!` pins an H100 — a plain `H100` request
@@ -152,12 +163,12 @@ launches on an H100:
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB --h2d 2GB --launches 20
 H100 SXM 80GB · bf16 · measured 2026-10-12
-intensity   200 FLOP/B   ridge 240 FLOP/B   memory-bound
-compute     270 ms
+intensity   200 FLOP/B   ridge 230 FLOP/B   memory-bound
+compute     290 ms
 memory      330 ms
 device      330 ms
-h2d         36 ms   1 sync copy: 1 × 9.8 μs + 2 GB / 55 GB/s
-launch      33 μs
+h2d         37 ms   1 sync copy: 1 × 8.8 μs + 2 GB / 54 GB/s
+launch      34 μs
 total       370 ms   memory-bound
 ```
 <!-- /napkin -->
@@ -255,11 +266,11 @@ fits        no — needs at least 3 GPUs (weights + extra sharded, per-GPU repli
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 2.34P --bytes 188GB
 H100 SXM 80GB · bf16 · measured 2026-10-12
-intensity   12000 FLOP/B   ridge 240 FLOP/B   compute-bound
-compute     3.2 s
+intensity   12000 FLOP/B   ridge 230 FLOP/B   compute-bound
+compute     3.4 s
 memory      63 ms
-device      3.2 s
-total       3.2 s   compute-bound
+device      3.4 s
+total       3.4 s   compute-bound
 ```
 <!-- /napkin -->
 
@@ -267,8 +278,8 @@ total       3.2 s   compute-bound
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 1.17T --bytes 147GB
 H100 SXM 80GB · bf16 · measured 2026-10-12
-intensity   8 FLOP/B   ridge 240 FLOP/B   memory-bound
-compute     1.6 ms
+intensity   8 FLOP/B   ridge 230 FLOP/B   memory-bound
+compute     1.7 ms
 memory      49 ms
 device      49 ms
 total       49 ms   memory-bound
@@ -285,8 +296,8 @@ parallelism each GPU reads an eighth of the weights and KV per decode step,
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 146G --bytes 18.3GB
 H100 SXM 80GB · bf16 · measured 2026-10-12
-intensity   8 FLOP/B   ridge 240 FLOP/B   memory-bound
-compute     200 μs
+intensity   8 FLOP/B   ridge 230 FLOP/B   memory-bound
+compute     210 μs
 memory      6.1 ms
 device      6.1 ms
 total       6.1 ms   memory-bound
@@ -419,7 +430,7 @@ Ranked by datasheet dense BF16 per dollar at the Modal prices above, a B200
 beats an H100: 2,250 TFLOP/s at $6.25/hour is 360 TFLOP/s per dollar-hour,
 against 990 TFLOP/s at $3.95/hour for 250. Take a compute-bound 1 EFLOP BF16
 job. `napkin estimate --dtype bf16 --flops 1E --bytes 1TB` gives 1400 s on
-the H100 and 630 s on the B200 at their measured BF16 rates. Modal bills per
+the H100 and 750 s on the B200 at their measured BF16 rates. Modal bills per
 second.
 
 Now suppose the job's steps are too small to fill a B200's 148 SMs, and
@@ -430,16 +441,16 @@ measurements:
 | GPU | Price | Busy | Cost at 100% | Utilization | Cost |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | H100 | $3.95/h | 1400 s | $1.54 | 50% | $3.07 |
-| B200 | $6.25/h | 630 s | $1.09 | 30% | $3.65 |
+| B200 | $6.25/h | 750 s | $1.30 | 30% | $4.34 |
 
 ```sh
 napkin cost --gpus 1 --price 3.95 --time 1400s --utilization 0.5 --granularity 1s
-napkin cost --gpus 1 --price 6.25 --time 630s --utilization 0.3 --granularity 1s
+napkin cost --gpus 1 --price 6.25 --time 750s --utilization 0.3 --granularity 1s
 ```
 
 At full utilization the B200 is cheaper, as the ranking predicts; at these
 utilizations the H100 is. With measured rates, the B200 wins only while its
-utilization stays above `(734 / 3.95) / (1585 / 6.25) ≈ 0.73` of the H100's;
+utilization stays above `(691 / 3.95) / (1325 / 6.25) ≈ 0.83` of the H100's;
 here it is `0.3 / 0.5 = 0.6`.
 
 ## Usage
@@ -493,7 +504,26 @@ napkin readme --write README.md         # refreshes the tables
   fewer than 2 GPUs or no peer access.
 - `g2g_latency_us`: 4-byte peer copy plus stream synchronize, wall clock.
 - `compute_tflops`: cuBLAS GemmEx 8192³, `2·N³` FLOPs counted, validated
-  against a CPU float64 reference per dtype.
+  against a CPU float64 reference per dtype. Each dtype first runs untimed
+  GEMMs for 1 s, then times 7 rounds sized from the last warm-up batch to last about
+  200 ms each (each round's measured length is stored as `wall_ms`). Tensor Core
+  GEMMs draw enough power that the GPU starts at its maximum SM clock and drops
+  it once the software power cap engages: on `H100!:2`, 10 warm-up calls and 10-call
+  rounds (about 15 ms each) caught the boost in the first rounds and the cap
+  in the later ones, a 15–26% spread on H100 and B300
+  ([#5](https://github.com/gpu004/napkin-math-gpu/issues/5)). The longer
+  warm-up reports the sustained rate under the power cap, which is the rate a
+  long training or prefill GEMM gets.
+- `gpu_state`: NVML (`libnvidia-ml`, loaded at run time) polls the GEMM GPU
+  every 5 ms during the timed rounds and stores, per round, its SM and memory
+  clocks, temperature, average power from the energy counter, and how often
+  each clock-limit reason (e.g. `sw_power_cap`) was active. `napkin table`
+  prints a row per dtype.
+- Round spread: every metric keeps its per-round samples in `samples_ms`, and
+  the tables show the median round. When a metric's slowest round is more than
+  5% slower than its fastest, `napkin table` marks the cell with † and names
+  the spread underneath. Seven rounds' min and max are an observed range, not
+  a confidence interval.
 
 Collective curves come from NVIDIA NCCL Tests, also run on Modal:
 

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use napkin_profile::collective::{Collective, CollectiveEvidence, Curve, CurvePoint, Topology};
-use napkin_profile::{Ceiling, Dtype, Measured, Profile};
+use napkin_profile::{Ceiling, Dtype, GpuState, Measured, Profile, RoundState, Span};
 use serde::Deserialize;
 
 const DATASHEET_IDS: [&str; 4] = ["a100", "h100", "b200", "b300"];
@@ -650,6 +650,7 @@ fn emit_measured(measured: &Measured) -> String {
         gemm_shape,
         checks,
         samples_ms,
+        gpu_state,
     } = measured;
     let fields = [
         ("captured_at", string_literal(captured_at)),
@@ -690,6 +691,12 @@ fn emit_measured(measured: &Measured) -> String {
         ),
         ("checks", bool_map(checks)),
         ("samples_ms", samples_map(samples_ms)),
+        (
+            "gpu_state",
+            gpu_state
+                .as_ref()
+                .map_or_else(|| "None".to_owned(), gpu_state_literal),
+        ),
     ];
     let mut generated = String::from("Some(Measured {\n");
     for (name, value) in fields {
@@ -765,4 +772,79 @@ fn samples_map(values: &BTreeMap<String, Vec<f64>>) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("BTreeMap::from([{entries}])")
+}
+
+fn gpu_state_literal(state: &GpuState) -> String {
+    let GpuState {
+        source,
+        poll_interval_ms,
+        max_sm_clock_mhz,
+        max_mem_clock_mhz,
+        power_limit_w,
+        warmup_ms,
+        round_ms,
+        rounds,
+    } = state;
+    let rounds = rounds
+        .iter()
+        .map(|(name, rounds)| {
+            let rounds = rounds
+                .iter()
+                .map(round_state_literal)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({}, vec![{rounds}])", string_literal(name))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "Some(GpuState {{ source: {}, poll_interval_ms: {}, max_sm_clock_mhz: {max_sm_clock_mhz}_u32, \
+         max_mem_clock_mhz: {max_mem_clock_mhz}_u32, power_limit_w: {}, warmup_ms: {}, \
+         round_ms: {}, rounds: BTreeMap::from([{rounds}]) }})",
+        string_literal(source),
+        float_literal(*poll_interval_ms),
+        float_literal(*power_limit_w),
+        float_literal(*warmup_ms),
+        float_literal(*round_ms),
+    )
+}
+
+fn round_state_literal(round: &RoundState) -> String {
+    let RoundState {
+        polls,
+        wall_ms,
+        sm_clock_mhz,
+        mem_clock_mhz,
+        power_w,
+        temperature_c,
+        clock_limit_reasons,
+    } = round;
+    let reasons = clock_limit_reasons
+        .iter()
+        .map(|(name, count)| format!("({}, {count}_u32)", string_literal(name)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "RoundState {{ polls: {polls}_u32, wall_ms: {}, sm_clock_mhz: {}, mem_clock_mhz: {}, power_w: {}, \
+         temperature_c: {}, clock_limit_reasons: BTreeMap::from([{reasons}]) }}",
+        float_literal(*wall_ms),
+        option_span_literal(*sm_clock_mhz),
+        option_span_literal(*mem_clock_mhz),
+        option_float_literal(*power_w),
+        option_span_literal(*temperature_c),
+    )
+}
+
+fn option_span_literal(span: Option<Span>) -> String {
+    span.map_or_else(
+        || "None".to_owned(),
+        |Span { min, median, max }| {
+            format!(
+                "Some(Span {{ min: {}, median: {}, max: {} }})",
+                float_literal(min),
+                float_literal(median),
+                float_literal(max)
+            )
+        },
+    )
 }
