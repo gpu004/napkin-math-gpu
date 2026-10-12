@@ -113,7 +113,9 @@ fn as_f64(value: NonZeroU64) -> f64 {
     converted
 }
 
-fn activation_bytes(dtype: Dtype) -> f64 {
+/// Storage bytes per element; tf32 is stored as fp32.
+#[must_use]
+pub fn element_bytes(dtype: Dtype) -> f64 {
     match dtype {
         Dtype::Fp4 => 0.5,
         Dtype::Fp8 => 1.0,
@@ -177,7 +179,7 @@ pub fn recipe(model: &Model, workload: &Workload) -> Result<Recipe, LlmError> {
     let batch = as_f64(workload.batch);
     let prompt = as_f64(workload.prompt_tokens);
     let generated = as_f64(workload.generated_tokens);
-    let activation = activation_bytes(workload.activation);
+    let activation = element_bytes(workload.activation);
     let decode_context = prompt + generated;
     let weight_bytes = model.params * model.weight_bits / 8.0;
     let kv_bytes_per_token = 2.0 * layers * kv_heads * head_dim * model.kv_bits / 8.0;

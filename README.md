@@ -200,27 +200,42 @@ activations  2 × 80 × 8 × 8192 × 2 B (floor) = 21 MB
 per token    147 GB / 8 = 18.3 GB
 $ napkin estimate --gpu h100 --dtype bf16 --flops 1.17T --bytes 147GB
 
-hypothetical: the 147 GB working set exceeds 72 GB usable on one H100 SXM 80GB, so both estimates assume one GPU's bandwidth and compute. Sharding needs at least 3 GPUs; it divides weights and KV, not per-GPU memory, and a tensor-parallel speedup needs a communication term (--g2g) before you claim one.
+hypothetical: the 147 GB working set exceeds 72 GB usable on one H100 SXM 80GB,
+so both estimates assume one GPU's bandwidth and compute. Sharding needs at least 3 GPUs;
+it divides weights and KV, not per-GPU memory, and a tensor-parallel speedup needs
+a communication term (--g2g) before you claim one.
 ```
 <!-- /napkin -->
 
-Prefill is compute-bound: 16,384 prompt tokens share one weight read. Decode is
-memory-bound: each step reads the weights once for the whole batch. Batching
-amortizes that weight read, so per-token traffic falls roughly with batch size,
-while KV reads grow with batch × context. At batch 8 and a 32,768-token (32k)
-context, the same KV formula gives an 86 GB read per step, comparable to the
-140 GB weight read.
+Prefill is compute-bound: 16,384 prompt tokens share one 140 GB weight read, so
+intensity is about 12,000 FLOP/B, far above the H100's 240 FLOP/B ridge. Decode
+is memory-bound at 8 FLOP/B: every step reads all the weights to produce one
+token per request. Batching amortizes that read: 147 GB per step serves 8
+tokens, 18 GB each, against about 141 GB for a single request's token. KV reads
+do not amortize, because they grow with batch × context. At batch 8 and a
+32,768-token context the same formula gives an 86 GB KV read per step,
+comparable to the 140 GB of weights.
 
-The 6.71 GB KV cache above is resident capacity; 6.71 GB is also the KV traffic
-in the final 2,560-token decode step, but those are different questions for
-other workloads. GQA (8 KV heads for 64 query heads) makes KV/token 328 KB
-instead of 2.6 MB. Quantization is independent: 4-bit weights with fp16 KV
-shrink weight storage 4× but do not shrink KV bytes. The H100 result is
-hypothetical because the working set does not fit; a real multi-GPU speedup
-needs a communication term, not just divided memory and bandwidth.
+Capacity and traffic are different questions. The 6.71 GB KV cache is what must
+stay resident at the end of generation. Per-step KV traffic is what one decode
+step reads, and it grows from 5.4 GB at the first step to 6.7 GB at the last.
+Precision is set separately: `--weight-bits 4` with 16-bit KV shrinks the
+weights 4× and leaves KV bytes unchanged. GQA (8 KV heads for 64 query heads) is
+why KV/token is 328 KB instead of 2.6 MB, while attention FLOPs still count all
+64 query heads.
 
-The generated follow-up commands below are executable markers too; the drift
-test checks that they continue to match the recipe.
+These formulas are architecture-specific. A mixture-of-experts model multiplies
+only its active experts per token, but a large batch may still read most experts
+each step; sliding-window attention caps the context term; latent-attention
+(MLA) caches change KV/token. Change the inputs, or the formula, rather than
+reaching for a universal tokens-per-second rule.
+
+The working set does not fit one H100, so both estimates are hypothetical
+single-GPU numbers. By capacity alone, `fit` needs at least 3 GPUs. That divides
+the weights and KV, not the per-GPU runtime memory, and dividing the 49 ms step
+by 3 is not a speedup until a communication term (`--g2g`) is added.
+
+Feed the printed calls to the existing commands:
 
 <!-- napkin example fit --gpu h100 --params 70B --bits 16 --extra 6.71GB -->
 ```text
@@ -387,6 +402,7 @@ napkin estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB [--h2d 2GB]
 napkin fit --gpu h100 --params 70B --bits 16 [--extra 20GB] [--per-gpu 2GB] [--headroom 0.1]
 napkin llm --gpu h100 --layers 80 --hidden 8192 --heads 64 --kv-heads 8
            --head-dim 128 --params 70B --batch 8 --prompt 2048 --generated 512
+           [--weight-bits 4] [--kv-bits 8] [--per-gpu 2GB] [--headroom 0.1]
 napkin cost --gpus 2 --time 10s --price 3       # or --offer modal-h100
             [--utilization 0.5] [--startup 30s] [--idle 60s] [--granularity 1s]
             [--work 25K | --throughput 2.5K] [--unit tokens]

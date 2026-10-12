@@ -126,6 +126,10 @@ fn llm_explains_a_hypothetical_70b_recipe() {
     assert!(stdout.contains("KV cache"), "{stdout}");
     assert!(stdout.contains("$ napkin estimate"), "{stdout}");
     assert!(stdout.contains("hypothetical"), "{stdout}");
+    assert!(
+        stdout.lines().all(|line| line.chars().count() <= 100),
+        "{stdout}"
+    );
 }
 
 #[test]

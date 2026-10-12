@@ -151,6 +151,7 @@ enum Command {
     },
     /// List dated GPU price records and their age.
     Prices,
+    /// Derive memory, prefill and decode inputs for a transformer from explicit architecture and workload flags.
     Llm(LlmArgs),
     /// Rewrite the `<!-- napkin ... -->` marker blocks in README.md.
     Readme {
@@ -168,36 +169,51 @@ enum Command {
 
 #[derive(clap::Args, Debug)]
 struct LlmArgs {
+    /// GPU profile to use.
     #[arg(long, default_value = "h100")]
     gpu: String,
+    /// Compute and activation dtype.
     #[arg(long, value_enum, default_value_t = Dtype::Bf16)]
     dtype: Dtype,
+    /// Number of transformer layers.
     #[arg(long)]
     layers: NonZeroU64,
+    /// Hidden width.
     #[arg(long)]
     hidden: NonZeroU64,
+    /// Query heads.
     #[arg(long)]
     heads: NonZeroU64,
+    /// KV heads (equal to --heads for multi-head attention, fewer for GQA).
     #[arg(long)]
     kv_heads: NonZeroU64,
+    /// Width of each attention head.
     #[arg(long)]
     head_dim: NonZeroU64,
+    /// Parameter count, e.g. "70B".
     #[arg(long)]
     params: String,
+    /// Bits per model weight.
     #[arg(long, default_value_t = 16.0)]
     weight_bits: f64,
+    /// Bits per KV-cache element.
     #[arg(long, default_value_t = 16.0)]
     kv_bits: f64,
+    /// Concurrent requests.
     #[arg(long, default_value = "1")]
     batch: NonZeroU64,
+    /// Prompt tokens per request.
     #[arg(long)]
     prompt: NonZeroU64,
+    /// Generated tokens per request.
     #[arg(long)]
     generated: NonZeroU64,
+    /// Bytes every GPU holds regardless of GPU count, e.g. CUDA context and activation workspace.
     #[arg(long)]
     per_gpu: Option<String>,
-    #[arg(long, default_value_t = 0.1)]
-    headroom: f64,
+    /// Per-GPU memory fraction held in reserve.
+    #[arg(long)]
+    headroom: Option<f64>,
 }
 
 fn main() -> ExitCode {
@@ -804,7 +820,7 @@ fn cmd_llm(args: &LlmArgs) -> Result<String, String> {
         model.weight_bits,
         recipe.kv_cache_bytes,
         per_gpu_bytes,
-        args.headroom,
+        args.headroom.unwrap_or(0.1),
     )
     .map_err(|e| e.to_string())?;
     let group_size = args.heads.get() / args.kv_heads.get();
@@ -842,7 +858,7 @@ fn cmd_llm(args: &LlmArgs) -> Result<String, String> {
     } else {
         let _ = writeln!(
             out,
-            "\nhypothetical: the {} working set exceeds {} usable on one {}, so both estimates assume one GPU's bandwidth and compute. Sharding needs at least {} GPUs; it divides weights and KV, not per-GPU memory, and a tensor-parallel speedup needs a communication term (--g2g) before you claim one.",
+            "\nhypothetical: the {} working set exceeds {} usable on one {},\nso both estimates assume one GPU's bandwidth and compute. Sharding needs at least {} GPUs;\nit divides weights and KV, not per-GPU memory, and a tensor-parallel speedup needs\na communication term (--g2g) before you claim one.",
             fmt_bytes(capacity.working_bytes, 3),
             fmt_bytes(capacity.usable_bytes_per_gpu, 3),
             p.name,
@@ -907,8 +923,8 @@ fn render_llm_memory(
     if args.per_gpu.is_some() {
         let _ = write!(out, " --per-gpu {}", byte_arg(per_gpu_bytes));
     }
-    if args.headroom.to_bits() != 0.1_f64.to_bits() {
-        let _ = write!(out, " --headroom {}", units::fmt_sig(args.headroom, 3));
+    if let Some(headroom) = args.headroom {
+        let _ = write!(out, " --headroom {}", units::fmt_sig(headroom, 3));
     }
     out.push_str("\n\n");
 }
@@ -959,7 +975,7 @@ fn render_llm_prefill(out: &mut String, args: &LlmArgs, recipe: &llm::Recipe) {
         "{:<13}2 × {layers} × {} × {hidden} × {} B (floor) = {}",
         "activations",
         fmt_tokens(prefill_tokens),
-        units::fmt_sig(activation_element_bytes(args.dtype), 3),
+        units::fmt_sig(llm::element_bytes(args.dtype), 3),
         fmt_bytes(recipe.prefill.activation_bytes, 3)
     );
     let _ = writeln!(
@@ -1015,7 +1031,7 @@ fn render_llm_decode(out: &mut String, args: &LlmArgs, recipe: &llm::Recipe) {
         out,
         "{:<13}2 × {layers} × {batch} × {hidden} × {} B (floor) = {}",
         "activations",
-        units::fmt_sig(activation_element_bytes(args.dtype), 3),
+        units::fmt_sig(llm::element_bytes(args.dtype), 3),
         fmt_bytes(recipe.decode.activation_bytes, 3)
     );
     let _ = writeln!(
@@ -1033,15 +1049,6 @@ fn render_llm_decode(out: &mut String, args: &LlmArgs, recipe: &llm::Recipe) {
         flops_arg(recipe.decode.flops()),
         byte_arg(decode_bytes)
     );
-}
-
-fn activation_element_bytes(dtype: Dtype) -> f64 {
-    match dtype {
-        Dtype::Fp4 => 0.5,
-        Dtype::Fp8 => 1.0,
-        Dtype::Fp16 | Dtype::Bf16 => 2.0,
-        Dtype::Tf32 | Dtype::Fp32 => 4.0,
-    }
 }
 
 const MARKER_PREFIX: &str = "<!-- napkin ";
