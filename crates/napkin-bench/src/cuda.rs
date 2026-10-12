@@ -271,16 +271,22 @@ fn read_as_f32(
     let bytes = stream.clone_dtoh(dev)?;
     let out = match spec.ctype {
         sys::cudaDataType_t::CUDA_R_16F => bytes
-            .chunks_exact(2)
-            .map(|b| f16::from_le_bytes([b[0], b[1]]).to_f32())
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| f16::from_le_bytes(*b).to_f32())
             .collect(),
         sys::cudaDataType_t::CUDA_R_16BF => bytes
-            .chunks_exact(2)
-            .map(|b| bf16::from_le_bytes([b[0], b[1]]).to_f32())
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| bf16::from_le_bytes(*b).to_f32())
             .collect(),
         _ => bytes
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .collect(),
     };
     Ok(out)
