@@ -4,13 +4,21 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use napkin_profile::collective::{Collective, CollectiveEvidence, Curve, CurvePoint, Topology};
+
 pub use napkin_profile::*;
 
 static BUILTIN: LazyLock<Vec<Profile>> = LazyLock::new(generated_profiles);
+static COLLECTIVES: LazyLock<Vec<CollectiveEvidence>> = LazyLock::new(generated_collectives);
 
 /// Returns the built-in profiles in a100, h100, b200, b300 order.
 pub fn builtin() -> &'static [Profile] {
     BUILTIN.as_slice()
+}
+
+/// Returns the built-in NCCL Tests collective evidence.
+pub fn collectives() -> &'static [CollectiveEvidence] {
+    COLLECTIVES.as_slice()
 }
 
 /// Finds a built-in profile by its identifier.

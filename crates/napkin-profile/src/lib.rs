@@ -1,5 +1,7 @@
 //! GPU profile types shared by the estimator and benchmark harness.
 
+pub mod collective;
+
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -48,7 +50,8 @@ impl fmt::Display for Dtype {
 pub struct Ceiling {
     /// Theoretical HBM bandwidth, GB/s (10^9 bytes/s).
     pub hbm_gbps: f64,
-    /// Per-GPU one-way `NVLink` aggregate as NVIDIA publishes it, GB/s.
+    /// Per-GPU `NVLink` aggregate as NVIDIA publishes it, both directions
+    /// summed, GB/s: H100 is 18 links × 50 GB/s = 900 GB/s, 450 GB/s each way.
     pub nvlink_gbps: f64,
     /// Dense peak throughput per dtype, TFLOP/s (10^12 FLOP/s).
     pub compute_tflops: BTreeMap<Dtype, f64>,

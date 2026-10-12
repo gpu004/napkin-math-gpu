@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod collective;
 pub mod cost;
 pub mod estimate;
 pub mod fit;

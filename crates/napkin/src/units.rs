@@ -94,6 +94,23 @@ pub fn parse_bytes(s: &str) -> Result<f64, ParseError> {
     parse_with(s, byte_suffix)
 }
 
+/// Formats a byte quantity using binary units and significant digits.
+#[must_use]
+pub fn fmt_binary_bytes(bytes: f64, sig: u32) -> String {
+    for (unit, factor) in [
+        ("PiB", 2.0_f64.powi(50)),
+        ("TiB", 2.0_f64.powi(40)),
+        ("GiB", 2.0_f64.powi(30)),
+        ("MiB", 2.0_f64.powi(20)),
+        ("KiB", 2.0_f64.powi(10)),
+    ] {
+        if bytes.abs() >= factor {
+            return format!("{} {unit}", fmt_sig(bytes / factor, sig));
+        }
+    }
+    format!("{} B", fmt_sig(bytes, sig))
+}
+
 /// Parses a parameter count: `"70B"` is 70 billion, `"7M"` is 7 million.
 ///
 /// # Errors
@@ -288,6 +305,8 @@ mod tests {
         assert!((parse_bytes("1.5 GB").unwrap() - 1.5e9).abs() < 1.0);
         assert!((parse_bytes("700B").unwrap() - 700.0).abs() < f64::EPSILON);
         assert!(parse_bytes("5QB").is_err());
+        assert_eq!(fmt_binary_bytes(16_384.0, 3), "16 KiB");
+        assert_eq!(fmt_binary_bytes(4_294_967_296.0, 3), "4 GiB");
     }
 
     #[test]

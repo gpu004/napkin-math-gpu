@@ -1,0 +1,15 @@
+{
+  "args": ["/opt/nccl-tests/build/reduce_scatter_perf", "-b", "8", "-e", "4G", "-f", "2", "-w", "5", "-n", "20", "-c", "1", "-g", "2", "-d", "bfloat16", "-o", "sum", "-J", "/tmp/reduce_scatter_perf.json"],
+  "nccl_version": 22703,
+  "config": {"nthreads": 1, "ngpus": 2, "validation": 1},
+  "out_of_bounds": {"count": 0, "okay": "true"},
+  "results": [
+    {"size":0,"count":0,"type":"bfloat16","redop":"sum","root":"    -1","out_of_place":{"time":0.52295,"alg_bw":0.0,"bus_bw":0.0,"nwrong":0.0},"in_place":{"time":0.42105,"alg_bw":0.0,"bus_bw":0.0,"nwrong":0.0},"actual_iterations":20,"experiment_name":""},
+    {"size":0,"count":0,"type":"bfloat16","redop":"sum","root":"    -1","out_of_place":{"time":0.38465,"alg_bw":0.0,"bus_bw":0.0,"nwrong":0.0},"in_place":{"time":0.3355,"alg_bw":0.0,"bus_bw":0.0,"nwrong":0.0},"actual_iterations":20,"experiment_name":""},
+    {"size":32,"count":8,"type":"bfloat16","redop":"sum","root":"    -1","out_of_place":{"time":12.73735,"alg_bw":0.002512,"bus_bw":0.001256,"nwrong":0.0},"in_place":{"time":11.56835,"alg_bw":0.002766,"bus_bw":0.001383,"nwrong":0.0},"actual_iterations":20,"experiment_name":""},
+    {"size":2048,"count":512,"type":"bfloat16","redop":"sum","root":"    -1","out_of_place":{"time":11.34105,"alg_bw":0.180583,"bus_bw":0.090291,"nwrong":0.0},"in_place":{"time":11.4727,"alg_bw":0.178511,"bus_bw":0.089255,"nwrong":0.0},"actual_iterations":20,"experiment_name":""},
+    {"size":32768,"count":8192,"type":"bfloat16","redop":"sum","root":"    -1","out_of_place":{"time":11.7442,"alg_bw":2.790143,"bus_bw":1.395072,"nwrong":0.0},"in_place":{"time":11.752,"alg_bw":2.788291,"bus_bw":1.394146,"nwrong":0.0},"actual_iterations":20,"experiment_name":""},
+    {"size":65536,"count":16384,"type":"bfloat16","redop":"sum","root":"    -1","out_of_place":{"time":12.25795,"alg_bw":5.346408,"bus_bw":2.673204,"nwrong":0.0},"in_place":{"time":12.0613,"alg_bw":5.433577,"bus_bw":2.716788,"nwrong":0.0},"actual_iterations":20,"experiment_name":""},
+    {"size":4294967296,"count":1073741824,"type":"bfloat16","redop":"sum","root":"    -1","out_of_place":{"time":8134.4918,"alg_bw":527.994545,"bus_bw":263.997272,"nwrong":0.0},"in_place":{"time":7716.093,"alg_bw":556.624615,"bus_bw":278.312308,"nwrong":0.0},"actual_iterations":20,"experiment_name":""}
+  ]
+}

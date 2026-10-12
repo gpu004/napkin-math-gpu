@@ -122,6 +122,45 @@ Correctness checks stay enabled. Record NCCL version, GPU count, rank layout,
 topology, datatype, reduction operator, warmups, iterations, and whether CUDA
 graphs or buffer registration were enabled.
 
+`modal/nccl.py` builds NCCL Tests v2.21.1 (`afd59ab`, `MPI=0`) against the
+NCCL 2.27.3 packaged in `nvidia/cuda:12.9.1-devel-ubuntu24.04` and writes one
+directory per GPU and count, `profiles/nccl-tests/<id>x<count>/`:
+
+- `run.json`: Modal request, GPU count, rank layout (one process, one thread,
+  `-g <count>` GPUs), topology label, dtype (`bfloat16`), reduction (`sum`),
+  NCCL Tests revision and build line, CUDA image, NCCL packages, the
+  `nvidia-smi` GPU/driver/PCIe query, the environment and every exact command.
+- `<collective>_perf.txt` and `.json`: raw stdout and `-J` JSON of the sweep
+  `-b 8 -e 4G -f 2 -w 5 -n 20 -c 1` (8 B to 4 GiB doubling, 5 warmups, 20
+  timed iterations, correctness checks on, no CUDA graphs, no buffer
+  registration). Both out-of-place and in-place rows are kept.
+- `topo.txt`: `nvidia-smi topo -m`, `topo -p2p n` and `nvlink -s`. Modal's
+  sandbox fails `topo -m` ("Failed to run topology matrix"), so the failure is
+  kept as-is and the other two stand in for it.
+- `nccl_topology.txt`: NCCL's own `INIT,GRAPH` log for one tiny AllReduce.
+  The `nvlink` topology label means NCCL built every ring over NVLink (graph
+  type `NVL`) and every channel is `via P2P`; the launcher refuses to label a
+  run `nvlink` otherwise.
+
+`crates/napkin/build.rs` parses these files at build time and rejects any run
+whose correctness checks failed or were off, whose `algbw` does not equal
+`size / time` or whose `busbw` does not equal `algbw` times the
+[PERFORMANCE.md](https://github.com/NVIDIA/nccl-tests/blob/master/doc/PERFORMANCE.md)
+factor (`2(n-1)/n` for AllReduce, `(n-1)/n` for AllGather and ReduceScatter).
+`size` keeps the NCCL Tests meaning: the per-rank buffer for AllReduce, the
+total gathered output for AllGather, the total per-rank input for
+ReduceScatter. The estimator uses the out-of-place curve.
+
+`napkin collective` reads a time off the curve for the exact GPU, count,
+topology and dtype that was measured, and refuses anything else. It never
+scales a curve to another GPU count or topology, and it never extrapolates past
+the largest measured size. Below the smallest size it returns the smallest
+size's time; between two sizes it interpolates time linearly in bytes. It
+reports the latency regime when the time is less than twice the curve's
+fastest call, meaning the fixed per-call cost is at least half the answer.
+The collective bandwidths stay separate from the `napkin-bench` peer-copy
+rate (one GPU pair, `cuMemcpyPeer`) and the datasheet NVLink figure.
+
 ### Nsight Compute
 
 Use [Nsight Compute](https://docs.nvidia.com/nsight-compute/ProfilingGuide/)'s
@@ -169,6 +208,9 @@ notes. Measured calibrations live in `profiles/<id>.measured.json`, produced by
 
 - H100: [profile](profiles/h100.json) · [measured](profiles/h100.measured.json)
 - A100: [profile](profiles/a100.json) · [measured](profiles/a100.measured.json)
+- NCCL Tests collectives: [H100 × 2](profiles/nccl-tests/h100x2) ·
+  [H100 × 8](profiles/nccl-tests/h100x8) (a different Modal host: driver
+  610.57.04 and a PCIe Gen 4 host link, versus 580.95.05 and Gen 5 for × 2)
 
 The `napkin-profile` types are the shared contract between the estimator
 crate and the `napkin-bench` producer. The measured files must be replaced
