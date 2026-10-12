@@ -165,9 +165,15 @@ pub struct Measured {
     /// platform does not report it.
     #[serde(default)]
     pub pcie_gen: Option<u8>,
-    /// `min(gpumax, hostmax)`; None if neither max is reported.
+    /// GPU's maximum `PCIe` generation (`pcie.link.gen.gpumax`).
     #[serde(default)]
     pub pcie_gen_max: Option<u8>,
+    /// Host-side maximum `PCIe` generation (`pcie.link.gen.hostmax`), when
+    /// reported. When lower than `pcie_gen`, this bounds host↔device bandwidth;
+    /// for example, HGX B300 links GPUs at Gen6 x16 to a switch, then Gen5 to
+    /// the host.
+    #[serde(default)]
+    pub pcie_gen_host_max: Option<u8>,
     #[serde(default)]
     pub pcie_width: Option<u8>,
     #[serde(default)]
@@ -198,6 +204,17 @@ pub struct Measured {
     pub checks: BTreeMap<String, bool>,
     /// Raw per-round samples keyed by metric field name.
     pub samples_ms: BTreeMap<String, Vec<f64>>,
+}
+
+impl Measured {
+    /// Returns the `PCIe` generation available for host↔device transfers.
+    #[must_use]
+    pub fn pcie_effective_gen(&self) -> Option<u8> {
+        self.pcie_gen.map(|generation| {
+            self.pcie_gen_host_max
+                .map_or(generation, |host_max| generation.min(host_max))
+        })
+    }
 }
 
 /// Where a rate came from.
