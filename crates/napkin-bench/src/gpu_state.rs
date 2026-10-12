@@ -161,6 +161,7 @@ pub(crate) fn round_states(polls: &[Poll], windows: &[Window]) -> Vec<RoundState
             }
             RoundState {
                 polls: u32::try_from(inside.len()).unwrap_or(u32::MAX),
+                wall_ms: (w.end - w.start).as_secs_f64() * 1e3,
                 sm_clock_mhz: span(inside.iter().map(|p| f64::from(p.sm_mhz))),
                 mem_clock_mhz: span(inside.iter().map(|p| f64::from(p.mem_mhz))),
                 power_w,

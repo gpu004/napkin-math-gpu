@@ -812,6 +812,7 @@ fn gpu_state_literal(state: &GpuState) -> String {
 fn round_state_literal(round: &RoundState) -> String {
     let RoundState {
         polls,
+        wall_ms,
         sm_clock_mhz,
         mem_clock_mhz,
         power_w,
@@ -824,8 +825,9 @@ fn round_state_literal(round: &RoundState) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "RoundState {{ polls: {polls}_u32, sm_clock_mhz: {}, mem_clock_mhz: {}, power_w: {}, \
+        "RoundState {{ polls: {polls}_u32, wall_ms: {}, sm_clock_mhz: {}, mem_clock_mhz: {}, power_w: {}, \
          temperature_c: {}, clock_limit_reasons: BTreeMap::from([{reasons}]) }}",
+        float_literal(*wall_ms),
         option_span_literal(*sm_clock_mhz),
         option_span_literal(*mem_clock_mhz),
         option_float_literal(*power_w),

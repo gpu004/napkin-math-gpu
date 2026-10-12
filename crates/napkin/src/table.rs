@@ -561,6 +561,7 @@ mod tests {
     fn renders_gpu_state_per_gemm_dtype() {
         let round = |sm: f64, power: f64, capped: u32| RoundState {
             polls: 4,
+            wall_ms: 200.0,
             sm_clock_mhz: Some(Span {
                 min: sm,
                 median: sm,

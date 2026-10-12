@@ -53,14 +53,14 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 <!-- napkin compare -->
 | GPU | Memory | HBM | Dense BF16 | BF16 ridge | NVLink | Host link | Launch | Basis |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 150 FLOP/B | 600 GB/s | 10 GB/s | 2 μs | measured 2026-10-12 |
+| A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 150 FLOP/B | 600 GB/s | 30 GB/s | 3 μs | measured 2026-10-12 |
 | H100 SXM 80GB | 80 GB | 3 TB/s | 700 TFLOP/s | 240 FLOP/B | 900 GB/s | 60 GB/s | 2 μs | measured 2026-10-12 |
 | B200 SXM 180GB | 180 GB | 6 TB/s | 2 PFLOP/s | 250 FLOP/B | 2 TB/s | 60 GB/s | 4 μs | measured 2026-10-12 |
 | B300 SXM 288GB | 288 GB | 6 TB/s | 2 PFLOP/s | 280 FLOP/B | 2 TB/s | 50 GB/s | 3 μs | measured 2026-10-12 |
 
 | GPU | HBM measured / ceiling | BF16 measured / ceiling |
 | --- | ---: | ---: |
-| A100 SXM 80GB | 1738 / 2039 GB/s (85%) | 260 / 312 TFLOP/s (83%) |
+| A100 SXM 80GB | 1738 / 2039 GB/s (85%) | 265 / 312 TFLOP/s (85%) |
 | H100 SXM 80GB | 3003 / 3350 GB/s (90%) | 734 / 990 TFLOP/s (74%) |
 | B200 SXM 180GB | 6322 / 8000 GB/s (79%) | 1585 / 2250 TFLOP/s (70%) |
 | B300 SXM 288GB | 6487 / 8000 GB/s (81%) | 1823 / 2250 TFLOP/s (81%) |

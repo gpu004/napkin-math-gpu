@@ -176,7 +176,11 @@ fn sustained_rounds(
     mut op: impl FnMut() -> Result<(), BenchError>,
 ) -> Result<Vec<(f64, Window)>, BenchError> {
     const BATCH: u32 = 10;
-    let started = Instant::now();
+    // The first batch pays one-time setup (cuBLAS loads its kernels lazily,
+    // which took over a second on B300), so it neither counts towards the
+    // warm-up nor sizes the rounds; otherwise a 0.7 ms GEMM was sized as a
+    // 100 ms one and every "200 ms" round lasted 7 ms.
+    let mut warm_since = None;
     let per_call = loop {
         let batch_start = Instant::now();
         for _ in 0..BATCH {
@@ -184,9 +188,12 @@ fn sustained_rounds(
         }
         stream.synchronize()?;
         let per_call = batch_start.elapsed() / BATCH;
-        if started.elapsed() >= warmup {
+        if let Some(since) = warm_since
+            && Instant::elapsed(&since) >= warmup
+        {
             break per_call;
         }
+        warm_since.get_or_insert_with(Instant::now);
     };
     let iterations = round
         .as_nanos()

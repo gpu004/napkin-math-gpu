@@ -251,6 +251,9 @@ pub struct RoundState {
     /// NVML polls that landed inside the round; the spans are None and
     /// `power_w` is None when a round was too short to catch any.
     pub polls: u32,
+    /// Host wall-clock length of the timed round, so a reader can check that
+    /// the round really lasted at least `GpuState::round_ms`.
+    pub wall_ms: f64,
     pub sm_clock_mhz: Option<Span>,
     pub mem_clock_mhz: Option<Span>,
     /// Energy-counter delta over the round divided by the time it covers.
