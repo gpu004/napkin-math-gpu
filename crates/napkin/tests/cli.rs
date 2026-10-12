@@ -72,6 +72,91 @@ fn fit_reports_gpu_count() {
 }
 
 #[test]
+fn fit_reports_replicated_per_gpu_memory() {
+    let (stdout, _, code) = napkin(&[
+        "fit",
+        "--gpu",
+        "h100",
+        "--params",
+        "70B",
+        "--bits",
+        "16",
+        "--per-gpu",
+        "2GB",
+    ]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("per GPU     2 GB (replicated on every GPU)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "fits        no — needs at least 2 GPUs (weights + extra sharded, per-GPU replicated)"
+        ),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn llm_explains_a_hypothetical_70b_recipe() {
+    let (stdout, stderr, code) = napkin(&[
+        "llm",
+        "--gpu",
+        "h100",
+        "--layers",
+        "80",
+        "--hidden",
+        "8192",
+        "--heads",
+        "64",
+        "--kv-heads",
+        "8",
+        "--head-dim",
+        "128",
+        "--params",
+        "70B",
+        "--batch",
+        "8",
+        "--prompt",
+        "2048",
+        "--generated",
+        "512",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("KV cache"), "{stdout}");
+    assert!(stdout.contains("$ napkin estimate"), "{stdout}");
+    assert!(stdout.contains("hypothetical"), "{stdout}");
+}
+
+#[test]
+fn llm_reports_when_a_small_model_fits() {
+    let (stdout, stderr, code) = napkin(&[
+        "llm",
+        "--gpu",
+        "h100",
+        "--layers",
+        "32",
+        "--hidden",
+        "4096",
+        "--heads",
+        "32",
+        "--kv-heads",
+        "8",
+        "--head-dim",
+        "128",
+        "--params",
+        "8B",
+        "--prompt",
+        "1024",
+        "--generated",
+        "128",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("fits on one H100 SXM 80GB"), "{stdout}");
+    assert!(!stdout.contains("hypothetical"), "{stdout}");
+}
+
+#[test]
 fn compare_prints_table() {
     let (stdout, _, code) = napkin(&["compare"]);
     assert_eq!(code, 0);
@@ -227,10 +312,9 @@ impl Drop for TempReadme {
     }
 }
 
-fn stale_readme(name: &str) -> std::io::Result<TempReadme> {
+fn stale_readme(name: &str, content: &str) -> std::io::Result<TempReadme> {
     let path = std::env::temp_dir().join(format!("napkin-readme-{name}-{}.md", std::process::id()));
-    fs::write(&path, "<!-- napkin compare -->\nstale\n<!-- /napkin -->\n")
-        .map(|()| TempReadme(path))
+    fs::write(&path, content).map(|()| TempReadme(path))
 }
 
 #[test]
@@ -241,7 +325,10 @@ fn readme_check_and_write_conflict() {
 
 #[test]
 fn readme_check_preserves_stale_file() -> Result<(), Box<dyn std::error::Error>> {
-    let path = stale_readme("check")?;
+    let path = stale_readme(
+        "check",
+        "<!-- napkin compare -->\nstale\n<!-- /napkin -->\n",
+    )?;
     let original = fs::read_to_string(&path.0)?;
     let path_arg = path.0.to_string_lossy();
     let (_, _, code) = napkin(&["readme", "--check", path_arg.as_ref()]);
@@ -252,11 +339,32 @@ fn readme_check_preserves_stale_file() -> Result<(), Box<dyn std::error::Error>>
 
 #[test]
 fn readme_rewrites_stale_file() -> Result<(), Box<dyn std::error::Error>> {
-    let path = stale_readme("rewrite")?;
+    let path = stale_readme(
+        "rewrite",
+        "<!-- napkin compare -->\nstale\n<!-- /napkin -->\n",
+    )?;
     let path_arg = path.0.to_string_lossy();
     let (_, _, code) = napkin(&["readme", path_arg.as_ref()]);
     assert_eq!(code, 0);
     let (_, _, code) = napkin(&["readme", "--check", path_arg.as_ref()]);
     assert_eq!(code, 0);
+    Ok(())
+}
+
+#[test]
+fn readme_example_marker_runs_cli_and_rewrites_body() -> Result<(), Box<dyn std::error::Error>> {
+    let path = stale_readme(
+        "example",
+        "<!-- napkin example fit --gpu h100 --params 7B -->\nstale\n<!-- /napkin -->\n",
+    )?;
+    let path_arg = path.0.to_string_lossy();
+    let (_, stderr, code) = napkin(&["readme", path_arg.as_ref()]);
+    assert_eq!(code, 0, "{stderr}");
+    let contents = fs::read_to_string(&path.0)?;
+    assert!(
+        contents.contains("$ napkin fit --gpu h100 --params 7B"),
+        "{contents}"
+    );
+    assert!(contents.contains("fits"), "{contents}");
     Ok(())
 }

@@ -189,6 +189,28 @@ pub fn fmt_sig(v: f64, sig: u32) -> String {
     }
 }
 
+/// Formats a quantity with an SI prefix and `sig` significant digits.
+#[must_use]
+pub fn fmt_si(v: f64, sig: u32) -> String {
+    let abs = v.abs();
+    let (divisor, prefix) = if abs >= 1e18 {
+        (1e18, "E")
+    } else if abs >= 1e15 {
+        (1e15, "P")
+    } else if abs >= 1e12 {
+        (1e12, "T")
+    } else if abs >= 1e9 {
+        (1e9, "G")
+    } else if abs >= 1e6 {
+        (1e6, "M")
+    } else if abs >= 1e3 {
+        (1e3, "K")
+    } else {
+        (1.0, "")
+    };
+    format!("{}{prefix}", fmt_sig(v / divisor, sig))
+}
+
 /// Formats a duration in seconds as ns/μs/ms/s at `sig` significant digits.
 #[must_use]
 pub fn fmt_duration(seconds: f64, sig: u32) -> String {
@@ -325,5 +347,19 @@ mod tests {
         assert_eq!(fmt_count(900.0, 3), "900");
         assert_eq!(fmt_sig(0.016_666, 3), "0.0167");
         assert_eq!(fmt_sig(0.005_555, 3), "0.00556");
+    }
+
+    #[test]
+    fn formats_si_quantities_that_parse_back() {
+        for (value, expected) in [
+            (2.29e15, "2.29P"),
+            (44e12, "44T"),
+            (16_400.0, "16.4K"),
+            (512.0, "512"),
+        ] {
+            let formatted = fmt_si(value, 3);
+            assert_eq!(formatted, expected);
+            assert!((parse_number(&formatted).unwrap() / value - 1.0).abs() < 0.01);
+        }
     }
 }
