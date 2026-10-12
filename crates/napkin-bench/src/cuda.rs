@@ -526,8 +526,17 @@ impl Drop for PeerBuffer {
     }
 }
 
-/// `PCIe` link of GPU 0 from nvidia-smi; None when it does not report.
-fn pcie_link() -> (Option<u8>, Option<u8>, Option<u8>, Option<u8>) {
+/// `PCIe` link details reported by nvidia-smi for GPU 0.
+#[derive(Clone, Copy, Debug, Default)]
+struct PcieLink {
+    r#gen: Option<u8>,
+    gen_max: Option<u8>,
+    gen_host_max: Option<u8>,
+    width: Option<u8>,
+    width_max: Option<u8>,
+}
+
+fn pcie_link() -> PcieLink {
     let parse = |s: &str| s.trim().parse::<u8>().ok();
     let out = std::process::Command::new("nvidia-smi")
         .args([
@@ -542,21 +551,15 @@ fn pcie_link() -> (Option<u8>, Option<u8>, Option<u8>, Option<u8>) {
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| {
             let mut parts = s.trim().split(',');
-            (
-                parts.next().and_then(parse),
-                parts.next().and_then(parse),
-                parts.next().and_then(parse),
-                parts.next().and_then(parse),
-                parts.next().and_then(parse),
-            )
+            PcieLink {
+                r#gen: parts.next().and_then(parse),
+                gen_max: parts.next().and_then(parse),
+                gen_host_max: parts.next().and_then(parse),
+                width: parts.next().and_then(parse),
+                width_max: parts.next().and_then(parse),
+            }
         });
-    out.map_or(
-        (None, None, None, None),
-        |(g, gpumax, hostmax, width, width_max)| {
-            let gen_max = [gpumax, hostmax].into_iter().flatten().min();
-            (g, gen_max, width, width_max)
-        },
-    )
+    out.unwrap_or_default()
 }
 
 fn driver_version_string() -> String {
@@ -719,19 +722,20 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         "h2d/d2h latency",
         &format!("{h2d_latency_us:.1}/{d2h_latency_us:.1} μs"),
     );
-    let (pcie_gen, pcie_gen_max, pcie_width, pcie_width_max) = pcie_link();
+    let pcie = pcie_link();
     progress(
         "pcie",
         &format!(
-            "gen{}x{} (max gen{}x{})",
-            pcie_gen.map_or("?".to_owned(), |v| v.to_string()),
-            pcie_width.map_or("?".to_owned(), |v| v.to_string()),
-            pcie_gen_max.map_or("?".to_owned(), |v| v.to_string()),
-            pcie_width_max.map_or("?".to_owned(), |v| v.to_string()),
+            "gen{}x{} (gpu max gen{}x{}, host max gen{})",
+            pcie.r#gen.map_or("?".to_owned(), |v| v.to_string()),
+            pcie.width.map_or("?".to_owned(), |v| v.to_string()),
+            pcie.gen_max.map_or("?".to_owned(), |v| v.to_string()),
+            pcie.width_max.map_or("?".to_owned(), |v| v.to_string()),
+            pcie.gen_host_max.map_or("?".to_owned(), |v| v.to_string()),
         ),
     );
     if let (Some(g), Some(g_max), Some(w), Some(w_max)) =
-        (pcie_gen, pcie_gen_max, pcie_width, pcie_width_max)
+        (pcie.r#gen, pcie.gen_max, pcie.width, pcie.width_max)
     {
         checks.insert("pcie_full_link".to_owned(), g == g_max && w == w_max);
     }
@@ -1081,10 +1085,11 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         h2d_gbps,
         d2h_gbps,
         h2d_latency_us: Some(h2d_latency_us),
-        pcie_gen,
-        pcie_gen_max,
-        pcie_width,
-        pcie_width_max,
+        pcie_gen: pcie.r#gen,
+        pcie_gen_max: pcie.gen_max,
+        pcie_gen_host_max: pcie.gen_host_max,
+        pcie_width: pcie.width,
+        pcie_width_max: pcie.width_max,
         d2h_latency_us: Some(d2h_latency_us),
         hbm_gbps,
         elementwise_gbps,

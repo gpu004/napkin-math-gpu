@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::price::PriceRecord;
-use crate::profile::{Dtype, GpuState, Measured, Profile, RoundState, Span};
+use crate::profile::{Dtype, GpuState, Measured, Profile, Rates, RoundState, Span};
 use crate::units::{
     fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_sig, fmt_tflops, round_sig,
 };
@@ -70,6 +70,39 @@ fn row(cells: &[&str]) -> String {
 fn emit(out: &mut String, cells: &[&str]) {
     out.push_str(&row(cells));
     out.push('\n');
+}
+
+fn host_link_label(
+    bandwidth: Option<String>,
+    gpu_gen: Option<u8>,
+    effective_gen: Option<u8>,
+    width: Option<u8>,
+) -> String {
+    let Some(bandwidth) = bandwidth else {
+        return "—".to_owned();
+    };
+    match (gpu_gen, effective_gen, width) {
+        (Some(gpu_gen), Some(effective_gen), Some(width)) if effective_gen < gpu_gen => {
+            format!("{bandwidth} Gen{effective_gen} x{width} (GPU Gen{gpu_gen})")
+        }
+        (Some(_), Some(effective_gen), Some(width)) => {
+            format!("{bandwidth} Gen{effective_gen} x{width}")
+        }
+        _ => bandwidth,
+    }
+}
+
+fn host_link_cell(rates: &Rates, measured: Option<&Measured>, sig: u32) -> String {
+    let bandwidth = rates
+        .h2d_gbps
+        .zip(rates.d2h_gbps)
+        .map(|(a, b)| a.min(b))
+        .or(rates.h2d_gbps)
+        .map(|v| fmt_gbps(v, sig));
+    let (gpu_gen, effective_gen, width) = measured.map_or((None, None, None), |m| {
+        (m.pcie_gen, m.pcie_effective_gen(), m.pcie_width)
+    });
+    host_link_label(bandwidth, gpu_gen, effective_gen, width)
 }
 
 /// Renders dated price records and groups records with the same note.
@@ -458,6 +491,7 @@ pub fn compare(profiles: &[Profile], exact: bool) -> String {
     );
     for p in profiles {
         let rates = p.rates(false);
+        let host_link = host_link_cell(&rates, p.measured.as_ref(), sig);
         let bf16 = rates
             .compute_tflops
             .get(&Dtype::Bf16)
@@ -477,12 +511,7 @@ pub fn compare(profiles: &[Profile], exact: bool) -> String {
                 &bf16,
                 &ridge,
                 &fmt_gbps(p.ceiling.nvlink_gbps, sig),
-                &rates
-                    .h2d_gbps
-                    .zip(rates.d2h_gbps)
-                    .map(|(a, b)| a.min(b))
-                    .or(rates.h2d_gbps)
-                    .map_or_else(|| "—".to_owned(), |v| fmt_gbps(v, sig)),
+                &host_link,
                 &rates
                     .launch_us
                     .map_or_else(|| "—".to_owned(), |v| fmt_duration(v / 1e6, sig)),
@@ -604,5 +633,29 @@ mod tests {
             "{table}"
         );
         assert!(table.contains("Board limits: 700 W"), "{table}");
+    }
+
+    #[test]
+    fn host_limited_link_shows_effective_and_gpu_generations() {
+        assert_eq!(
+            host_link_label(Some("60 GB/s".to_owned()), Some(6), Some(5), Some(16)),
+            "60 GB/s Gen5 x16 (GPU Gen6)"
+        );
+    }
+
+    #[test]
+    fn unbounded_host_link_shows_gpu_generation() {
+        assert_eq!(
+            host_link_label(Some("60 GB/s".to_owned()), Some(5), Some(5), Some(16)),
+            "60 GB/s Gen5 x16"
+        );
+    }
+
+    #[test]
+    fn missing_link_info_keeps_only_bandwidth() {
+        assert_eq!(
+            host_link_label(Some("60 GB/s".to_owned()), None, None, None),
+            "60 GB/s"
+        );
     }
 }

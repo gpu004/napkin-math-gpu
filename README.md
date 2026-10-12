@@ -15,8 +15,11 @@ cudarc, CUDA-event timing, CUDA 12.9, driver 580.95.05 on H100 and
 610.57.04 on A100/B200/B300): `H100!:2`, `A100-80GB:2`, `B200:2`, and `B300:2`.
 Each request returned two GPUs; the GPU↔GPU row is a `cuMemcpyPeerAsync` copy
 between them with peer access enabled — NVLink where the hardware has it.
-Host copies ran on A100 at PCIe Gen4 x16, H100 and B200 at Gen5 x16, and B300
-at Gen6 x16, so the host-link rows carry each run's link assumption.
+Host copies ran on A100 at PCIe Gen4 x16, and H100 and B200 at Gen5 x16. B300's
+GPU link trains at Gen6 x16, but `nvidia-smi` reports `Host Max: 5`: each HGX
+B300 GPU connects at Gen6 to the PCIe switch inside its ConnectX-8 NIC, then
+Gen5 x16 to the CPU. B300 host copies are therefore Gen5-bound, like B200 and
+H100.
 
 **Note 1:** Compute figures are dense, not sparse. NVIDIA's headline Tensor
 Core numbers assume structured sparsity; dense is half.
@@ -62,17 +65,17 @@ Read through NVML 13.580.95.05 via nvml-wrapper 0.13 every 5 ms on the GPU that 
 <!-- napkin compare -->
 | GPU | Memory | HBM | Dense BF16 | BF16 ridge | NVLink | Host link | Launch | Basis |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 150 FLOP/B | 600 GB/s | 10 GB/s | 3 μs | measured 2026-10-12 |
-| H100 SXM 80GB | 80 GB | 3 TB/s | 700 TFLOP/s | 230 FLOP/B | 900 GB/s | 50 GB/s | 2 μs | measured 2026-10-12 |
-| B200 SXM 180GB | 180 GB | 6 TB/s | 1 PFLOP/s | 210 FLOP/B | 2 TB/s | 60 GB/s | 3 μs | measured 2026-10-12 |
-| B300 SXM 288GB | 288 GB | 6 TB/s | 1 PFLOP/s | 220 FLOP/B | 2 TB/s | 60 GB/s | 3 μs | measured 2026-10-12 |
+| A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 150 FLOP/B | 600 GB/s | 10 GB/s Gen4 x16 | 3 μs | measured 2026-10-12 |
+| H100 SXM 80GB | 80 GB | 3 TB/s | 700 TFLOP/s | 230 FLOP/B | 900 GB/s | 50 GB/s Gen5 x16 | 2 μs | measured 2026-10-12 |
+| B200 SXM 180GB | 180 GB | 6 TB/s | 1 PFLOP/s | 210 FLOP/B | 2 TB/s | 60 GB/s Gen5 x16 | 3 μs | measured 2026-10-12 |
+| B300 SXM 288GB | 288 GB | 6 TB/s | 1 PFLOP/s | 220 FLOP/B | 2 TB/s | 60 GB/s Gen5 x16 (GPU Gen6) | 4 μs | measured 2026-10-12 |
 
 | GPU | HBM measured / ceiling | BF16 measured / ceiling |
 | --- | ---: | ---: |
 | A100 SXM 80GB | 1740 / 2039 GB/s (85%) | 264 / 312 TFLOP/s (85%) |
 | H100 SXM 80GB | 3002 / 3350 GB/s (90%) | 691 / 990 TFLOP/s (70%) |
 | B200 SXM 180GB | 6414 / 8000 GB/s (80%) | 1325 / 2250 TFLOP/s (59%) |
-| B300 SXM 288GB | 6398 / 8000 GB/s (80%) | 1426 / 2250 TFLOP/s (63%) |
+| B300 SXM 288GB | 6494 / 8000 GB/s (81%) | 1423 / 2250 TFLOP/s (63%) |
 <!-- /napkin -->
 
 Modal request semantics matter: `H100!` pins an H100 — a plain `H100` request

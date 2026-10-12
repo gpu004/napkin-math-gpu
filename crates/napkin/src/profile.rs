@@ -56,9 +56,35 @@ mod tests {
             .replace(r#""pcie_gen_max": 5,"#, "")
             .replace(r#""pcie_width": 16,"#, "")
             .replace(r#""pcie_width_max": 16,"#, "");
-        let measured: napkin_profile::Measured = serde_json::from_str(&json).unwrap();
-        assert_eq!(measured.pcie_gen, None);
-        assert_eq!(measured.pcie_width_max, None);
+        let parsed = serde_json::from_str::<napkin_profile::Measured>(&json);
+        assert!(
+            parsed.is_ok(),
+            "measured profile with missing PCIe fields parses"
+        );
+        if let Ok(measured) = parsed {
+            assert_eq!(measured.pcie_gen, None);
+            assert_eq!(measured.pcie_gen_host_max, None);
+            assert_eq!(measured.pcie_width_max, None);
+        }
+    }
+
+    #[test]
+    fn pcie_effective_gen_is_capped_by_host_max() {
+        let parsed = serde_json::from_str::<napkin_profile::Measured>(include_str!(
+            "../../../profiles/h100.measured.json"
+        ));
+        assert!(parsed.is_ok(), "H100 measured profile fixture parses");
+        if let Ok(mut measured) = parsed {
+            measured.pcie_gen = Some(6);
+            measured.pcie_gen_host_max = Some(5);
+            assert_eq!(measured.pcie_effective_gen(), Some(5));
+
+            measured.pcie_gen_host_max = None;
+            assert_eq!(measured.pcie_effective_gen(), Some(6));
+
+            measured.pcie_gen = None;
+            assert_eq!(measured.pcie_effective_gen(), None);
+        }
     }
 
     #[test]

@@ -465,6 +465,7 @@ mod tests {
                 d2h_gbps: 40.0,
                 pcie_gen: None,
                 pcie_gen_max: None,
+                pcie_gen_host_max: None,
                 pcie_width: None,
                 pcie_width_max: None,
                 h2d_latency_us: Some(5.0),
