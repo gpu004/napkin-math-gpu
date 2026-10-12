@@ -93,7 +93,7 @@ enum Command {
         #[arg(long)]
         check: bool,
         /// Rewrite the file in place (default when neither flag is given).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "check")]
         write: bool,
         /// Markdown file to update.
         #[arg(default_value = "README.md")]
@@ -152,7 +152,7 @@ fn run() -> Result<String, String> {
             extra,
             headroom,
         } => cmd_fit(gpu, params, *bits, extra.as_deref(), *headroom),
-        Command::Readme { check, write, path } => cmd_readme(path, *check, *write),
+        Command::Readme { check, path, .. } => cmd_readme(path, *check),
     }
 }
 
@@ -351,7 +351,7 @@ fn rewrite_markers(content: &str) -> Result<String, String> {
     Ok(out)
 }
 
-fn cmd_readme(path: &std::path::Path, check: bool, write: bool) -> Result<String, String> {
+fn cmd_readme(path: &std::path::Path, check: bool) -> Result<String, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let updated = rewrite_markers(&content)?;
@@ -364,13 +364,10 @@ fn cmd_readme(path: &std::path::Path, check: bool, write: bool) -> Result<String
             path.display()
         ));
     }
-    if write || !check {
-        if updated != content {
-            std::fs::write(path, &updated)
-                .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-            return Ok(format!("{}: napkin blocks updated\n", path.display()));
-        }
-        return Ok(format!("{}: already current\n", path.display()));
+    if updated != content {
+        std::fs::write(path, &updated)
+            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        return Ok(format!("{}: napkin blocks updated\n", path.display()));
     }
-    Ok(String::new())
+    Ok(format!("{}: already current\n", path.display()))
 }
