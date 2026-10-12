@@ -1,7 +1,7 @@
 //! Markdown table rendering for the README "Numbers" section: one
 //! significant digit, sized for memorization rather than faux precision.
 
-use crate::profile::{Dtype, Profile};
+use crate::profile::{Dtype, Measured, Profile};
 use crate::units::{fmt_duration, fmt_gbps, fmt_intensity, fmt_sig, fmt_tflops, round_sig};
 
 const SIG: u32 = 1;
@@ -50,7 +50,7 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
         ],
         [
             "Launch + sync round trip".to_owned(),
-            lat_us(m.sync_us),
+            m.sync_us.map_or_else(String::new, &lat_us),
             String::new(),
             String::new(),
             String::new(),
@@ -64,21 +64,22 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
         ],
         [
             "Host → device, pinned".to_owned(),
-            lat_us(m.h2d_latency_us),
+            m.h2d_latency_us.map_or_else(String::new, &lat_us),
             gbps(m.h2d_gbps),
             mb(m.h2d_gbps),
             gb(m.h2d_gbps),
         ],
         [
             "Device → host, pinned".to_owned(),
-            lat_us(m.d2h_latency_us),
+            m.d2h_latency_us.map_or_else(String::new, &lat_us),
             gbps(m.d2h_gbps),
             mb(m.d2h_gbps),
             gb(m.d2h_gbps),
         ],
         [
             "HBM random read (pointer chase)".to_owned(),
-            format!("{} ns", fmt_sig(m.hbm_latency_ns, sig)),
+            m.hbm_latency_ns
+                .map_or_else(String::new, |ns| format!("{} ns", fmt_sig(ns, sig))),
             String::new(),
             String::new(),
             String::new(),
@@ -125,27 +126,31 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
     );
     emit(&mut out, &["---", "---:", "---:", "---:", "---:"]);
     for dtype in [Dtype::Fp16, Dtype::Bf16, Dtype::Tf32, Dtype::Fp32] {
-        if let Some(&tflops) = m.compute_tflops.get(&dtype) {
-            let rate = if exact {
-                tflops
-            } else {
-                round_sig(tflops, SIG)
-            };
-            let ridge = fmt_intensity(tflops * 1000.0 / m.hbm_gbps, if exact { 4 } else { 2 });
-            let ts = |flops: f64| fmt_duration(flops / (rate * 1e12), sig);
-            emit(
-                &mut out,
-                &[
-                    &dtype.to_string(),
-                    &fmt_tflops(tflops, sig),
-                    &ts(1e9),
-                    &ts(1e12),
-                    &ridge,
-                ],
-            );
-        }
+        emit_gemm_row(&mut out, m, dtype, sig, exact);
     }
     Some(out)
+}
+
+fn emit_gemm_row(out: &mut String, m: &Measured, dtype: Dtype, sig: u32, exact: bool) {
+    if let Some(&tflops) = m.compute_tflops.get(&dtype) {
+        let rate = if exact {
+            tflops
+        } else {
+            round_sig(tflops, SIG)
+        };
+        let ridge = fmt_intensity(tflops * 1000.0 / m.hbm_gbps, if exact { 4 } else { 2 });
+        let ts = |flops: f64| fmt_duration(flops / (rate * 1e12), sig);
+        emit(
+            out,
+            &[
+                &dtype.to_string(),
+                &fmt_tflops(tflops, sig),
+                &ts(1e9),
+                &ts(1e12),
+                &ridge,
+            ],
+        );
+    }
 }
 
 fn basis_label(profile: &Profile) -> String {

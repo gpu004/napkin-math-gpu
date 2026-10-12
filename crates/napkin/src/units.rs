@@ -21,14 +21,12 @@ fn split_unit(s: &str) -> Result<(f64, &str), ParseError> {
         .find(|c: char| c.is_ascii_alphabetic() && c != 'e' && c != 'E')
         .unwrap_or(s.len());
     let (num, unit) = s.split_at(boundary);
-    let (num, unit) = if unit.is_empty()
-        && num.ends_with(['e', 'E'])
-        && num.trim().parse::<f64>().is_err()
-    {
-        num.split_at(num.len() - 1)
-    } else {
-        (num, unit)
-    };
+    let (num, unit) =
+        if unit.is_empty() && num.ends_with(['e', 'E']) && num.trim().parse::<f64>().is_err() {
+            num.split_at(num.len() - 1)
+        } else {
+            (num, unit)
+        };
     let value: f64 = num
         .trim()
         .parse()

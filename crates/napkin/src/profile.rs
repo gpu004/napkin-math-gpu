@@ -92,21 +92,21 @@ pub struct Measured {
     /// Back-to-back empty-kernel launches, event-timed / N.
     pub launch_us: f64,
     /// Launch + stream synchronize round trip, wall clock.
-    pub sync_us: f64,
+    pub sync_us: Option<f64>,
     /// Pinned host memcpy, read+write bytes counted, min(8, cpus) threads.
     pub host_copy_gbps: f64,
     /// 512 MiB pinned async copies, event-timed.
     pub h2d_gbps: f64,
     pub d2h_gbps: f64,
     /// 4-byte synchronous copies, wall clock median.
-    pub h2d_latency_us: f64,
-    pub d2h_latency_us: f64,
+    pub h2d_latency_us: Option<f64>,
+    pub d2h_latency_us: Option<f64>,
     /// 512 MiB device-to-device memcpy, read+write counted (2x).
     pub hbm_gbps: f64,
     /// NVRTC `c[i] = a[i] + b[i]` fp32, 256 MiB per buffer, 3x bytes counted.
     pub elementwise_gbps: f64,
     /// Single-thread pointer chase over a random cycle in a 1 GiB buffer.
-    pub hbm_latency_ns: f64,
+    pub hbm_latency_ns: Option<f64>,
     /// 512 MiB peer copy, slower of the two directions.
     pub g2g_gbps: Option<f64>,
     pub g2g_forward_gbps: Option<f64>,

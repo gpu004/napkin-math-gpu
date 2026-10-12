@@ -185,30 +185,11 @@ pub fn estimate(
     };
     let ridge = compute.tflops * 1000.0 / rates.hbm_gbps;
 
-    let ordered = [
-        (device_s, None),
-        (host_s, Some(Bottleneck::Host)),
-        (h2d_s, Some(Bottleneck::H2d)),
-        (d2h_s, Some(Bottleneck::D2h)),
-        (g2g_s, Some(Bottleneck::Interconnect)),
-        (launch_s, Some(Bottleneck::Launch)),
-    ];
-    let mut bottleneck = if compute_s > memory_s {
-        Bottleneck::Compute
-    } else if memory_s > compute_s {
-        Bottleneck::Memory
-    } else {
-        Bottleneck::Balanced
-    };
-    let mut biggest = device_s;
-    for (seconds, kind) in ordered.iter().skip(1) {
-        if *seconds > biggest {
-            biggest = *seconds;
-            if let Some(kind) = kind {
-                bottleneck = *kind;
-            }
-        }
-    }
+    let bottleneck = bottleneck(
+        [host_s, h2d_s, device_s, g2g_s, d2h_s, launch_s],
+        compute_s,
+        memory_s,
+    );
 
     Ok(Estimate {
         compute_s,
@@ -225,6 +206,34 @@ pub fn estimate(
         bottleneck,
         compute_basis: compute.basis,
     })
+}
+
+fn bottleneck(stages: [f64; 6], compute_s: f64, memory_s: f64) -> Bottleneck {
+    let ordered = [
+        (stages[2], None),
+        (stages[0], Some(Bottleneck::Host)),
+        (stages[1], Some(Bottleneck::H2d)),
+        (stages[4], Some(Bottleneck::D2h)),
+        (stages[3], Some(Bottleneck::Interconnect)),
+        (stages[5], Some(Bottleneck::Launch)),
+    ];
+    let mut winner = if compute_s > memory_s {
+        Bottleneck::Compute
+    } else if memory_s > compute_s {
+        Bottleneck::Memory
+    } else {
+        Bottleneck::Balanced
+    };
+    let mut biggest = stages[2];
+    for (seconds, kind) in ordered.iter().skip(1) {
+        if *seconds > biggest {
+            biggest = *seconds;
+            if let Some(kind) = kind {
+                winner = *kind;
+            }
+        }
+    }
+    winner
 }
 
 #[cfg(test)]
@@ -265,15 +274,15 @@ mod tests {
                 cuda_version: "12.9".to_owned(),
                 rounds: 7,
                 launch_us: 5.0,
-                sync_us: 8.0,
+                sync_us: Some(8.0),
                 host_copy_gbps: 100.0,
                 h2d_gbps: 50.0,
                 d2h_gbps: 40.0,
-                h2d_latency_us: 5.0,
-                d2h_latency_us: 6.0,
+                h2d_latency_us: Some(5.0),
+                d2h_latency_us: Some(6.0),
                 hbm_gbps: 2000.0,
                 elementwise_gbps: 1500.0,
-                hbm_latency_ns: 400.0,
+                hbm_latency_ns: Some(400.0),
                 g2g_gbps: Some(300.0),
                 g2g_forward_gbps: Some(300.0),
                 g2g_reverse_gbps: Some(300.0),
