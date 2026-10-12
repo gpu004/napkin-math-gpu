@@ -1,4 +1,4 @@
-use napkin::profile::Dtype;
+use napkin::profile::{Basis, Dtype};
 use napkin::units::round_sig;
 use napkin::{price, profile};
 use std::process::Command;
@@ -180,6 +180,10 @@ fn same(value: f64, expected: f64) -> bool {
 fn problem_teaching_constants_match_profiles() -> Result<(), Box<dyn std::error::Error>> {
     let problems = problems()?;
     let h100 = profile::find("h100").ok_or("missing h100 profile")?;
+    let h2d = h100
+        .rates(false)
+        .h2d
+        .ok_or("h100 has no published h2d rate")?;
     let measured = h100
         .measured
         .as_ref()
@@ -199,6 +203,10 @@ fn problem_teaching_constants_match_profiles() -> Result<(), Box<dyn std::error:
         .get(&Dtype::Bf16)
         .ok_or("h100 has no bf16 ceiling")?;
     let price = price::find("modal-h100").ok_or("missing modal-h100 price")?;
+    let h2d_row =
+        "| Host → device, `P` | 56 GB/s | NVBandwidth CE 512 MiB pinned copy, PCIe Gen5 x16 |";
+    assert_eq!(h2d.basis, Basis::Nvbandwidth);
+    assert!(h2d_row.contains("NVBandwidth CE"));
     for (text, value, pinned) in [
         (
             "| HBM bandwidth, `M` | 3 TB/s |",
@@ -235,11 +243,7 @@ fn problem_teaching_constants_match_profiles() -> Result<(), Box<dyn std::error:
             h100.ceiling.hbm_gbps,
             3350.0,
         ),
-        (
-            "| Host → device, `P` | 54 GB/s |",
-            round_sig(measured.h2d_gbps, 2),
-            54.0,
-        ),
+        (h2d_row, round_sig(h2d.gbps, 2), 56.0),
         (
             "| Fixed cost per copy, `L_copy` | 9 μs |",
             round_sig(h2d_latency_us, 1),
@@ -299,7 +303,7 @@ fn problem_answers_follow_from_teaching_constants() -> Result<(), Box<dyn std::e
     const GIB: f64 = 1_073_741_824.0;
     const M: f64 = 3e12;
     const F: f64 = 690e12;
-    const P: f64 = 54e9;
+    const P: f64 = 56e9;
     const L_COPY: f64 = 9e-6;
     const L_LAUNCH: f64 = 2e-6;
     const USABLE: f64 = 72e9;
@@ -353,7 +357,7 @@ fn problem_answers_follow_from_teaching_constants() -> Result<(), Box<dyn std::e
             1,
             0.7,
         ),
-        ("9 μs × 54 GB/s ≈ 490 KB", L_COPY * P / 1e3, 2, 490.0),
+        ("9 μs × 56 GB/s ≈ 500 KB", L_COPY * P / 1e3, 2, 500.0),
         (
             "F / M = 690 × 10¹² / 3 × 10¹² ≈ 230  FLOP/B",
             ridge,
