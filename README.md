@@ -233,7 +233,9 @@ reaching for a universal tokens-per-second rule.
 The working set does not fit one H100, so both estimates are hypothetical
 single-GPU numbers. By capacity alone, `fit` needs at least 3 GPUs. That divides
 the weights and KV, not the per-GPU runtime memory, and dividing the 49 ms step
-by 3 is not a speedup until a communication term (`--g2g`) is added.
+by 3 is not a speedup until the communication is added;
+[Tensor parallelism](#tensor-parallelism-device-work-plus-communication) below
+does that with measured NCCL curves.
 
 Feed the printed calls to the existing commands:
 
@@ -272,6 +274,39 @@ device      49 ms
 total       49 ms   memory-bound
 ```
 <!-- /napkin -->
+
+### Tensor parallelism: device work plus communication
+
+Eight H100s hold the 147 GB working set. With Megatron-style tensor
+parallelism each GPU reads an eighth of the weights and KV per decode step,
+140 GB / 8 + 6.71 GB / 8 = 18.3 GB, and does an eighth of the FLOPs:
+
+<!-- napkin example estimate --gpu h100 --dtype bf16 --flops 146G --bytes 18.3GB -->
+<!-- /napkin -->
+
+Sharding adds communication one GPU never did. Each of the 80 layers ends its
+attention block and its MLP block with an AllReduce of the activations:
+batch 8 × hidden 8192 × 2 bytes = 128 KiB per GPU, 160 AllReduces per step.
+Their cost comes from an NCCL Tests curve measured on exactly this setup, eight
+H100s on NVLink:
+
+<!-- napkin example collective --gpu h100 --count 8 --topology nvlink --op all-reduce --bytes 128KiB -->
+<!-- /napkin -->
+
+```text
+device         6.1 ms    18.3 GB per GPU at the measured HBM rate
+communication  6.2 ms    160 AllReduces × 38.9 μs, latency regime
+total          12 ms     serial: each AllReduce waits for its layer's output
+```
+
+Eight GPUs give about 4x over the hypothetical one-GPU 49 ms, not 8x, and at
+this batch communication is half the step. The 128 KiB AllReduce sits in the
+latency regime of the curve: dividing it by the 479 GB/s bus bandwidth NCCL
+reaches at 4 GiB would claim 0.48 μs, 80x too fast. The 395 GB/s peer-copy
+rate and the 900 GB/s datasheet NVLink figure answer different questions and
+are not used. The same message costs 11.1 μs on two H100s, but two GPUs cannot
+hold this working set, and `napkin collective` refuses counts and topologies
+it has no curve for (`--count 4` is an error) rather than scaling a curve.
 
 ## Cost
 
@@ -407,6 +442,8 @@ napkin cost --gpus 2 --time 10s --price 3       # or --offer modal-h100
             [--utilization 0.5] [--startup 30s] [--idle 60s] [--granularity 1s]
             [--work 25K | --throughput 2.5K] [--unit tokens]
 napkin prices                                     # dated price records and their age
+napkin collective --gpu h100 --count 2 --topology nvlink --op all-reduce
+                   --bytes 16KiB [--dtype bf16]       # NCCL Tests curves only
 napkin readme --write README.md                   # regenerate the marker blocks
 ```
 
@@ -437,6 +474,15 @@ napkin readme --write README.md         # refreshes the tables
 - `g2g_latency_us`: 4-byte peer copy plus stream synchronize, wall clock.
 - `compute_tflops`: cuBLAS GemmEx 8192³, `2·N³` FLOPs counted, validated
   against a CPU float64 reference per dtype.
+
+Collective curves come from NVIDIA NCCL Tests, also run on Modal:
+
+```sh
+modal run modal/nccl.py --gpu h100 --count 2   # writes profiles/nccl-tests/h100x2/
+```
+
+See [BENCHMARKS.md](BENCHMARKS.md#nccl-tests) for what is recorded and how
+`napkin collective` reads the curve.
 
 ## Techniques
 
