@@ -84,8 +84,8 @@ mod tests {
 
     #[test]
     fn seventy_b_bf16_needs_two_h100s() {
-        let h100 = find("h100").unwrap().unwrap();
-        let f = fit(&h100, 70e9, 16.0, 0.0, 0.1).unwrap();
+        let h100 = find("h100").unwrap();
+        let f = fit(h100, 70e9, 16.0, 0.0, 0.1).unwrap();
         assert!((f.weight_bytes - 140e9).abs() < 1.0);
         assert!(!f.fits_one);
         assert_eq!(f.min_gpus, 2);
@@ -93,17 +93,17 @@ mod tests {
 
     #[test]
     fn small_model_fits_one_gpu() {
-        let h100 = find("h100").unwrap().unwrap();
-        let f = fit(&h100, 7e9, 16.0, 0.0, 0.1).unwrap();
+        let h100 = find("h100").unwrap();
+        let f = fit(h100, 7e9, 16.0, 0.0, 0.1).unwrap();
         assert!(f.fits_one);
         assert_eq!(f.min_gpus, 1);
     }
 
     #[test]
     fn rejects_bad_inputs() {
-        let h100 = find("h100").unwrap().unwrap();
-        assert!(fit(&h100, 0.0, 16.0, 0.0, 0.1).is_err());
-        assert!(fit(&h100, 7e9, 16.0, 0.0, 1.0).is_err());
-        assert!(fit(&h100, 7e9, f64::NAN, 0.0, 0.1).is_err());
+        let h100 = find("h100").unwrap();
+        assert!(fit(h100, 0.0, 16.0, 0.0, 0.1).is_err());
+        assert!(fit(h100, 7e9, 16.0, 0.0, 1.0).is_err());
+        assert!(fit(h100, 7e9, f64::NAN, 0.0, 0.1).is_err());
     }
 }

@@ -203,7 +203,7 @@ name = "napkin"
 version = "0.0.0"
 dependencies = [
  "clap",
- "serde",
+ "napkin-profile",
  "serde_json",
 ]
 
@@ -213,8 +213,16 @@ version = "0.0.0"
 dependencies = [
  "cudarc",
  "half",
- "napkin",
+ "napkin-profile",
  "serde_json",
+]
+
+[[package]]
+name = "napkin-profile"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "serde",
 ]
 
 [[package]]

@@ -170,7 +170,7 @@ notes. Measured calibrations live in `profiles/<id>.measured.json`, produced by
 - H100: [profile](profiles/h100.json) · [measured](profiles/h100.measured.json)
 - A100: [profile](profiles/a100.json) · [measured](profiles/a100.measured.json)
 
-The `napkin::profile` types are the shared contract between the estimator
+The `napkin-profile` types are the shared contract between the estimator
 crate and the `napkin-bench` producer. The measured files must be replaced
 metric-by-metric by the source policy above before being called canonical.
 

@@ -117,9 +117,9 @@ fn main() -> ExitCode {
 fn run() -> Result<String, String> {
     let cli = Cli::parse();
     match &cli.command {
-        Command::Gpus => cmd_gpus(),
+        Command::Gpus => Ok(cmd_gpus()),
         Command::Table { gpu, exact } => cmd_table(gpu, *exact),
-        Command::Compare { exact } => cmd_compare(*exact),
+        Command::Compare { exact } => Ok(cmd_compare(*exact)),
         Command::Estimate {
             gpu,
             dtype,
@@ -156,16 +156,13 @@ fn run() -> Result<String, String> {
     }
 }
 
-fn get_profile(id: &str) -> Result<Profile, String> {
-    profile::find(id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("unknown GPU {id:?}; try `napkin gpus`"))
+fn get_profile(id: &str) -> Result<&'static Profile, String> {
+    profile::find(id).ok_or_else(|| format!("unknown GPU {id:?}; try `napkin gpus`"))
 }
 
-fn cmd_gpus() -> Result<String, String> {
-    let profiles = profile::builtin().map_err(|e| e.to_string())?;
+fn cmd_gpus() -> String {
     let mut out = String::new();
-    for p in &profiles {
+    for p in profile::builtin() {
         let basis = match &p.measured {
             Some(m) => format!("measured {}", &m.captured_at[..10.min(m.captured_at.len())]),
             None => "datasheet".to_owned(),
@@ -176,18 +173,17 @@ fn cmd_gpus() -> Result<String, String> {
             p.id, p.name, p.memory_gb, p.modal_gpu, basis
         );
     }
-    Ok(out)
+    out
 }
 
 fn cmd_table(gpu: &str, exact: bool) -> Result<String, String> {
     let p = get_profile(gpu)?;
-    napkin::table::numbers(&p, exact)
+    napkin::table::numbers(p, exact)
         .ok_or_else(|| format!("{gpu} has no measured profile; run napkin-bench on it"))
 }
 
-fn cmd_compare(exact: bool) -> Result<String, String> {
-    let profiles = profile::builtin().map_err(|e| e.to_string())?;
-    Ok(napkin::table::compare(&profiles, exact))
+fn cmd_compare(exact: bool) -> String {
+    napkin::table::compare(profile::builtin(), exact)
 }
 
 fn opt_bytes(value: Option<&str>) -> Result<f64, String> {
@@ -229,7 +225,7 @@ fn cmd_estimate(
     } else {
         Mode::Serial
     };
-    let e = estimate::estimate(&p, &workload, mode, ceiling).map_err(|e| e.to_string())?;
+    let e = estimate::estimate(p, &workload, mode, ceiling).map_err(|e| e.to_string())?;
 
     let basis = match (&p.measured, ceiling) {
         (Some(m), false) => format!("measured {}", &m.captured_at[..10.min(m.captured_at.len())]),
@@ -279,7 +275,7 @@ fn cmd_fit(
 ) -> Result<String, String> {
     let p = get_profile(gpu)?;
     let f = fit::fit(
-        &p,
+        p,
         units::parse_count(params).map_err(|e| e.to_string())?,
         bits,
         opt_bytes(extra)?,
@@ -319,7 +315,7 @@ fn render_marker(command: &str) -> Result<String, String> {
     let tokens: Vec<&str> = command.split_whitespace().collect();
     match tokens.as_slice() {
         ["table", "--gpu", gpu] => cmd_table(gpu, false),
-        ["compare"] => cmd_compare(false),
+        ["compare"] => Ok(cmd_compare(false)),
         _ => Err(format!("unsupported marker command {command:?}")),
     }
 }
