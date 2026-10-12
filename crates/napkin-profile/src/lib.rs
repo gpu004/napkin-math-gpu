@@ -79,7 +79,7 @@ impl Profile {
     /// Resolves the rates used for estimation: measured values when a measured
     /// profile is attached, else datasheet ceilings. `force_ceiling` implements
     /// `--ceiling`. GPU-to-GPU falls back to the `NVLink` ceiling when unmeasured;
-    /// host-link and launch rates have no datasheet fallback.
+    /// host-link, launch, and copy-latency figures have no datasheet fallback.
     #[must_use]
     pub fn rates(&self, force_ceiling: bool) -> Rates {
         let mut compute_tflops = BTreeMap::new();
@@ -106,6 +106,9 @@ impl Profile {
                 d2h_gbps: Some(m.d2h_gbps),
                 host_copy_gbps: Some(m.host_copy_gbps),
                 g2g_gbps: m.g2g_gbps.unwrap_or(self.ceiling.nvlink_gbps),
+                h2d_latency_us: m.h2d_latency_us,
+                d2h_latency_us: m.d2h_latency_us,
+                g2g_latency_us: m.g2g_latency_us,
                 launch_us: Some(m.launch_us),
                 basis: Basis::Measured,
             };
@@ -126,6 +129,9 @@ impl Profile {
             d2h_gbps: None,
             host_copy_gbps: None,
             g2g_gbps: self.ceiling.nvlink_gbps,
+            h2d_latency_us: None,
+            d2h_latency_us: None,
+            g2g_latency_us: None,
             launch_us: None,
             basis: Basis::Ceiling,
         }
@@ -166,7 +172,10 @@ pub struct Measured {
     pub pcie_width: Option<u8>,
     #[serde(default)]
     pub pcie_width_max: Option<u8>,
-    /// 4-byte synchronous copies, wall clock median.
+    /// 4-byte synchronous copies, wall clock median: issuing one copy, the
+    /// copy itself, and the stream synchronize that waits for it. It is a
+    /// different quantity from `h2d_gbps`: the bandwidth rows are event-timed
+    /// on the GPU and exclude the host round trip.
     pub h2d_latency_us: Option<f64>,
     pub d2h_latency_us: Option<f64>,
     /// 512 MiB device-to-device memcpy, read+write counted (2x).
@@ -179,7 +188,8 @@ pub struct Measured {
     pub g2g_gbps: Option<f64>,
     pub g2g_forward_gbps: Option<f64>,
     pub g2g_reverse_gbps: Option<f64>,
-    /// 4-byte peer copy, synchronous, wall clock median.
+    /// 4-byte peer copy plus stream synchronize, wall clock median; same
+    /// convention as `h2d_latency_us`.
     pub g2g_latency_us: Option<f64>,
     /// cuBLAS `GemmEx` 8192^3 (fp16, bf16, tf32, fp32).
     pub compute_tflops: BTreeMap<Dtype, f64>,
@@ -223,6 +233,11 @@ pub struct Rates {
     pub d2h_gbps: Option<f64>,
     pub host_copy_gbps: Option<f64>,
     pub g2g_gbps: f64,
+    /// Fixed cost of one synchronous copy (see `Measured::h2d_latency_us`).
+    /// `None` means unmeasured, never zero.
+    pub h2d_latency_us: Option<f64>,
+    pub d2h_latency_us: Option<f64>,
+    pub g2g_latency_us: Option<f64>,
     pub launch_us: Option<f64>,
     pub basis: Basis,
 }

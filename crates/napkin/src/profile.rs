@@ -70,6 +70,8 @@ mod tests {
         assert_eq!(rates.basis, Basis::Ceiling);
         assert!(rates.h2d_gbps.is_none());
         assert!(rates.launch_us.is_none());
+        assert!(rates.h2d_latency_us.is_none());
+        assert!(rates.g2g_latency_us.is_none());
         assert!((rates.g2g_gbps - b200.ceiling.nvlink_gbps).abs() < f64::EPSILON);
     }
 }

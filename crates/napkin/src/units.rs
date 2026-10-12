@@ -207,6 +207,16 @@ pub fn fmt_duration(seconds: f64, sig: u32) -> String {
     }
 }
 
+/// Formats a decimal byte count as B/KB/MB/GB/TB at `sig` significant digits.
+#[must_use]
+pub fn fmt_bytes(bytes: f64, sig: u32) -> String {
+    let (scale, unit) = [(1e12, "TB"), (1e9, "GB"), (1e6, "MB"), (1e3, "KB")]
+        .into_iter()
+        .find(|(scale, _)| bytes.abs() >= *scale)
+        .unwrap_or((1.0, "B"));
+    format!("{} {unit}", fmt_sig(bytes / scale, sig))
+}
+
 /// Formats a GB/s rate, promoting to TB/s above 1,000.
 #[must_use]
 pub fn fmt_gbps(gbps: f64, sig: u32) -> String {
@@ -283,7 +293,11 @@ mod tests {
     fn formats_durations_and_rates() {
         assert_eq!(fmt_duration(0.29, 2), "290 ms");
         assert_eq!(fmt_duration(4.66e-6, 1), "5 μs");
+        assert_eq!(fmt_duration(4.4e-12, 2), "0.0044 ns");
         assert_eq!(fmt_gbps(3000.0, 1), "3 TB/s");
+        assert_eq!(fmt_bytes(4.0, 2), "4 B");
+        assert_eq!(fmt_bytes(2.5e6, 2), "2.5 MB");
+        assert_eq!(fmt_bytes(2e9, 2), "2 GB");
         assert_eq!(fmt_gbps(55.0, 1), "60 GB/s");
         assert_eq!(fmt_tflops(717.0, 1), "700 TFLOP/s");
         assert_eq!(fmt_tflops(2250.0, 1), "2 PFLOP/s");
