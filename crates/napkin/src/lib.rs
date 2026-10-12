@@ -12,3 +12,4 @@ pub mod price;
 pub mod profile;
 pub mod table;
 pub mod units;
+pub mod validation;

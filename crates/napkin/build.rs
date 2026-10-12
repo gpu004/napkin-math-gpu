@@ -49,6 +49,13 @@ struct ProfilePaths {
     measured: BTreeMap<String, PathBuf>,
 }
 
+#[derive(Debug)]
+struct ValidationCasePaths {
+    id: String,
+    observation_file: String,
+    source_files: Vec<String>,
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -87,7 +94,108 @@ fn run() -> Result<(), String> {
     let output = Path::new(&out_dir).join("prices.rs");
     fs::write(&output, emit_prices(&prices)?)
         .map_err(|error| format!("cannot write {}: {error}", output.display()))?;
+    let validation_dir = Path::new(&manifest_dir).join("../../validation");
+    println!("cargo:rerun-if-changed={}", validation_dir.display());
+    let validation_cases = load_validation_cases(&validation_dir)?;
+    let output = Path::new(&out_dir).join("validation.rs");
+    fs::write(&output, emit_validation_cases(&validation_cases))
+        .map_err(|error| format!("cannot write {}: {error}", output.display()))?;
     Ok(())
+}
+
+fn load_validation_cases(validation_dir: &Path) -> Result<Vec<ValidationCasePaths>, String> {
+    let entries = fs::read_dir(validation_dir)
+        .map_err(|error| format!("cannot read {}: {error}", validation_dir.display()))?;
+    let mut paths = entries
+        .map(|entry| {
+            entry.map(|entry| entry.path()).map_err(|error| {
+                format!("cannot read entry in {}: {error}", validation_dir.display())
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    paths.sort();
+    let mut cases = Vec::new();
+    for case_dir in paths.into_iter().filter(|path| path.is_dir()) {
+        let id = case_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("validation case path {} is not UTF-8", case_dir.display()))?
+            .to_owned();
+        let case_path = case_dir.join("case.json");
+        require_validation_file(&case_path, &id)?;
+        let case_json = fs::read_to_string(&case_path)
+            .map_err(|error| format!("cannot read {}: {error}", case_path.display()))?;
+        let case: serde_json::Value = serde_json::from_str(&case_json)
+            .map_err(|error| format!("invalid case JSON in {}: {error}", case_path.display()))?;
+        let observation_file = case
+            .get("observation")
+            .and_then(|observation| observation.get("file"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                format!(
+                    "{} must declare observation.file as a string",
+                    case_path.display()
+                )
+            })?;
+        let mut components = Path::new(observation_file).components();
+        if !matches!(
+            (components.next(), components.next()),
+            (Some(std::path::Component::Normal(_)), None)
+        ) {
+            return Err(format!(
+                "{} declares invalid observation.file {observation_file:?}; expected a filename",
+                case_path.display()
+            ));
+        }
+        let run_path = case_dir.join("run.json");
+        let observation_path = case_dir.join(observation_file);
+        let finding_path = case_dir.join("finding.md");
+        for path in [&run_path, &observation_path, &finding_path] {
+            require_validation_file(path, &id)?;
+        }
+        let mut source_files = vec!["case.json".to_owned(), "run.json".to_owned()];
+        source_files.push(observation_file.to_owned());
+        for name in [
+            "nvidia-smi.csv",
+            "timer.txt",
+            "profiler.txt",
+            "followup.json",
+        ] {
+            if case_dir.join(name).is_file() && !source_files.iter().any(|file| file == name) {
+                source_files.push(name.to_owned());
+            }
+        }
+        cases.push(ValidationCasePaths {
+            id,
+            observation_file: observation_file.to_owned(),
+            source_files,
+        });
+    }
+    Ok(cases)
+}
+
+fn require_validation_file(path: &Path, id: &str) -> Result<(), String> {
+    if path.is_file() {
+        Ok(())
+    } else {
+        Err(format!(
+            "validation case {id:?} is missing required file {}",
+            path.display()
+        ))
+    }
+}
+
+fn emit_validation_cases(cases: &[ValidationCasePaths]) -> String {
+    let mut generated = String::from("static GENERATED_VALIDATION_CASES: &[EmbeddedCase] = &[\n");
+    for case in cases {
+        let _ = writeln!(
+            generated,
+            "    EmbeddedCase {{ id: {:?}, case_json: include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../validation/{}/case.json\")), run_json: include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../validation/{}/run.json\")), observation_json: include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../validation/{}/{}\")), finding: include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../validation/{}/finding.md\")), source_files: &{:?} }},",
+            case.id, case.id, case.id, case.id, case.observation_file, case.id, case.source_files
+        );
+    }
+    generated.push_str("];\n");
+    generated
 }
 
 fn load_prices(prices_dir: &Path) -> Result<Vec<PriceRecordInput>, String> {

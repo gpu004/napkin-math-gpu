@@ -41,6 +41,59 @@ fn readme_napkin_blocks_match_renderers() {
 }
 
 #[test]
+fn validation_report_matches_cli_output() {
+    let expected =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../VALIDATION.md"))
+            .expect("VALIDATION.md must exist at the repo root");
+    let output = Command::new(env!("CARGO_BIN_EXE_napkin"))
+        .arg("validate")
+        .output()
+        .expect("napkin validate must run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+}
+
+#[test]
+fn validation_estimate_examples_match_cli_output() -> Result<(), Box<dyn std::error::Error>> {
+    let report =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../VALIDATION.md"))?;
+    let lines = report.lines().collect::<Vec<_>>();
+    let mut examples = 0;
+    for (index, line) in lines.iter().enumerate() {
+        let Some(command) = line.strip_prefix("$ napkin estimate ") else {
+            continue;
+        };
+        let output = Command::new(env!("CARGO_BIN_EXE_napkin"))
+            .args(std::iter::once("estimate").chain(command.split_whitespace()))
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let expected = lines[index + 1..]
+            .iter()
+            .take_while(|candidate| **candidate != "```")
+            .fold(String::new(), |mut expected, line| {
+                expected.push_str(line);
+                expected.push('\n');
+                expected
+            });
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+        examples += 1;
+    }
+    assert_eq!(
+        examples, 3,
+        "expected one estimate command per validation case"
+    );
+    Ok(())
+}
+
+#[test]
 fn readme_cost_examples_match_cli() {
     let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))
         .expect("README.md must exist at the repo root");

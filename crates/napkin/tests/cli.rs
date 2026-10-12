@@ -342,6 +342,55 @@ fn readme_check_preserves_stale_file() -> Result<(), Box<dyn std::error::Error>>
 }
 
 #[test]
+fn validate_renders_committed_case_numbers() {
+    let (stdout, stderr, code) = napkin(&["validate"]);
+    assert_eq!(code, 0, "{stderr}");
+    for row in [
+        "| [h100-gemm-bf16](#h100-gemm-bf16) | 11 ms | compute-bound | 11 ms | 1.01 | 0.80–1.25 | within |",
+        "| [h100-pcie-roundtrip](#h100-pcie-roundtrip) | 630 ms | h2d-bound | 3.7 s | 5.90 | 0.90–1.10 | outside (slower) |",
+        "| [h100-tiny-kernels](#h100-tiny-kernels) | 17 ms | launch-bound | 62 ms | 3.64 | 0.50–2.00 | outside (slower) |",
+    ] {
+        assert!(
+            stdout.contains(row),
+            "missing literal row {row:?}:\n{stdout}"
+        );
+    }
+    for literal in [
+        "89 samples × 10 runs per sample",
+        "14.4814 GB/s",
+        "6.76848 GB/s",
+        "| profiled_cuda_kernels | 10000 |",
+    ] {
+        assert!(stdout.contains(literal), "missing {literal:?}:\n{stdout}");
+    }
+}
+
+#[test]
+fn validate_check_preserves_stale_file() -> Result<(), Box<dyn std::error::Error>> {
+    let path = stale_readme("validation-check", "stale report\n")?;
+    let original = fs::read_to_string(&path.0)?;
+    let path_arg = path.0.to_string_lossy();
+    let (_, stderr, code) = napkin(&["validate", "--check", path_arg.as_ref()]);
+    assert_ne!(code, 0, "{stderr}");
+    assert!(stderr.contains("validation report is stale"), "{stderr}");
+    assert_eq!(fs::read_to_string(&path.0)?, original);
+    Ok(())
+}
+
+#[test]
+fn validate_write_generates_checkable_report() -> Result<(), Box<dyn std::error::Error>> {
+    let path = stale_readme("validation-write", "")?;
+    let path_arg = path.0.to_string_lossy();
+    let (_, stderr, code) = napkin(&["validate", "--write", path_arg.as_ref()]);
+    assert_eq!(code, 0, "{stderr}");
+    let report = fs::read_to_string(&path.0)?;
+    assert!(report.starts_with("# Validation: napkin estimates against real runs\n"));
+    let (_, stderr, code) = napkin(&["validate", "--check", path_arg.as_ref()]);
+    assert_eq!(code, 0, "{stderr}");
+    Ok(())
+}
+
+#[test]
 fn readme_rewrites_stale_file() -> Result<(), Box<dyn std::error::Error>> {
     let path = stale_readme(
         "rewrite",
