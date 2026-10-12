@@ -1,8 +1,13 @@
 //! Markdown table rendering for the README "Numbers" section: one
 //! significant digit, sized for memorization rather than faux precision.
 
+use std::fmt::Write as _;
+
+use crate::price::PriceRecord;
 use crate::profile::{Dtype, Measured, Profile};
-use crate::units::{fmt_duration, fmt_gbps, fmt_intensity, fmt_sig, fmt_tflops, round_sig};
+use crate::units::{
+    fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_sig, fmt_tflops, round_sig,
+};
 
 const SIG: u32 = 1;
 
@@ -21,6 +26,85 @@ fn row(cells: &[&str]) -> String {
 fn emit(out: &mut String, cells: &[&str]) {
     out.push_str(&row(cells));
     out.push('\n');
+}
+
+/// Renders dated price records and groups records with the same note.
+#[must_use]
+pub fn prices(records: &[PriceRecord]) -> String {
+    let mut out = String::new();
+    emit(
+        &mut out,
+        &[
+            "Record",
+            "Provider",
+            "SKU",
+            "GPU",
+            "Price",
+            "Per GPU-hour",
+            "Terms",
+            "Dated",
+            "Source",
+        ],
+    );
+    emit(
+        &mut out,
+        &[
+            "---", "---", "---", "---", "---:", "---:", "---", "---", "---",
+        ],
+    );
+    let mut notes: Vec<(&str, Vec<&str>)> = Vec::new();
+    for record in records {
+        let price = if record.currency == "USD" {
+            format!("${}/{per}", record.amount, per = record.per)
+        } else {
+            format!(
+                "{} {}/{per}",
+                record.amount,
+                record.currency,
+                per = record.per
+            )
+        };
+        let terms = if record.preemptible {
+            format!("{}, preemptible", record.terms)
+        } else {
+            record.terms.to_string()
+        };
+        let source_text = record
+            .source
+            .strip_prefix("https://")
+            .unwrap_or(record.source);
+        let source = format!("[{source_text}]({})", record.source);
+        let id = format!("`{}`", record.id);
+        emit(
+            &mut out,
+            &[
+                &id,
+                record.provider,
+                record.sku,
+                record.gpu,
+                &price,
+                &fmt_money(record.per_gpu_hour(), record.currency),
+                &terms,
+                &record.date.to_string(),
+                &source,
+            ],
+        );
+        if let Some((_, ids)) = notes.iter_mut().find(|(note, _)| *note == record.note) {
+            ids.push(record.id);
+        } else {
+            notes.push((record.note, vec![record.id]));
+        }
+    }
+    out.push('\n');
+    for (note, ids) in notes {
+        let ids = ids
+            .iter()
+            .map(|id| format!("`{id}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "- {ids}: {note}");
+    }
+    out
 }
 
 /// Renders the two "Numbers" tables (data movement + dense GEMM) for a

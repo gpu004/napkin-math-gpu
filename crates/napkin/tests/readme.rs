@@ -1,4 +1,5 @@
-use napkin::profile;
+use napkin::{price, profile};
+use std::process::Command;
 
 #[test]
 fn readme_napkin_blocks_match_renderers() {
@@ -14,6 +15,10 @@ fn readme_napkin_blocks_match_renderers() {
         (
             "<!-- napkin compare -->",
             napkin::table::compare(all, false),
+        ),
+        (
+            "<!-- napkin prices -->",
+            napkin::table::prices(price::builtin()),
         ),
     ];
     for (marker, body) in expected_blocks {
@@ -31,4 +36,48 @@ fn readme_napkin_blocks_match_renderers() {
             "README marker {marker} is stale; run `napkin readme --write README.md`"
         );
     }
+}
+
+#[test]
+fn readme_cost_examples_match_cli() {
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))
+        .expect("README.md must exist at the repo root");
+    let mut in_text_block = false;
+    let mut examples = 0;
+    for line in readme.lines() {
+        if line == "```text" {
+            in_text_block = true;
+            continue;
+        }
+        if line == "```" {
+            in_text_block = false;
+            continue;
+        }
+        if !in_text_block || !line.starts_with("$ napkin cost ") {
+            continue;
+        }
+        let args = line.split_whitespace().skip(2).collect::<Vec<_>>();
+        let output = Command::new(env!("CARGO_BIN_EXE_napkin"))
+            .args(args)
+            .output()
+            .expect("napkin binary must run");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let expected = readme
+            .lines()
+            .skip_while(|candidate| *candidate != line)
+            .skip(1)
+            .take_while(|candidate| !candidate.starts_with("$ ") && *candidate != "```")
+            .fold(String::new(), |mut output, line| {
+                output.push_str(line);
+                output.push('\n');
+                output
+            });
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+        examples += 1;
+    }
+    assert!(examples >= 2, "expected at least two README cost examples");
 }

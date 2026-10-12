@@ -138,6 +138,120 @@ total       47 ms   memory-bound
 Memory-bound: about 50 ms/token on one GPU's bandwidth, and it splits roughly
 linearly across tensor-parallel GPUs (plus communication).
 
+## Cost
+
+The fastest GPU is not always the cheapest way to finish a job. You pay for
+billed wall time on every GPU you rent, not for FLOPs:
+
+```text
+running   = busy / utilization
+wall      = startup + running + idle
+billed    = wall, rounded up to the billing increment
+cost      = GPUs × billed hours × price per GPU-hour
+useful    = busy / billed
+work / $  = work / cost
+```
+
+`busy` is the time the job keeps each GPU working at the rate you modelled,
+such as `napkin estimate`'s total. `utilization` is the fraction of its on-GPU
+time the job actually sustains that rate: stalls, gaps between requests, and
+kernels too small to fill the GPU all lower it. Startup, idle time, and
+rounding up to the billing increment are paid for without doing work.
+`napkin cost` takes each of these as a flag and has no built-in price: pass
+`--price` per GPU-hour, or `--offer` one of the dated records below.
+
+A 10-second job on two GPUs at $3/GPU-hour:
+
+```text
+$ napkin cost --gpus 2 --price 3 --time 10s
+2 GPUs · $3/GPU-hour (--price)
+busy        10 s per GPU (--time)
+utilization 100% (default; pass --utilization)
+running     10 s = busy / utilization
+startup     0 s (default; pass --startup)
+idle        0 s (default; pass --idle)
+wall        10 s = startup + running + idle
+billed      10 s per GPU (exact; pass --granularity)
+GPU-hours   0.00556 = 2 GPUs × billed
+cost        $0.0167 per job
+useful      100% of billed GPU time is busy
+work        none (pass --work or --throughput: a workload rate, never peak FLOPs)
+```
+
+The same job with a 30-second cold start, a minute kept warm afterwards, and
+per-minute billing costs 12x as much:
+
+```text
+$ napkin cost --gpus 2 --price 3 --time 10s --startup 30s --idle 60s --granularity 60s
+2 GPUs · $3/GPU-hour (--price)
+busy        10 s per GPU (--time)
+utilization 100% (default; pass --utilization)
+running     10 s = busy / utilization
+startup     30 s (--startup)
+idle        60 s (--idle)
+wall        100 s = startup + running + idle
+billed      120 s per GPU (rounded up to 60 s)
+GPU-hours   0.0667 = 2 GPUs × billed
+cost        $0.2 per job
+useful      8.3% of billed GPU time is busy
+work        none (pass --work or --throughput: a workload rate, never peak FLOPs)
+```
+
+Tokens per dollar needs a workload rate: `--work 25K --unit tokens` for what
+the job completes, or `--throughput 2.5K --unit tokens` for its measured rate
+while busy. `napkin cost` never derives work from peak FLOPs. The GPU count is
+also yours to choose: `napkin fit`'s "at least 2 GPUs" is a capacity floor,
+not a runtime. Two GPUs halve `--time` only if your estimate of the split,
+communication included, says so.
+
+### Price records
+
+Dated list prices live in `prices/*.json`, apart from the hardware profiles.
+Each record names the provider, SKU, currency, date, source URL, and
+on-demand versus spot terms. `napkin prices` prints each record's age and
+flags any older than 90 days as stale; re-check the source before relying on
+one.
+
+<!-- napkin prices -->
+| Record | Provider | SKU | GPU | Price | Per GPU-hour | Terms | Dated | Source |
+| --- | --- | --- | --- | ---: | ---: | --- | --- | --- |
+| `modal-a100` | Modal | Nvidia A100, 80 GB | a100 | $0.000694/s | $2.5 | on-demand, preemptible | 2026-10-12 | [modal.com/pricing](https://modal.com/pricing) |
+| `modal-h100` | Modal | Nvidia H100 SXM5 | h100 | $0.001097/s | $3.95 | on-demand, preemptible | 2026-10-12 | [modal.com/pricing](https://modal.com/pricing) |
+| `modal-b200` | Modal | Nvidia B200 | b200 | $0.001736/s | $6.25 | on-demand, preemptible | 2026-10-12 | [modal.com/pricing](https://modal.com/pricing) |
+| `modal-b300` | Modal | Nvidia B300 | b300 | $0.001972/s | $7.1 | on-demand, preemptible | 2026-10-12 | [modal.com/pricing](https://modal.com/pricing) |
+
+- `modal-a100`, `modal-h100`, `modal-b200`, `modal-b300`: Serverless base price, billed per second. Region selection adds 1.15-1.75x (https://modal.com/docs/guide/region-selection); GPU functions can be preempted (https://modal.com/docs/guide/preemption).
+<!-- /napkin -->
+
+### Utilization can reverse a price-performance ranking
+
+Ranked by datasheet dense BF16 per dollar at the Modal prices above, a B200
+beats an H100: 2,250 TFLOP/s at $6.25/hour is 360 TFLOP/s per dollar-hour,
+against 990 TFLOP/s at $3.95/hour for 250. Take a compute-bound 1 EFLOP BF16
+job. `napkin estimate --dtype bf16 --flops 1E --bytes 1TB` gives 1400 s on
+the H100 and 630 s on the B200 at their measured BF16 rates. Modal bills per
+second.
+
+Now suppose the job's steps are too small to fill a B200's 148 SMs, and
+profiling shows it sustains 50% of the modelled rate on the H100 but only 30%
+on the B200. These utilizations are assumptions for illustration, not
+measurements:
+
+| GPU | Price | Busy | Cost at 100% | Utilization | Cost |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| H100 | $3.95/h | 1400 s | $1.54 | 50% | $3.07 |
+| B200 | $6.25/h | 630 s | $1.09 | 30% | $3.65 |
+
+```sh
+napkin cost --gpus 1 --price 3.95 --time 1400s --utilization 0.5 --granularity 1s
+napkin cost --gpus 1 --price 6.25 --time 630s --utilization 0.3 --granularity 1s
+```
+
+At full utilization the B200 is cheaper, as the ranking predicts; at these
+utilizations the H100 is. With measured rates, the B200 wins only while its
+utilization stays above `(734 / 3.95) / (1585 / 6.25) ≈ 0.73` of the H100's;
+here it is `0.3 / 0.5 = 0.6`.
+
 ## Usage
 
 ```sh
@@ -150,6 +264,10 @@ napkin estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB [--h2d 2GB]
                 [--d2h ..] [--host ..] [--g2g ..] [--launches 20]
                 [--overlap] [--ceiling]
 napkin fit --gpu h100 --params 70B --bits 16 [--extra 20GB] [--headroom 0.1]
+napkin cost --gpus 2 --time 10s --price 3       # or --offer modal-h100
+            [--utilization 0.5] [--startup 30s] [--idle 60s] [--granularity 1s]
+            [--work 25K | --throughput 2.5K] [--unit tokens]
+napkin prices                                     # dated price records and their age
 napkin readme --write README.md                   # regenerate the marker blocks
 ```
 
@@ -207,6 +325,7 @@ napkin readme --write README.md         # refreshes the tables
 * [NVIDIA GPU Performance Background User's Guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-gpu-background/index.html). NVIDIA's own arithmetic- and roofline primer.
 * [NVIDIA Matrix Multiplication Background User's Guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html). Tile and wave quantization, and why GEMM shapes matter.
 * [CUDA C++ Best Practices Guide](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/). Memory coalescing, transfers, occupancy, and measurement.
+* [Modal pricing](https://modal.com/pricing). Per-second GPU list prices behind the dated records in `prices/modal.json`.
 * [Modal GPU Glossary](https://modal.com/gpu-glossary). Fast definitions for SMs, warps, HBM, Tensor Cores, and the rest of the vocabulary.
 * [Dissecting the NVIDIA Volta GPU Architecture via Microbenchmarking](https://arxiv.org/abs/1804.06826). The template for measuring latencies and cache hierarchies yourself.
 * [Benchmarking and Dissecting the Nvidia Hopper GPU Architecture](https://arxiv.org/abs/2402.13499). Microbenchmarked Hopper latencies, Tensor Cores, and memory.

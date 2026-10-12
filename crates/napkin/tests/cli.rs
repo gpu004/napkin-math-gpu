@@ -78,6 +78,147 @@ fn compare_prints_table() {
     assert!(stdout.contains("| GPU |"), "{stdout}");
 }
 
+#[test]
+fn cost_requires_exactly_one_price_source() {
+    let (_, _, code) = napkin(&["cost", "--gpus", "2", "--time", "10s"]);
+    assert_eq!(code, 2);
+    let (_, _, code) = napkin(&[
+        "cost",
+        "--gpus",
+        "2",
+        "--time",
+        "10s",
+        "--price",
+        "3",
+        "--offer",
+        "modal-h100",
+    ]);
+    assert_eq!(code, 2);
+}
+
+#[test]
+fn cost_formats_supplied_price_and_workload() {
+    let (stdout, stderr, code) = napkin(&["cost", "--gpus", "2", "--price", "3", "--time", "10s"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("cost        $0.0167 per job"), "{stdout}");
+    assert!(!stdout.contains("/$"), "{stdout}");
+    let (stdout, stderr, code) = napkin(&[
+        "cost",
+        "--gpus",
+        "2",
+        "--price",
+        "3",
+        "--time",
+        "10s",
+        "--throughput",
+        "2.5K",
+        "--unit",
+        "tokens",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("tokens/$"), "{stdout}");
+}
+
+#[test]
+fn cost_offer_and_invalid_inputs() {
+    let (stdout, stderr, code) = napkin(&[
+        "cost",
+        "--gpus",
+        "2",
+        "--time",
+        "10s",
+        "--offer",
+        "modal-h100",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("2026-10-12"), "{stdout}");
+    assert!(stdout.contains("https://modal.com/pricing"), "{stdout}");
+    let (_, stderr, code) = napkin(&["cost", "--gpus", "1", "--time", "10s", "--offer", "unknown"]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("no price record"), "{stderr}");
+    let (_, _, code) = napkin(&["cost", "--gpus", "0", "--time", "10s", "--price", "3"]);
+    assert_eq!(code, 2);
+}
+
+#[test]
+fn prices_lists_all_builtin_records() {
+    let (stdout, stderr, code) = napkin(&["prices"]);
+    assert_eq!(code, 0, "{stderr}");
+    for id in ["modal-a100", "modal-h100", "modal-b200", "modal-b300"] {
+        assert!(stdout.contains(id), "{stdout}");
+    }
+}
+
+#[test]
+fn utilization_reverses_peak_per_dollar_ranking() {
+    for (args, expected) in [
+        (
+            &[
+                "cost",
+                "--gpus",
+                "1",
+                "--price",
+                "3.95",
+                "--time",
+                "1400s",
+                "--granularity",
+                "1s",
+            ][..],
+            "cost        $1.54 per job",
+        ),
+        (
+            &[
+                "cost",
+                "--gpus",
+                "1",
+                "--price",
+                "6.25",
+                "--time",
+                "630s",
+                "--granularity",
+                "1s",
+            ],
+            "cost        $1.09 per job",
+        ),
+        (
+            &[
+                "cost",
+                "--gpus",
+                "1",
+                "--price",
+                "3.95",
+                "--time",
+                "1400s",
+                "--utilization",
+                "0.5",
+                "--granularity",
+                "1s",
+            ],
+            "cost        $3.07 per job",
+        ),
+        (
+            &[
+                "cost",
+                "--gpus",
+                "1",
+                "--price",
+                "6.25",
+                "--time",
+                "630s",
+                "--utilization",
+                "0.3",
+                "--granularity",
+                "1s",
+            ],
+            "cost        $3.65 per job",
+        ),
+    ] {
+        let (stdout, stderr, code) = napkin(args);
+        assert_eq!(code, 0, "{stderr}");
+        assert!(stdout.contains(expected), "{stdout}");
+    }
+}
+
 struct TempReadme(PathBuf);
 
 impl Drop for TempReadme {
