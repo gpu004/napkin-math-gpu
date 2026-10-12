@@ -10,7 +10,7 @@ NCCL version 2.27.3+cuda12.9
 #
 #                                                              out-of-place                       in-place
 #       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong
-#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)        
            8             4  bfloat16     sum      -1    10.46    0.00    0.00       0     9.99    0.00    0.00       0
           16             8  bfloat16     sum      -1     9.77    0.00    0.00       0     9.75    0.00    0.00       0
           32            16  bfloat16     sum      -1    15.85    0.00    0.00       0    11.20    0.00    0.00       0
@@ -42,7 +42,8 @@ NCCL version 2.27.3+cuda12.9
   2147483648    1073741824  bfloat16     sum      -1  6254.29  343.36  343.36       0  6213.65  345.61  345.61       0
   4294967296    2147483648  bfloat16     sum      -1  12297.0  349.27  349.27       0  12230.8  351.16  351.16       0
 # Out of bounds values : 0 OK
-# Avg bus bandwidth    : 105.056
+# Avg bus bandwidth    : 105.056 
 #
 # Collective test concluded: all_reduce_perf
 #
+

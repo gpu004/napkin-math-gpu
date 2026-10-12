@@ -7,8 +7,8 @@ Failed to run topology matrix
 $ nvidia-smi topo -p2p n
 # exit 0
  	[4mGPU0	GPU1	[0m
- GPU0	X	OK
- GPU1	OK	X
+ GPU0	X	OK	
+ GPU1	OK	X	
 
 Legend:
 
