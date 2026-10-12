@@ -138,11 +138,17 @@ Count algorithmic traffic, not allocation size: a copy reads and writes, while
 `weights = params × bits / 8`, and the working set must fit in usable memory
 with headroom for runtime state, buffers, and fragmentation.
 
+For a decoder-only model, KV-cache capacity is
+`KV bytes = 2 × layers × KV heads × head dim × live tokens × bytes`, where
+live tokens are summed across requests. `--extra` is shardable with weights;
+`--per-gpu` memory is replicated and does not shrink with GPU count.
+
 ## Examples
 
 A BF16 job with 200 TFLOPs, 1 TB of HBM traffic, a 2 GB upload, and 20 kernel
 launches on an H100:
 
+<!-- napkin example estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB --h2d 2GB --launches 20 -->
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB --h2d 2GB --launches 20
 H100 SXM 80GB · bf16 · measured 2026-10-12
@@ -154,29 +160,103 @@ h2d         36 ms   1 sync copy: 1 × 9.8 μs + 2 GB / 55 GB/s
 launch      33 μs
 total       370 ms   memory-bound
 ```
+<!-- /napkin -->
 
-A 70B bf16 decode step must read the full 140 GB of weights once per token.
-Does it fit, and how fast can one GPU's bandwidth feed it?
+### LLM inference
 
+Use a Llama-3-70B-shaped dense decoder-only model. These are lower-bound
+Fermi counts: assume 2 FLOPs per parameter per token, all parameters are
+matmul weights, causal attention skips the masked half, activations hit a
+fused-kernel read/write floor, decode is costed at its last step, and there is
+no communication.
+
+<!-- napkin example llm --gpu h100 --layers 80 --hidden 8192 --heads 64 --kv-heads 8 --head-dim 128 --params 70B --batch 8 --prompt 2048 --generated 512 -->
 ```text
-$ napkin fit --gpu h100 --params 70B --bits 16
+$ napkin llm --gpu h100 --layers 80 --hidden 8192 --heads 64 --kv-heads 8 --head-dim 128 --params 70B --batch 8 --prompt 2048 --generated 512
+H100 SXM 80GB · 70B params · 80 layers · 64 heads (8 KV heads, GQA 8:1) × 128 head dim · hidden 8192
+weights 16-bit · KV 16-bit · activations bf16 · batch 8 × (2048 prompt + 512 generated)
+
+memory: what must stay resident
+weights      70B × 16 / 8 = 140 GB
+KV/token     2 × 80 layers × 8 KV heads × 128 × 2 B = 328 KB
+live tokens  8 × (2048 + 512) = 20480
+KV cache     328 KB × 20480 = 6.71 GB
+$ napkin fit --gpu h100 --params 70B --bits 16 --extra 6.71GB
+
+prefill: one forward over 8 × 2048 = 16384 prompt tokens
+linear       2 × 70B × 16384 = 2.29P FLOP
+attention    2 × 80 × 64 × 128 × 8 × 2048² (causal) = 44T FLOP
+weights      read once = 140 GB
+KV write     328 KB × 16384 = 5.37 GB
+activations  2 × 80 × 16384 × 8192 × 2 B (floor) = 42.9 GB
+$ napkin estimate --gpu h100 --dtype bf16 --flops 2.34P --bytes 188GB
+
+decode step: 8 new tokens at context 2560 (the last, largest step)
+linear       2 × 70B × 8 = 1.12T FLOP
+attention    4 × 80 × 64 × 128 × 8 × 2560 = 53.7G FLOP
+weights      read once, shared by 8 requests = 140 GB
+KV read      328 KB × 8 × 2560 = 6.71 GB
+activations  2 × 80 × 8 × 8192 × 2 B (floor) = 21 MB
+per token    147 GB / 8 = 18.3 GB
+$ napkin estimate --gpu h100 --dtype bf16 --flops 1.17T --bytes 147GB
+
+hypothetical: the 147 GB working set exceeds 72 GB usable on one H100 SXM 80GB, so both estimates assume one GPU's bandwidth and compute. Sharding needs at least 3 GPUs; it divides weights and KV, not per-GPU memory, and a tensor-parallel speedup needs a communication term (--g2g) before you claim one.
+```
+<!-- /napkin -->
+
+Prefill is compute-bound: 16,384 prompt tokens share one weight read. Decode is
+memory-bound: each step reads the weights once for the whole batch. Batching
+amortizes that weight read, so per-token traffic falls roughly with batch size,
+while KV reads grow with batch × context. At batch 8 and a 32,768-token (32k)
+context, the same KV formula gives an 86 GB read per step, comparable to the
+140 GB weight read.
+
+The 6.71 GB KV cache above is resident capacity; 6.71 GB is also the KV traffic
+in the final 2,560-token decode step, but those are different questions for
+other workloads. GQA (8 KV heads for 64 query heads) makes KV/token 328 KB
+instead of 2.6 MB. Quantization is independent: 4-bit weights with fp16 KV
+shrink weight storage 4× but do not shrink KV bytes. The H100 result is
+hypothetical because the working set does not fit; a real multi-GPU speedup
+needs a communication term, not just divided memory and bandwidth.
+
+The generated follow-up commands below are executable markers too; the drift
+test checks that they continue to match the recipe.
+
+<!-- napkin example fit --gpu h100 --params 70B --bits 16 --extra 6.71GB -->
+```text
+$ napkin fit --gpu h100 --params 70B --bits 16 --extra 6.71GB
 H100 SXM 80GB · 70B params · 16-bit
 weights     140 GB
-working set 140 GB
+extra       6.71 GB
+working set 147 GB
 usable      72 GB per GPU (10% headroom)
-fits        no — needs at least 2 GPUs (weights sharded)
-
-$ napkin estimate --gpu h100 --dtype bf16 --flops 140G --bytes 140GB
-H100 SXM 80GB · bf16 · measured 2026-10-12
-intensity   1 FLOP/B   ridge 240 FLOP/B   memory-bound
-compute     190 μs
-memory      47 ms
-device      47 ms
-total       47 ms   memory-bound
+fits        no — needs at least 3 GPUs (weights + extra sharded, per-GPU replicated)
 ```
+<!-- /napkin -->
 
-Memory-bound: about 50 ms/token on one GPU's bandwidth, and it splits roughly
-linearly across tensor-parallel GPUs (plus communication).
+<!-- napkin example estimate --gpu h100 --dtype bf16 --flops 2.34P --bytes 188GB -->
+```text
+$ napkin estimate --gpu h100 --dtype bf16 --flops 2.34P --bytes 188GB
+H100 SXM 80GB · bf16 · measured 2026-10-12
+intensity   12000 FLOP/B   ridge 240 FLOP/B   compute-bound
+compute     3.2 s
+memory      63 ms
+device      3.2 s
+total       3.2 s   compute-bound
+```
+<!-- /napkin -->
+
+<!-- napkin example estimate --gpu h100 --dtype bf16 --flops 1.17T --bytes 147GB -->
+```text
+$ napkin estimate --gpu h100 --dtype bf16 --flops 1.17T --bytes 147GB
+H100 SXM 80GB · bf16 · measured 2026-10-12
+intensity   8 FLOP/B   ridge 240 FLOP/B   memory-bound
+compute     1.6 ms
+memory      49 ms
+device      49 ms
+total       49 ms   memory-bound
+```
+<!-- /napkin -->
 
 ## Cost
 
@@ -304,7 +384,9 @@ napkin estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB [--h2d 2GB]
                 [--h2d-copies 1] [--d2h ..] [--d2h-copies ..] [--host ..]
                 [--g2g ..] [--g2g-copies ..] [--copy-mode sync|async]
                 [--launches 20] [--overlap] [--ceiling]
-napkin fit --gpu h100 --params 70B --bits 16 [--extra 20GB] [--headroom 0.1]
+napkin fit --gpu h100 --params 70B --bits 16 [--extra 20GB] [--per-gpu 2GB] [--headroom 0.1]
+napkin llm --gpu h100 --layers 80 --hidden 8192 --heads 64 --kv-heads 8
+           --head-dim 128 --params 70B --batch 8 --prompt 2048 --generated 512
 napkin cost --gpus 2 --time 10s --price 3       # or --offer modal-h100
             [--utilization 0.5] [--startup 30s] [--idle 60s] [--granularity 1s]
             [--work 25K | --throughput 2.5K] [--unit tokens]
