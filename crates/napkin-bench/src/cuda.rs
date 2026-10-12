@@ -18,7 +18,7 @@ use cudarc::driver::safe::{
 use cudarc::driver::sys as dsys;
 use cudarc::nvrtc::compile_ptx;
 use half::{bf16, f16};
-use napkin::profile::{Dtype, Measured};
+use napkin_profile::{Dtype, Measured};
 
 /// Anything the harness can fail with.
 #[derive(Debug)]

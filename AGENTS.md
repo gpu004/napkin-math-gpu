@@ -4,8 +4,8 @@
 - Commits are conventional: `type(scope): Capitalized summary`.
 - GPU runs happen only on Modal, never locally: `modal run modal/bench.py --gpu h100`.
 - Canonical runs pin GPUs with `!` where needed (`H100!`); never commit `--quick` output.
-- `napkin::profile` JSON types are the shared contract; `napkin-bench` may import only
-  `napkin::profile::{Measured, Dtype}`.
+- `napkin-profile` is the shared profile contract; `napkin-bench` may import only
+  `napkin_profile::{Measured, Dtype}`.
 - README number blocks are generated. Never hand-edit inside `<!-- napkin ... -->` markers; after changing
   profiles, table rendering, or anything a marker embeds, run `cargo run -p napkin -- readme --write README.md`.
 

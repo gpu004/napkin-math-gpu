@@ -7,7 +7,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-napkin = { path = "../napkin" }
+napkin-profile = { path = "../napkin-profile" }
 cudarc = { version = "0.19", default-features = false, features = [
     "std",
     "driver",

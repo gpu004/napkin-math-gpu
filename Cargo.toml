@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/napkin", "crates/napkin-bench"]
+members = ["crates/napkin", "crates/napkin-bench", "crates/napkin-profile"]
 
 [workspace.package]
 edition = "2024"
