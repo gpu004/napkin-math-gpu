@@ -302,4 +302,20 @@ mod tests {
                     .all(|collective| item.curve(*collective).is_some())
         }));
     }
+
+    #[test]
+    fn embedded_h100_eight_gpu_all_reduce_estimates_latency() -> Result<(), String> {
+        let estimate = estimate(&Query {
+            gpu: "h100",
+            gpu_count: 8,
+            topology: Topology::Nvlink,
+            collective: Collective::AllReduce,
+            dtype: Dtype::Bf16,
+            bytes: 16_384.0,
+        })?;
+        assert_eq!(estimate.evidence.gpu_count, 8);
+        assert_eq!(estimate.time_s, 42.8244 / 1e6);
+        assert_eq!(estimate.regime, Regime::Latency);
+        Ok(())
+    }
 }

@@ -208,7 +208,9 @@ notes. Measured calibrations live in `profiles/<id>.measured.json`, produced by
 
 - H100: [profile](profiles/h100.json) · [measured](profiles/h100.measured.json)
 - A100: [profile](profiles/a100.json) · [measured](profiles/a100.measured.json)
-- NCCL Tests collectives: [H100 × 2](profiles/nccl-tests/h100x2)
+- NCCL Tests collectives: [H100 × 2](profiles/nccl-tests/h100x2) ·
+  [H100 × 8](profiles/nccl-tests/h100x8) (a different Modal host: driver
+  610.57.04 and a PCIe Gen 4 host link, versus 580.95.05 and Gen 5 for × 2)
 
 The `napkin-profile` types are the shared contract between the estimator
 crate and the `napkin-bench` producer. The measured files must be replaced
