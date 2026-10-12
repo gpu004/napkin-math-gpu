@@ -2,7 +2,7 @@ Outside tolerance, about 3.6× slower than predicted, as the tolerance note
 anticipated. The dominant term is right: the GPU is idle most of the time.
 The cost per op is wrong.
 
-From [profiler.txt](profiler.txt), one profiled pass of the loop:
+From [profiler.txt](validation/h100-tiny-kernels/profiler.txt), one profiled pass of the loop:
 
 - 10,000 `aten::add_` calls launched exactly 10,000 kernels, and the GPU ran
   each one for 1.15 μs on average: 11.5 ms of GPU time in total.

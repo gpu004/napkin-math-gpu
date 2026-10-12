@@ -11,7 +11,7 @@ Confirmed from the committed evidence:
   predict the bandwidth.
 - The host ran driver 610.57.04 and nvidia-smi could not read its PCI bus id
   (`[Unknown Error]` in run.json). The profile host ran 580.95.05.
-- [followup.json](followup.json): two further Modal hosts, one `H100!` (driver
+- [followup.json](validation/h100-pcie-roundtrip/followup.json): two further Modal hosts, one `H100!` (driver
   610.57.04) and one `H100!:2` (580.95.05). Both reported a Gen4 x16 link and
   ran 27.6 GB/s up and 28.5 GB/s down at both 512 MiB and 1 GiB buffers. The
   buffer size is therefore not the cause, and the same `H100!` request has

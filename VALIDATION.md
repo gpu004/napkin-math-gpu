@@ -179,7 +179,7 @@ Confirmed from the committed evidence:
   predict the bandwidth.
 - The host ran driver 610.57.04 and nvidia-smi could not read its PCI bus id
   (`[Unknown Error]` in run.json). The profile host ran 580.95.05.
-- [followup.json](followup.json): two further Modal hosts, one `H100!` (driver
+- [followup.json](validation/h100-pcie-roundtrip/followup.json): two further Modal hosts, one `H100!` (driver
   610.57.04) and one `H100!:2` (580.95.05). Both reported a Gen4 x16 link and
   ran 27.6 GB/s up and 28.5 GB/s down at both 512 MiB and 1 GiB buffers. The
   buffer size is therefore not the cause, and the same `H100!` request has
@@ -271,7 +271,7 @@ Outside tolerance, about 3.6× slower than predicted, as the tolerance note
 anticipated. The dominant term is right: the GPU is idle most of the time.
 The cost per op is wrong.
 
-From [profiler.txt](profiler.txt), one profiled pass of the loop:
+From [profiler.txt](validation/h100-tiny-kernels/profiler.txt), one profiled pass of the loop:
 
 - 10,000 `aten::add_` calls launched exactly 10,000 kernels, and the GPU ran
   each one for 1.15 μs on average: 11.5 ms of GPU time in total.
