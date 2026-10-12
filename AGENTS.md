@@ -1,5 +1,6 @@
 # Agent instructions
 
+- Teach users how to derive an answer, and make the assumptions behind every number visible.
 - The user keeps this repo under `jj`; agents may use plain `git` when told to.
 - Commits are conventional: `type(scope): Capitalized summary`.
 - GPU runs happen only on Modal, never locally: `modal run modal/bench.py --gpu h100`.
