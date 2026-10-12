@@ -1,3 +1,6 @@
+//! Built-in GPU profiles, generated from `profiles/*.json` by `build.rs` and validated at build time;
+//! types come from `napkin-profile`.
+
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
@@ -5,10 +8,12 @@ pub use napkin_profile::*;
 
 static BUILTIN: LazyLock<Vec<Profile>> = LazyLock::new(generated_profiles);
 
+/// Returns the built-in profiles in a100, h100, b200, b300 order.
 pub fn builtin() -> &'static [Profile] {
     BUILTIN.as_slice()
 }
 
+/// Finds a built-in profile by its identifier.
 pub fn find(id: &str) -> Option<&'static Profile> {
     BUILTIN.iter().find(|profile| profile.id == id)
 }
