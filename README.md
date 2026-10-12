@@ -486,6 +486,7 @@ napkin prices                                     # dated price records and thei
 napkin collective --gpu h100 --count 2 --topology nvlink --op all-reduce
                    --bytes 16KiB [--dtype bf16]       # NCCL Tests curves only
 napkin readme --write README.md PROBLEMS.md       # regenerate the marker blocks
+napkin validate [--write VALIDATION.md | --check VALIDATION.md]
 ```
 
 ## Benchmarks
@@ -557,7 +558,8 @@ See [BENCHMARKS.md](BENCHMARKS.md#nccl-tests) for what is recorded and how
 - **One or two significant digits.** You want order-of-magnitude answers;
   extra digits are not extra certainty.
 - **Validate against one real end-to-end run.** A napkin estimate is a lower
-  bound; check it once before trusting it.
+  bound; check it once before trusting it. See the [committed H100 validation
+  report](VALIDATION.md) and the evidence in `validation/<case>/`.
 
 ## Resources
 

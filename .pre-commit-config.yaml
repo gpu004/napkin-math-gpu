@@ -4,9 +4,9 @@ repos:
   - repo: builtin
     hooks:
       - id: trailing-whitespace
-        exclude: ^profiles/nccl-tests/
+        exclude: ^(profiles/nccl-tests/|validation/[^/]+/(run\.json|timer\.(json|txt)|nvbandwidth\.json|nvidia-smi\.csv|profiler\.txt)$)
       - id: end-of-file-fixer
-        exclude: ^profiles/nccl-tests/
+        exclude: ^(profiles/nccl-tests/|validation/[^/]+/(run\.json|timer\.(json|txt)|nvbandwidth\.json|nvidia-smi\.csv|profiler\.txt)$)
       - id: check-toml
       - id: check-yaml
       - id: check-json
@@ -47,6 +47,12 @@ repos:
         language: system
         pass_filenames: false
         files: ^(README\.md|PROBLEMS\.md|profiles/|prices/|crates/napkin/)
+      - id: validation-check
+        name: generated validation report
+        entry: cargo run -q --locked -p napkin -- validate --check VALIDATION.md
+        language: system
+        pass_filenames: false
+        files: ^(VALIDATION\.md|validation/|profiles/|crates/napkin/)
       - id: conventional-commit
         name: conventional commit message
         entry: sh scripts/commit-msg.sh

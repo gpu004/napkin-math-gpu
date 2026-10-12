@@ -220,6 +220,12 @@ metric-by-metric by the source policy above before being called canonical.
 work should add runners/parsers around pinned upstream tools instead of
 extending the homegrown measurement loops.
 
+Prediction-versus-observation cases live under `validation/<case>/`: `case.json`
+declares the workload and tolerance, while the raw observation and `run.json`
+record the measured evidence. `napkin validate` builds the GPU-free report in
+`VALIDATION.md`; collect or refresh observations with the opt-in
+`modal run modal/validate.py`.
+
 ## Development checks
 
 GPU-free checks run locally and in CI:

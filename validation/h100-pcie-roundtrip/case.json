@@ -1,0 +1,53 @@
+{
+  "id": "h100-pcie-roundtrip",
+  "title": "16 GiB host-to-device upload, then 16 GiB download",
+  "gpu": "h100",
+  "modal_request": "H100!",
+  "job": "Upload 16 GiB from pinned host memory to GPU 0 as 16 queued 1 GiB copy-engine copies, then download 16 GiB back the same way: NVBandwidth host_to_device_memcpy_ce followed by device_to_host_memcpy_ce with --bufferSize 1024 --loopCount 16.",
+  "workload": {
+    "dtype": "fp32",
+    "flops": 0,
+    "hbm_bytes": 0,
+    "h2d": {
+      "bytes": 17179869184,
+      "copies": 16
+    },
+    "d2h": {
+      "bytes": 17179869184,
+      "copies": 16
+    },
+    "copy_mode": "async",
+    "mode": "serial"
+  },
+  "derivation": [
+    "h2d bytes = 16 copies × 1 GiB = 17,179,869,184 B; the same for d2h",
+    "copy-mode async: NVBandwidth queues all 16 copies of one direction on a stream before they start, so napkin charges the fixed copy latency once per direction",
+    "serial: the download starts after the upload finishes, so the two transfer stages add"
+  ],
+  "observation": {
+    "kind": "nvbandwidth",
+    "file": "nvbandwidth.json",
+    "testcases": [
+      "host_to_device_memcpy_ce",
+      "device_to_host_memcpy_ce"
+    ],
+    "tool": "NVIDIA NVBandwidth v0.10.0 (commit 82fc4e8c), copy-engine memcpy testcases",
+    "metric": "median CE bandwidth per direction over --testSamples 7, converted to time as bytes / bandwidth; observed time = upload + download"
+  },
+  "tolerance": {
+    "low": 0.9,
+    "high": 1.1,
+    "why": "The bandwidth constants are bulk 512 MiB pinned copies on the same kind of link, and the predicted time is almost all bytes / bandwidth (the fixed latency is 2 × 9.8 μs of about 0.6 s). NVBandwidth and napkin-bench agreed within 2% on H2D and D2H at 512 MiB (PR #25), so ±10% leaves room for host-to-host variation among PCIe Gen5 x16 Modal hosts, but not for a different link generation."
+  },
+  "match": [
+    "same GPU model as profiles/h100.measured.json",
+    "PCIe link Gen5 x16 during the copies, the link the profile was measured on; a Gen4 host halves host bandwidth and is a different system, not a miss",
+    "pinned host memory and copy-engine copies, as in the calibration"
+  ],
+  "excludes": [
+    "the host wait: NVBandwidth times copies with CUDA events while a spin kernel holds the stream, so its time excludes the issue and synchronize cost that napkin's one async latency charges (8.8 μs h2d + 9.4 μs d2h)",
+    "NUMA placement: --disableAffinity is required on Modal, so host buffers are not pinned to the GPU's NUMA node",
+    "pageable memory, which would add a staging copy",
+    "overlap of upload and download: the job is serial by construction"
+  ]
+}

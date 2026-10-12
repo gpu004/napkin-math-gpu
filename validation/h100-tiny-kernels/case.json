@@ -1,0 +1,40 @@
+{
+  "id": "h100-tiny-kernels",
+  "title": "10,000 tiny PyTorch kernels in eager mode",
+  "gpu": "h100",
+  "modal_request": "H100!",
+  "job": "A Python loop of 10,000 in-place adds on a one-element fp32 CUDA tensor (x.add_(1.0)) in PyTorch eager mode, then one synchronize: the shape of an unfused optimizer step or a small-batch decode loop.",
+  "workload": {
+    "dtype": "fp32",
+    "flops": 10000,
+    "hbm_bytes": 80000,
+    "launches": 10000,
+    "mode": "serial"
+  },
+  "derivation": [
+    "flops = 10,000 adds × 1 element",
+    "hbm_bytes = 10,000 × (4 B read + 4 B write)",
+    "launches = 10,000: one elementwise kernel per add_ (checked with torch.profiler)"
+  ],
+  "observation": {
+    "kind": "timer",
+    "file": "timer.json",
+    "tool": "PyTorch torch.utils.benchmark.Timer around the loop; torch.profiler for the kernel count",
+    "metric": "median wall time of the whole 10,000-op loop including the final synchronize"
+  },
+  "tolerance": {
+    "low": 0.5,
+    "high": 2.0,
+    "why": "The launch constant is napkin-bench's back-to-back empty-kernel launch through the CUDA driver API from Rust, not a framework op. The model has no term for per-op framework overhead (Python, the PyTorch dispatcher, tensor checks), so a framework loop is expected to be slower than predicted. A factor of 2 is the widest error at which a launch-bound estimate still sizes the job usefully; outside it the model is missing a term, which this case is meant to expose."
+  },
+  "match": [
+    "same GPU model as profiles/h100.measured.json",
+    "one kernel launch per op, confirmed by the profiler's kernel count"
+  ],
+  "excludes": [
+    "per-op host overhead of Python and the PyTorch dispatcher",
+    "the caching allocator: no allocations happen inside the loop",
+    "CUDA graphs and kernel fusion, which would remove launches",
+    "the final synchronize (about 7 μs, once)"
+  ]
+}
