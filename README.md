@@ -84,14 +84,54 @@ Below the ridge point the kernel is memory-bound; above it, compute-bound.
 Add the stages that sit on the critical path:
 
 ```text
-H2D time         = H2D bytes / P_h2d
-D2H time         = D2H bytes / P_d2h
-GPU-to-GPU time  = communicated bytes / P_g2g
-launch time      = kernel launches × L
+copy time        = waits × L_copy + bytes / P      (per kind: H2D, D2H, GPU-to-GPU)
+waits            = copies (sync) or 1 (async)
+launch time      = kernel launches × L_launch
 
 serial estimate     = host + H2D + device + GPU-to-GPU + D2H + launch
 overlapped estimate = max(those stages)
 ```
+
+`L_copy` is the measured 4-byte synchronous copy: issue, copy, and the stream
+synchronize that waits for it, on the wall clock. `P` is the bulk 512 MiB
+bandwidth. A sync copy (`cudaMemcpy`, or an async copy followed by
+`cudaStreamSynchronize`) pays `L_copy` every time; `--copy-mode async` queues
+all copies of one kind and waits once, so it pays `L_copy` once and is a lower
+bound, because the cost of queueing each extra copy is not measured. `L_copy`
+already contains a synchronize, so neither `L_launch` nor the launch + sync
+round trip is added to copies, and copies are not counted as launches. Without
+a measured `L_copy` (for example `--ceiling`), napkin uses `bytes / P` alone,
+prints `≥`, and says why.
+
+### Why a 4-byte copy is not in the bandwidth row
+
+The H100 bandwidth row moves 512 MiB in about 9.7 ms, timed with CUDA events
+on the GPU. The ~10 μs fixed cost of a copy is 0.1% of that, so it vanishes
+into the throughput. Divide 4 bytes by the same 55 GB/s and you get 0.07 ns;
+the measured 4-byte synchronous copy takes 9.8 μs, about 140,000 times longer.
+Small copies are all fixed cost: driver call, DMA setup, and the wait for
+completion, none of which scale with bytes. The size where the two terms are
+equal is `L_copy × P = 9.8 μs × 55 GB/s ≈ 500 KB`; below it a copy is
+latency-bound, above it bandwidth-bound. So moving 1 GB as 100,000 small
+copies is about 50 times slower than one large copy:
+
+```text
+$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 4B
+h2d         9.8 μs   1 sync copy: 1 × 9.8 μs + 4 B / 55 GB/s
+
+$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB
+h2d         18 ms   1 sync copy: 1 × 9.8 μs + 1 GB / 55 GB/s
+
+$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000
+h2d         1 s   100000 sync copies: 100000 × 9.8 μs + 1 GB / 55 GB/s
+
+$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000 --copy-mode async
+h2d         ≥ 18 ms   100000 async copies: 1 × 9.8 μs + 1 GB / 55 GB/s; lower bound: per-copy cost of queued async copies is unmeasured
+```
+
+This latency-plus-bandwidth line is a straight-line fit through two measured
+points. Real transfers between the two sizes, pageable host memory, and
+copies that overlap with each other can land off it.
 
 Count algorithmic traffic, not allocation size: a copy reads and writes, while
 `C = A + B` reads two streams and writes one. Capacity is separate from speed:
@@ -105,13 +145,13 @@ launches on an H100:
 
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB --h2d 2GB --launches 20
-H100 SXM 80GB · bf16 · measured 2026-08-08
+H100 SXM 80GB · bf16 · measured 2026-10-12
 intensity   200 FLOP/B   ridge 240 FLOP/B   memory-bound
-compute     280 ms
+compute     270 ms
 memory      330 ms
 device      330 ms
-h2d         36 ms
-launch      93 μs
+h2d         36 ms   1 sync copy: 1 × 9.8 μs + 2 GB / 55 GB/s
+launch      33 μs
 total       370 ms   memory-bound
 ```
 
@@ -127,9 +167,9 @@ usable      72 GB per GPU (10% headroom)
 fits        no — needs at least 2 GPUs (weights sharded)
 
 $ napkin estimate --gpu h100 --dtype bf16 --flops 140G --bytes 140GB
-H100 SXM 80GB · bf16 · measured 2026-08-08
+H100 SXM 80GB · bf16 · measured 2026-10-12
 intensity   1 FLOP/B   ridge 240 FLOP/B   memory-bound
-compute     200 μs
+compute     190 μs
 memory      47 ms
 device      47 ms
 total       47 ms   memory-bound
@@ -261,8 +301,9 @@ napkin gpus                                       # profiles and their basis
 napkin table --gpu h100                           # the tables above
 napkin compare                                    # every GPU side by side
 napkin estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB [--h2d 2GB]
-                [--d2h ..] [--host ..] [--g2g ..] [--launches 20]
-                [--overlap] [--ceiling]
+                [--h2d-copies 1] [--d2h ..] [--d2h-copies ..] [--host ..]
+                [--g2g ..] [--g2g-copies ..] [--copy-mode sync|async]
+                [--launches 20] [--overlap] [--ceiling]
 napkin fit --gpu h100 --params 70B --bits 16 [--extra 20GB] [--headroom 0.1]
 napkin cost --gpus 2 --time 10s --price 3       # or --offer modal-h100
             [--utilization 0.5] [--startup 30s] [--idle 60s] [--granularity 1s]
@@ -286,13 +327,16 @@ napkin readme --write README.md         # refreshes the tables
   bytes counted.
 - `h2d_gbps` / `d2h_gbps`: 512 MiB pinned async copies, event timed; the bytes
   that cross the link.
-- `h2d_latency_us` / `d2h_latency_us`: 4-byte synchronous copies, wall clock.
+- `h2d_latency_us` / `d2h_latency_us`: 4-byte synchronous copies, wall clock;
+  each sample includes the stream synchronize, so it is a per-copy fixed cost,
+  not a bandwidth.
 - `hbm_gbps`: 512 MiB device-to-device memcpy; read + write counted (2x).
 - `elementwise_gbps`: NVRTC `c[i] = a[i] + b[i]` fp32; two reads + one write (3x).
 - `hbm_latency_ns`: single-thread pointer chase over a random cycle in a
   1 GiB buffer, ns per dependent load.
 - `g2g_gbps`: 512 MiB peer copy, slower of the two directions; `None` with
   fewer than 2 GPUs or no peer access.
+- `g2g_latency_us`: 4-byte peer copy plus stream synchronize, wall clock.
 - `compute_tflops`: cuBLAS GemmEx 8192³, `2·N³` FLOPs counted, validated
   against a CPU float64 reference per dtype.
 

@@ -6,11 +6,13 @@ use std::process::ExitCode;
 
 use clap::{ArgGroup, Parser, Subcommand};
 use napkin::cost::{self, Job, Work};
-use napkin::estimate::{self, Mode, Workload};
+use napkin::estimate::{self, CopyMode, Mode, Transfer, TransferTime, Workload};
 use napkin::fit;
 use napkin::price::{self, Date, STALE_AFTER_DAYS};
 use napkin::profile::{self, Basis, Dtype, Profile};
-use napkin::units::{self, fmt_count, fmt_duration, fmt_intensity, fmt_money, fmt_sig};
+use napkin::units::{
+    self, fmt_bytes, fmt_count, fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_sig,
+};
 
 /// GPU napkin math: estimate workload performance from first principles.
 #[derive(Parser, Debug)]
@@ -53,16 +55,29 @@ enum Command {
         /// Host-to-device bytes, e.g. "2GB".
         #[arg(long)]
         h2d: Option<String>,
+        /// Number of copies the --h2d bytes are split into [default: 1 with --h2d].
+        #[arg(long)]
+        h2d_copies: Option<u64>,
         /// Device-to-host bytes.
         #[arg(long)]
         d2h: Option<String>,
+        /// Number of copies the --d2h bytes are split into [default: 1 with --d2h].
+        #[arg(long)]
+        d2h_copies: Option<u64>,
         /// Bytes copied within host memory.
         #[arg(long)]
         host: Option<String>,
         /// GPU-to-GPU bytes.
         #[arg(long)]
         g2g: Option<String>,
-        /// Kernel launches.
+        /// Number of copies the --g2g bytes are split into [default: 1 with --g2g].
+        #[arg(long)]
+        g2g_copies: Option<u64>,
+        /// sync: the host waits for every copy; async: copies of one kind are
+        /// queued and waited for once.
+        #[arg(long, value_enum, default_value_t = CopyMode::Sync)]
+        copy_mode: CopyMode,
+        /// Back-to-back kernel launches; copies are counted separately.
         #[arg(long, default_value_t = 0)]
         launches: u64,
         /// Model stages as overlapped (max) instead of serial (sum).
@@ -170,9 +185,13 @@ fn run() -> Result<String, String> {
             flops,
             bytes,
             h2d,
+            h2d_copies,
             d2h,
+            d2h_copies,
             host,
             g2g,
+            g2g_copies,
+            copy_mode,
             launches,
             overlap,
             ceiling,
@@ -181,10 +200,11 @@ fn run() -> Result<String, String> {
             *dtype,
             flops,
             bytes,
-            h2d.as_deref(),
-            d2h.as_deref(),
+            transfer(h2d.as_deref(), *h2d_copies)?,
+            transfer(d2h.as_deref(), *d2h_copies)?,
             host.as_deref(),
-            g2g.as_deref(),
+            transfer(g2g.as_deref(), *g2g_copies)?,
+            *copy_mode,
             *launches,
             *overlap,
             *ceiling,
@@ -264,6 +284,41 @@ fn opt_bytes(value: Option<&str>) -> Result<f64, String> {
     })
 }
 
+/// Without an explicit count, bytes on the command line are one copy; an
+/// explicit count is passed through so `estimate` can reject a mismatch.
+fn transfer(bytes: Option<&str>, copies: Option<u64>) -> Result<Transfer, String> {
+    let bytes = opt_bytes(bytes)?;
+    Ok(Transfer {
+        bytes,
+        copies: copies.unwrap_or(u64::from(bytes > 0.0)),
+    })
+}
+
+fn bound(lower_bound: bool) -> &'static str {
+    if lower_bound { "≥ " } else { "" }
+}
+
+fn transfer_line(out: &mut String, name: &str, t: &TransferTime) {
+    let noun = if t.copies == 1 { "copy" } else { "copies" };
+    let latency = t.latency_us.map_or_else(String::new, |us| {
+        format!("{} × {} + ", t.waits, fmt_duration(us / 1e6, 2))
+    });
+    let _ = write!(
+        out,
+        "{name:<12}{}{}   {} {} {noun}: {latency}{} / {}",
+        bound(t.lower_bound.is_some()),
+        fmt_duration(t.seconds, 2),
+        t.copies,
+        t.mode,
+        fmt_bytes(t.bytes, 2),
+        fmt_gbps(t.gbps, 2),
+    );
+    if let Some(reason) = t.lower_bound {
+        let _ = write!(out, "; lower bound: {reason}");
+    }
+    out.push('\n');
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "clap flatten would hide the flags"
@@ -273,10 +328,11 @@ fn cmd_estimate(
     dtype: Dtype,
     flops: &str,
     bytes: &str,
-    h2d: Option<&str>,
-    d2h: Option<&str>,
+    h2d: Transfer,
+    d2h: Transfer,
     host: Option<&str>,
-    g2g: Option<&str>,
+    g2g: Transfer,
+    copy_mode: CopyMode,
     launches: u64,
     overlap: bool,
     ceiling: bool,
@@ -287,9 +343,10 @@ fn cmd_estimate(
         flops: units::parse_number(flops).map_err(|e| e.to_string())?,
         hbm_bytes: units::parse_bytes(bytes).map_err(|e| e.to_string())?,
         host_bytes: opt_bytes(host)?,
-        h2d_bytes: opt_bytes(h2d)?,
-        d2h_bytes: opt_bytes(d2h)?,
-        g2g_bytes: opt_bytes(g2g)?,
+        h2d,
+        d2h,
+        g2g,
+        copy_mode,
         launches,
     };
     let mode = if overlap {
@@ -321,14 +378,22 @@ fn cmd_estimate(
     line("memory", e.memory_s, true);
     line("device", e.device_s, true);
     line("host", e.host_s, e.host_s > 0.0);
-    line("h2d", e.h2d_s, e.h2d_s > 0.0);
-    line("d2h", e.d2h_s, e.d2h_s > 0.0);
-    line("g2g", e.g2g_s, e.g2g_s > 0.0);
+    for (name, stage) in [("h2d", e.h2d), ("d2h", e.d2h), ("g2g", e.g2g)] {
+        if let Some(t) = stage {
+            transfer_line(&mut out, name, &t);
+        }
+    }
+    let mut line = |name: &str, seconds: f64, show: bool| {
+        if show {
+            let _ = writeln!(out, "{name:<12}{}", fmt_duration(seconds, 2));
+        }
+    };
     line("launch", e.launch_s, e.launch_s > 0.0);
     let _ = writeln!(
         out,
-        "{:<12}{}   {}",
+        "{:<12}{}{}   {}",
         "total",
+        bound(e.is_lower_bound()),
         fmt_duration(e.total_s, 2),
         e.bottleneck
     );
