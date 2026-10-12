@@ -1,0 +1,20 @@
+{
+  "id": "b200",
+  "name": "B200 SXM 180GB",
+  "architecture": "Blackwell",
+  "modal_gpu": "B200",
+  "memory_gb": 180,
+  "ceiling": {
+    "hbm_gbps": 8000,
+    "nvlink_gbps": 1800,
+    "compute_tflops": {
+      "fp4": 9000,
+      "fp8": 4500,
+      "bf16": 2250,
+      "fp16": 2250,
+      "tf32": 1125,
+      "fp32": 75
+    },
+    "source": "https://www.nvidia.com/en-us/data-center/hgx/ — HGX B200 sparse BF16 36 PFLOP/s / 2 dense / 8 GPUs; FP4 is the published dense figure; HBM 8 TB/s and NVLink 1.8 TB/s per GPU."
+  }
+}

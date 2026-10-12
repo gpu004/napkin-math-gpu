@@ -37,11 +37,10 @@ device↔device, copy-engine and SM paths, directional and bidirectional tests,
 latency, verification, and JSON output.
 
 Use CUDA Samples'
-[`p2pBandwidthLatencyTest`](https://github.com/NVIDIA/cuda-samples/tree/v13.3/cpp/5_Domain_Specific/p2pBandwidthLatencyTest)
+[`p2pBandwidthLatencyTest`](https://github.com/NVIDIA/cuda-samples/tree/master/cpp/5_Domain_Specific/p2pBandwidthLatencyTest)
 for its P2P latency/connectivity matrix, not as the sole bandwidth authority.
-CUDA Samples 13.4 removed it as obsolete, so pin `v13.3` or earlier; the link
-above points at that tag. Always pin the CUDA Samples revision so a profile can
-be reproduced after samples move or change.
+Pin the CUDA Samples revision so a profile can be reproduced after samples move
+or change.
 
 ## Evidence flow
 
@@ -163,33 +162,25 @@ software overhead.
 
 ## Status of the checked-in profiles
 
-The current H100 and A100 JSON files are **prototype calibration snapshots**, not
-the final authoritative evidence format:
+Datasheet ceilings live in `profiles/<id>.json` and carry their own `source`
+notes. Measured calibrations live in `profiles/<id>.measured.json`, produced by
+`napkin-bench` on Modal:
 
-- H100: [report](results/h100-sxm.md) · [raw JSON](results/h100-sxm.json)
-- A100: [report](results/a100-80gb-sxm4.md) · [raw JSON](results/a100-80gb-sxm4.json)
+- H100: [profile](profiles/h100.json) · [measured](profiles/h100.measured.json)
+- A100: [profile](profiles/a100.json) · [measured](profiles/a100.measured.json)
 
-They remain useful because they established the typed profile, correctness
-checks, renderer, estimator, two-GPU allocation, and approximate rounding. They
-must be replaced metric-by-metric by the source policy above before being called
-canonical.
+The `napkin::profile` types are the shared contract between the estimator
+crate and the `napkin-bench` producer. The measured files must be replaced
+metric-by-metric by the source policy above before being called canonical.
 
-`modal_benchmark.py` is therefore a calibration harness. Future work should add
-thin runners/parsers around pinned upstream tools instead of extending its
-homegrown measurement loops.
+`modal/bench.py` is therefore a thin launcher for a calibration harness. Future
+work should add runners/parsers around pinned upstream tools instead of
+extending the homegrown measurement loops.
 
 ## Development checks
 
-Run GPU-free checks in a Modal CPU container:
+GPU-free checks run locally and in CI:
 
 ```sh
-modal shell --add-python 3.12 --add-local . -c \
-  'cd /mnt/napkin-math-gpu && python -m pip install ".[test]" ty && \
-   python -m pytest && \
-   ty check gpu_napkin.py napkin_profile.py render_results.py tests/test_gpu_napkin.py && \
-   python -m compileall gpu_napkin.py napkin_profile.py modal_benchmark.py render_results.py'
+sh scripts/check.sh
 ```
-
-The upstream [Napkin Math](https://github.com/sirupsen/napkin-math) project is
-the CPU-side inspiration for this repository. Its numbers are not substituted
-for GPU evidence.

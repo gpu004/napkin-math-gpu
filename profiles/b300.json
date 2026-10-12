@@ -1,0 +1,20 @@
+{
+  "id": "b300",
+  "name": "B300 SXM 288GB",
+  "architecture": "Blackwell Ultra",
+  "modal_gpu": "B300",
+  "memory_gb": 288,
+  "ceiling": {
+    "hbm_gbps": 8000,
+    "nvlink_gbps": 1800,
+    "compute_tflops": {
+      "fp4": 13500,
+      "fp8": 4500,
+      "bf16": 2250,
+      "fp16": 2250,
+      "tf32": 1125,
+      "fp32": 75
+    },
+    "source": "https://www.nvidia.com/en-us/data-center/hgx/ — HGX B300 dense FP4 108 PFLOP/s / 8 GPUs; sparse FP8/BF16/TF32 halved for dense; HBM 8 TB/s and NVLink 1.8 TB/s per GPU."
+  }
+}

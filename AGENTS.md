@@ -1,10 +1,11 @@
 # Agent instructions
 
-- Use `jj` for version control.
-- Edit locally; run GPU executions and benchmarks on Modal—never locally.
-- Modal is GPU/test only. Never use Modal to build or deploy the website.
-- Build the Astro site locally; deploy the website only with Cloudflare Wrangler.
-- Prefer table/registry config (`GPU_TARGETS`) over growing if/elif dispatch.
-- Prefer one shared typed profile contract over stringly `dict[str, Any]` metric keys.
-- `modal_benchmark.py` is producer-only; it must not import the estimator.
-- Canonical runs pin GPUs with `!` where needed (e.g. `H100!`); never publish `--quick` smoke output as canonical.
+- The user keeps this repo under `jj`; agents may use plain `git` when told to.
+- Run `sh scripts/check.sh` before pushing (fmt, clippy `-D warnings`, tests, lint-arch).
+- Commits are conventional: `type(scope): Capitalized summary`.
+- GPU runs happen only on Modal, never locally: `modal run modal/bench.py --gpu h100`.
+- Canonical runs pin GPUs with `!` where needed (`H100!`); never commit `--quick` output.
+- `napkin::profile` JSON types are the shared contract; `napkin-bench` may import only
+  `napkin::profile::{Measured, Dtype}`.
+- README number blocks are generated: edit tables via `napkin` then run
+  `napkin readme --write README.md`. Never hand-edit inside `<!-- napkin ... -->` markers.

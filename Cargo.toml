@@ -1,0 +1,22 @@
+[workspace]
+resolver = "3"
+members = ["crates/napkin", "crates/napkin-bench"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+dbg_macro = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
