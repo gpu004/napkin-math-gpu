@@ -100,4 +100,3 @@ __init__(self, bucket_name, bucket_endpoint_url=None, key_prefix=None,
     secret=None, oidc_auth_role_arn=None, read_only=False, requester_pays=False,
     force_path_style=False)
 ```
-

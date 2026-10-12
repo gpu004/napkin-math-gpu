@@ -22,7 +22,7 @@ use napkin::profile::{Dtype, Measured};
 
 /// Anything the harness can fail with.
 #[derive(Debug)]
-pub struct BenchError(pub String);
+pub(crate) struct BenchError(String);
 
 impl std::fmt::Display for BenchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -54,21 +54,21 @@ const MIB: usize = 1 << 20;
 
 /// Tunables for a full or `--quick` run.
 #[derive(Clone, Copy, Debug)]
-pub struct Config {
-    pub rounds: u32,
-    pub copy_mib: usize,
-    pub elementwise_mib: usize,
-    pub host_mib: usize,
-    pub gemm_n: u32,
-    pub chase_steps: u64,
-    pub iterations_bw: u32,
-    pub iterations_launch: u32,
-    pub quick: bool,
+pub(crate) struct Config {
+    rounds: u32,
+    copy_mib: usize,
+    elementwise_mib: usize,
+    host_mib: usize,
+    gemm_n: u32,
+    chase_steps: u64,
+    iterations_bw: u32,
+    iterations_launch: u32,
+    quick: bool,
 }
 
 impl Config {
     #[must_use]
-    pub fn full() -> Self {
+    pub(crate) fn full() -> Self {
         Self {
             rounds: 7,
             copy_mib: 512,
@@ -83,7 +83,7 @@ impl Config {
     }
 
     #[must_use]
-    pub fn quick() -> Self {
+    pub(crate) fn quick() -> Self {
         Self {
             rounds: 3,
             copy_mib: 64,
@@ -428,7 +428,7 @@ fn driver_version_string() -> String {
     clippy::cast_precision_loss,
     reason = "byte and element counts fit in 2^53"
 )]
-pub fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchError> {
+pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchError> {
     let device_count = CudaContext::device_count()?.cast_unsigned();
     let ctx0 = CudaContext::new(0)?;
     let stream0 = ctx0.default_stream();

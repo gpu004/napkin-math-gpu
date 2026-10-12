@@ -1,0 +1,53 @@
+default_install_hook_types: [pre-commit, commit-msg]
+
+repos:
+  - repo: builtin
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-toml
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.10
+    hooks:
+      - id: ruff-check
+      - id: ruff-format
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --check
+        language: system
+        pass_filenames: false
+        types: [rust]
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets --locked -- -D warnings
+        language: system
+        pass_filenames: false
+        types_or: [rust, toml]
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --workspace --locked
+        language: system
+        pass_filenames: false
+        types_or: [rust, toml, json, markdown]
+      - id: lint-arch
+        name: architecture lint
+        entry: sh scripts/lint-arch.sh
+        language: system
+        pass_filenames: false
+      - id: readme-check
+        name: README generated blocks
+        entry: cargo run -q --locked -p napkin -- readme --check README.md
+        language: system
+        pass_filenames: false
+        files: ^(README\.md|profiles/|crates/napkin/)
+      - id: conventional-commit
+        name: conventional commit message
+        entry: sh scripts/commit-msg.sh
+        language: system
+        stages: [commit-msg]
+        always_run: true

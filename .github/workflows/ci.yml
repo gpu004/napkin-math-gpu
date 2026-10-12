@@ -15,4 +15,5 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: sh scripts/check.sh
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run --only-dev --locked prek run --all-files --show-diff-on-failure

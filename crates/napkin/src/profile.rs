@@ -75,6 +75,63 @@ pub struct Profile {
     pub measured: Option<Measured>,
 }
 
+impl Profile {
+    /// Resolves the rates used for estimation: measured values when a measured
+    /// profile is attached, else datasheet ceilings. `force_ceiling` implements
+    /// `--ceiling`. GPU-to-GPU falls back to the `NVLink` ceiling when unmeasured;
+    /// host-link and launch rates have no datasheet fallback.
+    #[must_use]
+    pub fn rates(&self, force_ceiling: bool) -> Rates {
+        let mut compute_tflops = BTreeMap::new();
+        if !force_ceiling && let Some(m) = &self.measured {
+            for (dtype, _) in self
+                .ceiling
+                .compute_tflops
+                .iter()
+                .chain(m.compute_tflops.iter())
+            {
+                let (tflops, basis) = match m.compute_tflops.get(dtype) {
+                    Some(&v) => (v, Basis::Measured),
+                    None => match self.ceiling.compute_tflops.get(dtype) {
+                        Some(&v) => (v, Basis::Ceiling),
+                        None => continue,
+                    },
+                };
+                compute_tflops.insert(*dtype, ComputeRate { tflops, basis });
+            }
+            return Rates {
+                compute_tflops,
+                hbm_gbps: m.hbm_gbps,
+                h2d_gbps: Some(m.h2d_gbps),
+                d2h_gbps: Some(m.d2h_gbps),
+                host_copy_gbps: Some(m.host_copy_gbps),
+                g2g_gbps: m.g2g_gbps.unwrap_or(self.ceiling.nvlink_gbps),
+                launch_us: Some(m.launch_us),
+                basis: Basis::Measured,
+            };
+        }
+        for (dtype, &tflops) in &self.ceiling.compute_tflops {
+            compute_tflops.insert(
+                *dtype,
+                ComputeRate {
+                    tflops,
+                    basis: Basis::Ceiling,
+                },
+            );
+        }
+        Rates {
+            compute_tflops,
+            hbm_gbps: self.ceiling.hbm_gbps,
+            h2d_gbps: None,
+            d2h_gbps: None,
+            host_copy_gbps: None,
+            g2g_gbps: self.ceiling.nvlink_gbps,
+            launch_us: None,
+            basis: Basis::Ceiling,
+        }
+    }
+}
+
 /// Output of `napkin-bench`; all throughputs are decimal
 /// (GB/s = 1e9 B/s, TFLOP/s = 1e12 FLOP/s).
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -206,77 +263,7 @@ pub fn builtin() -> Result<Vec<Profile>, ProfileError> {
 /// # Errors
 /// Returns `ProfileError` if an embedded JSON file fails to parse.
 pub fn find(id: &str) -> Result<Option<Profile>, ProfileError> {
-    for (pid, src) in DATASHEET_SRC {
-        if *pid == id {
-            let mut profile: Profile = serde_json::from_str(src)
-                .map_err(|e| ProfileError(format!("profile {id}: {e}")))?;
-            if let Some((_, measured_src)) = MEASURED_SRC.iter().find(|(mid, _)| mid == &id) {
-                profile.measured = Some(
-                    serde_json::from_str(measured_src)
-                        .map_err(|e| ProfileError(format!("measured {id}: {e}")))?,
-                );
-            }
-            return Ok(Some(profile));
-        }
-    }
-    Ok(None)
-}
-
-impl Profile {
-    /// Resolves the rates used for estimation: measured values when a measured
-    /// profile is attached, else datasheet ceilings. `force_ceiling` implements
-    /// `--ceiling`. GPU-to-GPU falls back to the `NVLink` ceiling when unmeasured;
-    /// host-link and launch rates have no datasheet fallback.
-    #[must_use]
-    pub fn rates(&self, force_ceiling: bool) -> Rates {
-        let mut compute_tflops = BTreeMap::new();
-        if !force_ceiling && let Some(m) = &self.measured {
-            for (dtype, _) in self
-                .ceiling
-                .compute_tflops
-                .iter()
-                .chain(m.compute_tflops.iter())
-            {
-                let (tflops, basis) = match m.compute_tflops.get(dtype) {
-                    Some(&v) => (v, Basis::Measured),
-                    None => match self.ceiling.compute_tflops.get(dtype) {
-                        Some(&v) => (v, Basis::Ceiling),
-                        None => continue,
-                    },
-                };
-                compute_tflops.insert(*dtype, ComputeRate { tflops, basis });
-            }
-            return Rates {
-                compute_tflops,
-                hbm_gbps: m.hbm_gbps,
-                h2d_gbps: Some(m.h2d_gbps),
-                d2h_gbps: Some(m.d2h_gbps),
-                host_copy_gbps: Some(m.host_copy_gbps),
-                g2g_gbps: m.g2g_gbps.unwrap_or(self.ceiling.nvlink_gbps),
-                launch_us: Some(m.launch_us),
-                basis: Basis::Measured,
-            };
-        }
-        for (dtype, &tflops) in &self.ceiling.compute_tflops {
-            compute_tflops.insert(
-                *dtype,
-                ComputeRate {
-                    tflops,
-                    basis: Basis::Ceiling,
-                },
-            );
-        }
-        Rates {
-            compute_tflops,
-            hbm_gbps: self.ceiling.hbm_gbps,
-            h2d_gbps: None,
-            d2h_gbps: None,
-            host_copy_gbps: None,
-            g2g_gbps: self.ceiling.nvlink_gbps,
-            launch_us: None,
-            basis: Basis::Ceiling,
-        }
-    }
+    Ok(builtin()?.into_iter().find(|profile| profile.id == id))
 }
 
 #[cfg(test)]

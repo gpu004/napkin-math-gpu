@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::PathBuf;
 use std::process::Command;
 
 fn napkin(args: &[&str]) -> (String, String, i32) {
@@ -64,4 +66,46 @@ fn compare_prints_table() {
     let (stdout, _, code) = napkin(&["compare"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("| GPU |"), "{stdout}");
+}
+
+struct TempReadme(PathBuf);
+
+impl Drop for TempReadme {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+fn stale_readme(name: &str) -> std::io::Result<TempReadme> {
+    let path = std::env::temp_dir().join(format!("napkin-readme-{name}-{}.md", std::process::id()));
+    fs::write(&path, "<!-- napkin compare -->\nstale\n<!-- /napkin -->\n")
+        .map(|()| TempReadme(path))
+}
+
+#[test]
+fn readme_check_and_write_conflict() {
+    let (_, _, code) = napkin(&["readme", "--check", "--write"]);
+    assert_eq!(code, 2);
+}
+
+#[test]
+fn readme_check_preserves_stale_file() -> Result<(), Box<dyn std::error::Error>> {
+    let path = stale_readme("check")?;
+    let original = fs::read_to_string(&path.0)?;
+    let path_arg = path.0.to_string_lossy();
+    let (_, _, code) = napkin(&["readme", "--check", path_arg.as_ref()]);
+    assert_ne!(code, 0);
+    assert_eq!(fs::read_to_string(&path.0)?, original);
+    Ok(())
+}
+
+#[test]
+fn readme_rewrites_stale_file() -> Result<(), Box<dyn std::error::Error>> {
+    let path = stale_readme("rewrite")?;
+    let path_arg = path.0.to_string_lossy();
+    let (_, _, code) = napkin(&["readme", path_arg.as_ref()]);
+    assert_eq!(code, 0);
+    let (_, _, code) = napkin(&["readme", "--check", path_arg.as_ref()]);
+    assert_eq!(code, 0);
+    Ok(())
 }
