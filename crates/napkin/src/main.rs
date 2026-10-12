@@ -238,7 +238,8 @@ fn cmd_estimate(
     let mut out = format!("{} · {dtype} · {basis}\n", p.name);
     let _ = writeln!(
         out,
-        "intensity   {:<22} ridge {:<22} {}",
+        "{:<12}{}   ridge {}   {}",
+        "intensity",
         fmt_intensity(e.intensity, 2),
         fmt_intensity(e.ridge, 2),
         e.bottleneck
@@ -258,7 +259,8 @@ fn cmd_estimate(
     line("launch", e.launch_s, e.launch_s > 0.0);
     let _ = writeln!(
         out,
-        "total       {:<22}{}",
+        "{:<12}{}   {}",
+        "total",
         fmt_duration(e.total_s, 2),
         e.bottleneck
     );

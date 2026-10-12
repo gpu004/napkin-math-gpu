@@ -99,19 +99,19 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
             gb(m.elementwise_gbps),
         ],
     ];
-    for r in &rows {
+    let g2g_row = [
+        "GPU ↔ GPU, NVLink one-way".to_owned(),
+        m.g2g_latency_us.map_or_else(String::new, &lat_us),
+        m.g2g_gbps.map_or_else(String::new, &gbps),
+        m.g2g_gbps.map_or_else(String::new, &mb),
+        m.g2g_gbps.map_or_else(String::new, &gb),
+    ];
+    for r in rows.iter().chain(std::iter::once(&g2g_row)) {
+        if r[1..].iter().all(String::is_empty) {
+            continue;
+        }
         emit(&mut out, &[&r[0], &r[1], &r[2], &r[3], &r[4]]);
     }
-    emit(
-        &mut out,
-        &[
-            "GPU ↔ GPU, NVLink one-way",
-            &m.g2g_latency_us.map_or_else(String::new, &lat_us),
-            &m.g2g_gbps.map_or_else(String::new, &gbps),
-            &m.g2g_gbps.map_or_else(String::new, &mb),
-            &m.g2g_gbps.map_or_else(String::new, &gb),
-        ],
-    );
 
     out.push('\n');
     emit(
@@ -208,7 +208,10 @@ pub fn compare(profiles: &[Profile], exact: bool) -> String {
                 &ridge,
                 &fmt_gbps(p.ceiling.nvlink_gbps, sig),
                 &rates
-                    .host_copy_gbps
+                    .h2d_gbps
+                    .zip(rates.d2h_gbps)
+                    .map(|(a, b)| a.min(b))
+                    .or(rates.h2d_gbps)
                     .map_or_else(|| "—".to_owned(), |v| fmt_gbps(v, sig)),
                 &rates
                     .launch_us

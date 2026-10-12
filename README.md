@@ -10,8 +10,11 @@ Eskildsen's [Napkin Math](https://github.com/sirupsen/napkin-math).
 ## Numbers
 
 Below are numbers rounded for memorization, not faux precision.
-Measured on Modal (`H100!:2`, 2026-08-08, driver 580.95.05, CUDA 12.8, cuBLAS via the
-[cudarc](https://github.com/chelsea0x3b/cudarc) bindings).
+The H100 and A100 numbers were measured on Modal (`H100!:2` / `A100-80GB:2`,
+2026-08-08, driver 580.95.05, CUDA 12.8) by the previous PyTorch 2.8 harness —
+cuBLAS through `torch`, `torch.Tensor.add_` for the launch row — so the launch
+figure includes PyTorch dispatcher overhead. A re-run with the Rust
+`napkin-bench` (cudarc) harness is pending; see [Benchmarks](#benchmarks).
 
 **Note 1:** Compute figures are dense, not sparse. NVIDIA's headline Tensor
 Core numbers assume structured sparsity; dense is half.
@@ -24,11 +27,9 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 | Operation | Latency | Throughput | 1 MB | 1 GB |
 | --- | ---: | ---: | ---: | ---: |
 | Kernel launch (back-to-back) | 5 μs |  |  |  |
-| Launch + sync round trip |  |  |  |  |
 | Pinned host RAM copy |  | 70 GB/s | 10 μs | 10 ms |
 | Host → device, pinned |  | 60 GB/s | 20 μs | 20 ms |
 | Device → host, pinned |  | 60 GB/s | 20 μs | 20 ms |
-| HBM random read (pointer chase) |  |  |  |  |
 | HBM copy (read + write) |  | 3 TB/s | 300 ns | 300 μs |
 | Elementwise add |  | 3 TB/s | 300 ns | 300 μs |
 | GPU ↔ GPU, NVLink one-way |  | 400 GB/s | 3 μs | 3 ms |
@@ -46,8 +47,8 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 <!-- napkin compare -->
 | GPU | Memory | HBM | Dense BF16 | BF16 ridge | NVLink | Host link | Launch | Basis |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 170 FLOP/B | 600 GB/s | 70 GB/s | 5 μs | measured 2026-08-08 |
-| H100 SXM 80GB | 80 GB | 3 TB/s | 700 TFLOP/s | 240 FLOP/B | 900 GB/s | 70 GB/s | 5 μs | measured 2026-08-08 |
+| A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 170 FLOP/B | 600 GB/s | 30 GB/s | 5 μs | measured 2026-08-08 |
+| H100 SXM 80GB | 80 GB | 3 TB/s | 700 TFLOP/s | 240 FLOP/B | 900 GB/s | 60 GB/s | 5 μs | measured 2026-08-08 |
 | B200 SXM 180GB | 180 GB | 8 TB/s | 2 PFLOP/s | 280 FLOP/B | 2 TB/s | — | — | datasheet |
 | B300 SXM 288GB | 288 GB | 8 TB/s | 2 PFLOP/s | 280 FLOP/B | 2 TB/s | — | — | datasheet |
 
@@ -66,7 +67,7 @@ Rows labelled "datasheet" are vendor ceilings, not achieved throughput.
 For a workload with `W` FLOPs and `Q` bytes of HBM traffic:
 
 ```text
-arithmetic intensity = W / Q                          FLOP/byte
+arithmetic  = W / Q                          FLOP/byte
 ridge point          = F / M = TFLOP/s × 1,000 / GB/s FLOP/byte
 compute time         = W / F
 memory time          = Q / M
@@ -99,13 +100,13 @@ launches on an H100:
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB --h2d 2GB --launches 20
 H100 SXM 80GB · bf16 · measured 2026-08-08
-intensity   200 FLOP/B             ridge 240 FLOP/B             memory-bound
+intensity   200 FLOP/B   ridge 240 FLOP/B   memory-bound
 compute     280 ms
 memory      330 ms
 device      330 ms
 h2d         36 ms
 launch      93 μs
-total       370 ms                memory-bound
+total       370 ms   memory-bound
 ```
 
 A 70B bf16 decode step must read the full 140 GB of weights once per token.
@@ -121,11 +122,11 @@ fits        no — needs at least 2 GPUs (weights sharded)
 
 $ napkin estimate --gpu h100 --dtype bf16 --flops 140G --bytes 140GB
 H100 SXM 80GB · bf16 · measured 2026-08-08
-intensity   1 FLOP/B               ridge 240 FLOP/B             memory-bound
+intensity   1 FLOP/B   ridge 240 FLOP/B   memory-bound
 compute     200 μs
 memory      47 ms
 device      47 ms
-total       47 ms                 memory-bound
+total       47 ms   memory-bound
 ```
 
 Memory-bound: about 50 ms/token on one GPU's bandwidth, and it splits roughly
@@ -197,7 +198,7 @@ napkin readme --write README.md         # refreshes the tables
 * [Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM](https://arxiv.org/abs/2104.04473). Tensor, pipeline, and data parallelism with communication accounting.
 * [FlashAttention](https://arxiv.org/abs/2205.14135). A worked example of winning by counting HBM bytes instead of FLOPs.
 * [How to Optimize a CUDA Matmul Kernel for cuBLAS-like Performance](https://siboehm.com/articles/22/CUDA-MMM). Step-by-step from naive to near-cuBLAS, with the arithmetic for each step.
-* [NVIDIA GPU Performance Background User's Guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-gpu-background/index.html). NVIDIA's own arithmetic-intensity and roofline primer.
+* [NVIDIA GPU Performance Background User's Guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-gpu-background/index.html). NVIDIA's own arithmetic- and roofline primer.
 * [NVIDIA Matrix Multiplication Background User's Guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html). Tile and wave quantization, and why GEMM shapes matter.
 * [CUDA C++ Best Practices Guide](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/). Memory coalescing, transfers, occupancy, and measurement.
 * [Modal GPU Glossary](https://modal.com/gpu-glossary). Fast definitions for SMs, warps, HBM, Tensor Cores, and the rest of the vocabulary.

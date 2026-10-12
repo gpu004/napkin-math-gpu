@@ -21,12 +21,11 @@ image = (
     .run_commands(
         "curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable --profile minimal"
     )
-    .env({"PATH": "/root/.cargo/bin:$PATH"})
     .add_local_file(ROOT / "Cargo.toml", "/app/Cargo.toml", copy=True)
     .add_local_file(ROOT / "Cargo.lock", "/app/Cargo.lock", copy=True)
     .add_local_dir(ROOT / "crates", "/app/crates", copy=True)
     .add_local_dir(ROOT / "profiles", "/app/profiles", copy=True)
-    .run_commands("cd /app && cargo build --release -p napkin-bench")
+    .run_commands("cd /app && /root/.cargo/bin/cargo build --release -p napkin-bench")
 )
 
 app = modal.App("gpu-napkin-math", image=image)
@@ -42,17 +41,24 @@ def _run(quick: bool) -> str:
     return out.stdout
 
 
-for name, request in GPUS.items():
-    app.function(gpu=request, cpu=8.0, memory=8192, timeout=20 * 60, name=f"bench_{name}")(
-        _run
-    )
+FUNCS = {
+    name: app.function(
+        gpu=request,
+        cpu=8.0,
+        memory=8192,
+        timeout=20 * 60,
+        name=f"bench_{name}",
+        serialized=True,
+    )(_run)
+    for name, request in GPUS.items()
+}
 
 
 @app.local_entrypoint()
 def main(gpu: str = "h100", quick: bool = False) -> None:
-    if gpu not in GPUS:
-        raise ValueError(f"--gpu must be one of: {sorted(GPUS)}")
-    result = app.function.lookup("gpu-napkin-math", f"bench_{gpu}").remote(quick)
+    if gpu not in FUNCS:
+        raise ValueError(f"--gpu must be one of: {sorted(FUNCS)}")
+    result = FUNCS[gpu].remote(quick)
     if quick:
         print(result)
         return
