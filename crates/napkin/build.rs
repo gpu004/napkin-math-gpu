@@ -253,6 +253,10 @@ fn emit_measured(measured: &Measured) -> String {
         host_copy_gbps,
         h2d_gbps,
         d2h_gbps,
+        pcie_gen,
+        pcie_gen_max,
+        pcie_width,
+        pcie_width_max,
         h2d_latency_us,
         d2h_latency_us,
         hbm_gbps,
@@ -283,6 +287,10 @@ fn emit_measured(measured: &Measured) -> String {
         ("host_copy_gbps", float_literal(*host_copy_gbps)),
         ("h2d_gbps", float_literal(*h2d_gbps)),
         ("d2h_gbps", float_literal(*d2h_gbps)),
+        ("pcie_gen", option_u8_literal(*pcie_gen)),
+        ("pcie_gen_max", option_u8_literal(*pcie_gen_max)),
+        ("pcie_width", option_u8_literal(*pcie_width)),
+        ("pcie_width_max", option_u8_literal(*pcie_width_max)),
         ("h2d_latency_us", option_float_literal(*h2d_latency_us)),
         ("d2h_latency_us", option_float_literal(*d2h_latency_us)),
         ("hbm_gbps", float_literal(*hbm_gbps)),
@@ -328,6 +336,10 @@ fn option_float_literal(value: Option<f64>) -> String {
         || "None".to_owned(),
         |value| format!("Some({})", float_literal(value)),
     )
+}
+
+fn option_u8_literal(value: Option<u8>) -> String {
+    value.map_or_else(|| "None".to_owned(), |value| format!("Some({value}_u8)"))
 }
 
 fn dtype_literal(dtype: Dtype) -> &'static str {

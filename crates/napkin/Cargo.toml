@@ -13,3 +13,6 @@ napkin-profile = { path = "../napkin-profile" }
 [build-dependencies]
 napkin-profile = { path = "../napkin-profile" }
 serde_json = "1"
+
+[dev-dependencies]
+serde_json = "1"

@@ -155,6 +155,17 @@ pub struct Measured {
     /// 512 MiB pinned async copies, event-timed.
     pub h2d_gbps: f64,
     pub d2h_gbps: f64,
+    /// `PCIe` link on GPU 0 at the time of the host copies; None if the
+    /// platform does not report it.
+    #[serde(default)]
+    pub pcie_gen: Option<u8>,
+    /// `min(gpumax, hostmax)`; None if neither max is reported.
+    #[serde(default)]
+    pub pcie_gen_max: Option<u8>,
+    #[serde(default)]
+    pub pcie_width: Option<u8>,
+    #[serde(default)]
+    pub pcie_width_max: Option<u8>,
     /// 4-byte synchronous copies, wall clock median.
     pub h2d_latency_us: Option<f64>,
     pub d2h_latency_us: Option<f64>,
