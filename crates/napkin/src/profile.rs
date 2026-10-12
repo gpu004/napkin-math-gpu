@@ -42,15 +42,31 @@ mod tests {
     }
 
     #[test]
-    fn measured_profiles_are_attached_only_where_available() {
-        assert!(find("h100").is_some_and(|profile| profile.measured.is_some()));
-        assert!(find("b200").is_some_and(|profile| profile.measured.is_none()));
+    fn measured_json_without_pcie_fields_parses() {
+        let json = include_str!("../../../profiles/h100.measured.json")
+            .replace(r#""pcie_gen": 5,"#, "")
+            .replace(r#""pcie_gen_max": 5,"#, "")
+            .replace(r#""pcie_width": 16,"#, "")
+            .replace(r#""pcie_width_max": 16,"#, "");
+        let measured: napkin_profile::Measured = serde_json::from_str(&json).unwrap();
+        assert_eq!(measured.pcie_gen, None);
+        assert_eq!(measured.pcie_width_max, None);
+    }
+
+    #[test]
+    fn all_builtin_gpus_have_measured_profiles() {
+        for id in ["a100", "h100", "b200", "b300"] {
+            assert!(
+                find(id).is_some_and(|profile| profile.measured.is_some()),
+                "{id}"
+            );
+        }
     }
 
     #[test]
     fn ceiling_basis_has_no_host_or_launch_rates() {
         let b200 = find("b200").unwrap();
-        let rates = b200.rates(false);
+        let rates = b200.rates(true);
         assert_eq!(rates.basis, Basis::Ceiling);
         assert!(rates.h2d_gbps.is_none());
         assert!(rates.launch_us.is_none());

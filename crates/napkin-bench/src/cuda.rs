@@ -114,15 +114,17 @@ fn cuda_samples(
     stream.synchronize()?;
     let mut samples = Vec::with_capacity(rounds as usize);
     for _ in 0..rounds {
-        let start = ctx.new_event(None)?;
-        let end = ctx.new_event(None)?;
+        let start = ctx.new_event(Some(dsys::CUevent_flags::CU_EVENT_DEFAULT))?;
+        let end = ctx.new_event(Some(dsys::CUevent_flags::CU_EVENT_DEFAULT))?;
         start.record(stream)?;
         for _ in 0..iterations {
             op()?;
         }
         end.record(stream)?;
-        end.synchronize()?;
-        samples.push(f64::from(start.elapsed_ms(&end)?) / f64::from(iterations));
+        stream.synchronize()?;
+        let ms =
+            unsafe { cudarc::driver::result::event::elapsed(start.cu_event(), end.cu_event())? };
+        samples.push(f64::from(ms) / f64::from(iterations));
     }
     Ok(samples)
 }
@@ -399,6 +401,73 @@ fn enable_peer(from: &Arc<CudaContext>, to: &Arc<CudaContext>) -> Result<(), Ben
     Ok(())
 }
 
+// Device memory from cuMemAlloc, freed on drop. Peer copies need this
+// rather than stream-ordered pool allocations: cuCtxEnablePeerAccess does
+// not cover pool memory, so cuMemcpyPeerAsync on pool buffers is silently
+// staged through the host at roughly PCIe speed (~37 GB/s instead of ~400).
+struct PeerBuffer {
+    ctx: Arc<CudaContext>,
+    ptr: dsys::CUdeviceptr,
+}
+
+impl PeerBuffer {
+    fn new(ctx: &Arc<CudaContext>, bytes: usize) -> Result<Self, BenchError> {
+        ctx.bind_to_thread()?;
+        let mut ptr: dsys::CUdeviceptr = 0;
+        unsafe {
+            dsys::cuMemAlloc_v2(&raw mut ptr, bytes)
+                .result()
+                .map_err(|e| BenchError(format!("cuMemAlloc {bytes}B: {e}")))?;
+        }
+        Ok(Self {
+            ctx: ctx.clone(),
+            ptr,
+        })
+    }
+}
+
+impl Drop for PeerBuffer {
+    fn drop(&mut self) {
+        let _ = self.ctx.bind_to_thread();
+        unsafe {
+            let _ = dsys::cuMemFree_v2(self.ptr).result();
+        }
+    }
+}
+
+/// `PCIe` link of GPU 0 from nvidia-smi; None when it does not report.
+fn pcie_link() -> (Option<u8>, Option<u8>, Option<u8>, Option<u8>) {
+    let parse = |s: &str| s.trim().parse::<u8>().ok();
+    let out = std::process::Command::new("nvidia-smi")
+        .args([
+            "-i",
+            "0",
+            "--query-gpu=pcie.link.gen.gpucurrent,pcie.link.gen.gpumax,pcie.link.gen.hostmax,pcie.link.width.current,pcie.link.width.max",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| {
+            let mut parts = s.trim().split(',');
+            (
+                parts.next().and_then(parse),
+                parts.next().and_then(parse),
+                parts.next().and_then(parse),
+                parts.next().and_then(parse),
+                parts.next().and_then(parse),
+            )
+        });
+    out.map_or(
+        (None, None, None, None),
+        |(g, gpumax, hostmax, width, width_max)| {
+            let gen_max = [gpumax, hostmax].into_iter().flatten().min();
+            (g, gen_max, width, width_max)
+        },
+    )
+}
+
 fn driver_version_string() -> String {
     let smi = std::process::Command::new("nvidia-smi")
         .args(["--query-gpu=driver_version", "--format=csv,noheader"])
@@ -430,9 +499,11 @@ fn driver_version_string() -> String {
 )]
 pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchError> {
     let device_count = CudaContext::device_count()?.cast_unsigned();
+    progress("devices", &format!("{device_count}"));
     let ctx0 = CudaContext::new(0)?;
     let stream0 = ctx0.default_stream();
     let kernels = load_kernels(&ctx0)?;
+    progress("kernels", "loaded");
 
     let mut samples_ms: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     let mut checks: BTreeMap<String, bool> = BTreeMap::new();
@@ -557,6 +628,22 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         "h2d/d2h latency",
         &format!("{h2d_latency_us:.1}/{d2h_latency_us:.1} μs"),
     );
+    let (pcie_gen, pcie_gen_max, pcie_width, pcie_width_max) = pcie_link();
+    progress(
+        "pcie",
+        &format!(
+            "gen{}x{} (max gen{}x{})",
+            pcie_gen.map_or("?".to_owned(), |v| v.to_string()),
+            pcie_width.map_or("?".to_owned(), |v| v.to_string()),
+            pcie_gen_max.map_or("?".to_owned(), |v| v.to_string()),
+            pcie_width_max.map_or("?".to_owned(), |v| v.to_string()),
+        ),
+    );
+    if let (Some(g), Some(g_max), Some(w), Some(w_max)) =
+        (pcie_gen, pcie_gen_max, pcie_width, pcie_width_max)
+    {
+        checks.insert("pcie_full_link".to_owned(), g == g_max && w == w_max);
+    }
 
     stream0.synchronize()?;
     let probes_ok = {
@@ -696,18 +783,65 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         if peer_supported(&ctx0, &ctx1)? && peer_supported(&ctx1, &ctx0)? {
             enable_peer(&ctx0, &ctx1)?;
             enable_peer(&ctx1, &ctx0)?;
-            let peer_elems = cfg.copy_mib * MIB / 4;
+            // Peer copies must use cuMemAlloc memory, not stream-ordered pool
+            // allocations: cuCtxEnablePeerAccess does not cover pool memory, so
+            // cuMemcpyPeerAsync on pool buffers is silently staged through the
+            // host at roughly PCIe speed (~37 GB/s measured instead of ~400).
+            let peer_bytes = cfg.copy_mib * MIB;
+            let peer_elems = peer_bytes / 4;
             let pattern = random_f32(peer_elems, 0xFEED);
-            let p_src0 = stream0.clone_htod(&pattern)?;
-            let mut p_dst1 = unsafe { stream1.alloc::<f32>(peer_elems) }?;
-            let p_src1 = stream1.clone_htod(&pattern)?;
-            let mut p_dst0 = unsafe { stream0.alloc::<f32>(peer_elems) }?;
+            let src0 = PeerBuffer::new(&ctx0, peer_bytes)?;
+            let dst1 = PeerBuffer::new(&ctx1, peer_bytes)?;
+            let src1 = PeerBuffer::new(&ctx1, peer_bytes)?;
+            let dst0 = PeerBuffer::new(&ctx0, peer_bytes)?;
+            unsafe {
+                dsys::cuMemcpyHtoDAsync_v2(
+                    src0.ptr,
+                    pattern.as_ptr().cast::<core::ffi::c_void>(),
+                    peer_bytes,
+                    stream0.cu_stream(),
+                )
+                .result()
+                .map_err(|e| BenchError(format!("upload src0: {e}")))?;
+                dsys::cuMemcpyHtoDAsync_v2(
+                    src1.ptr,
+                    pattern.as_ptr().cast::<core::ffi::c_void>(),
+                    peer_bytes,
+                    stream1.cu_stream(),
+                )
+                .result()
+                .map_err(|e| BenchError(format!("upload src1: {e}")))?;
+            }
+            stream0.synchronize()?;
+            stream1.synchronize()?;
             let fwd = cuda_samples(&ctx1, &stream1, 5, cfg.iterations_bw, cfg.rounds, || {
-                stream1.memcpy_dtod(&p_src0, &mut p_dst1)?;
+                unsafe {
+                    dsys::cuMemcpyPeerAsync(
+                        dst1.ptr,
+                        ctx1.cu_ctx(),
+                        src0.ptr,
+                        ctx0.cu_ctx(),
+                        peer_bytes,
+                        stream1.cu_stream(),
+                    )
+                    .result()
+                    .map_err(|e| BenchError(format!("cuMemcpyPeerAsync: {e}")))?;
+                }
                 Ok(())
             })?;
             let rev = cuda_samples(&ctx0, &stream0, 5, cfg.iterations_bw, cfg.rounds, || {
-                stream0.memcpy_dtod(&p_src1, &mut p_dst0)?;
+                unsafe {
+                    dsys::cuMemcpyPeerAsync(
+                        dst0.ptr,
+                        ctx0.cu_ctx(),
+                        src1.ptr,
+                        ctx1.cu_ctx(),
+                        peer_bytes,
+                        stream0.cu_stream(),
+                    )
+                    .result()
+                    .map_err(|e| BenchError(format!("cuMemcpyPeerAsync: {e}")))?;
+                }
                 Ok(())
             })?;
             let fwd_gbps = copy_bytes / (record("g2g_forward_gbps", &fwd) / 1e3) / 1e9;
@@ -717,26 +851,58 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
             g2g_gbps = Some(fwd_gbps.min(rev_gbps));
             progress("g2g", &format!("{fwd_gbps:.0}/{rev_gbps:.0} GB/s"));
             let lat = wall_samples(5, 20, cfg.rounds, || {
-                let mut one = unsafe { stream1.alloc::<f32>(1) }?;
-                stream1.memcpy_dtod(&p_src0.slice(0..1), &mut one)?;
+                unsafe {
+                    dsys::cuMemcpyPeerAsync(
+                        dst1.ptr,
+                        ctx1.cu_ctx(),
+                        src0.ptr,
+                        ctx0.cu_ctx(),
+                        4,
+                        stream1.cu_stream(),
+                    )
+                    .result()
+                    .map_err(|e| BenchError(format!("cuMemcpyPeerAsync: {e}")))?;
+                }
                 stream1.synchronize()?;
                 Ok(())
             })?;
             g2g_latency = Some(record("g2g_latency_us", &lat) * 1e3);
             let check_fwd = {
+                let mut out = vec![0.0f32; peer_elems];
+                unsafe {
+                    dsys::cuMemcpyDtoHAsync_v2(
+                        out.as_mut_ptr().cast::<core::ffi::c_void>(),
+                        dst1.ptr,
+                        peer_bytes,
+                        stream1.cu_stream(),
+                    )
+                    .result()
+                    .map_err(|e| BenchError(format!("readback dst1: {e}")))?;
+                }
                 stream1.synchronize()?;
-                let out = stream1.clone_dtoh(&p_dst1)?;
                 (out[0] - pattern[0]).abs() < f32::EPSILON
                     && (out[peer_elems / 2] - pattern[peer_elems / 2]).abs() < f32::EPSILON
             };
             let check_rev = {
+                let mut out = vec![0.0f32; peer_elems];
+                unsafe {
+                    dsys::cuMemcpyDtoHAsync_v2(
+                        out.as_mut_ptr().cast::<core::ffi::c_void>(),
+                        dst0.ptr,
+                        peer_bytes,
+                        stream0.cu_stream(),
+                    )
+                    .result()
+                    .map_err(|e| BenchError(format!("readback dst0: {e}")))?;
+                }
                 stream0.synchronize()?;
-                let out = stream0.clone_dtoh(&p_dst0)?;
                 (out[0] - pattern[0]).abs() < f32::EPSILON
                     && (out[peer_elems / 2] - pattern[peer_elems / 2]).abs() < f32::EPSILON
             };
             checks.insert("g2g_0_to_1".to_owned(), check_fwd);
             checks.insert("g2g_1_to_0".to_owned(), check_rev);
+            let staged_via_host = fwd_gbps.min(rev_gbps) <= h2d_gbps;
+            checks.insert("g2g_faster_than_host".to_owned(), !staged_via_host);
         } else {
             eprintln!("peer access unavailable; skipping g2g");
         }
@@ -816,6 +982,10 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         h2d_gbps,
         d2h_gbps,
         h2d_latency_us: Some(h2d_latency_us),
+        pcie_gen,
+        pcie_gen_max,
+        pcie_width,
+        pcie_width_max,
         d2h_latency_us: Some(d2h_latency_us),
         hbm_gbps,
         elementwise_gbps,

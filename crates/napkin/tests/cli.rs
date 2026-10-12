@@ -39,8 +39,18 @@ fn estimate_runs_on_datasheet_gpu() {
 #[test]
 fn estimate_rejects_h2d_on_datasheet_gpu() {
     let (_, stderr, code) = napkin(&[
-        "estimate", "--gpu", "b200", "--dtype", "bf16", "--flops", "200T", "--bytes", "1TB",
-        "--h2d", "2GB",
+        "estimate",
+        "--gpu",
+        "b200",
+        "--dtype",
+        "bf16",
+        "--flops",
+        "200T",
+        "--bytes",
+        "1TB",
+        "--h2d",
+        "2GB",
+        "--ceiling",
     ]);
     assert_eq!(code, 2);
     assert!(stderr.contains("no measured h2d bandwidth"), "{stderr}");
