@@ -296,8 +296,8 @@ parallelism each GPU reads an eighth of the weights and KV per decode step,
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 146G --bytes 18.3GB
 H100 SXM 80GB · bf16 · measured 2026-10-12
-intensity   8 FLOP/B   ridge 240 FLOP/B   memory-bound
-compute     200 μs
+intensity   8 FLOP/B   ridge 230 FLOP/B   memory-bound
+compute     210 μs
 memory      6.1 ms
 device      6.1 ms
 total       6.1 ms   memory-bound
