@@ -9,6 +9,7 @@ license = "MIT"
 [workspace.lints.rust]
 unsafe_code = "deny"
 missing_debug_implementations = "deny"
+unreachable_pub = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

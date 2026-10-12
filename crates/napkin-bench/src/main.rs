@@ -59,7 +59,7 @@ fn main() -> ExitCode {
 
 /// Current UTC date/time as `YYYY-MM-DD`, without a chrono dependency.
 #[must_use]
-pub fn iso_now() -> String {
+fn iso_now() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());

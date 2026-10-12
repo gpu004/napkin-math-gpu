@@ -9,9 +9,25 @@ hit() {
   fail=1
 }
 
-line_comments=$(grep -rn --include='*.rs' -E '(^|[^/"])//([^/!]|$)' crates/ || true)
-if [ -n "$line_comments" ]; then
-  hit "line comments (//) in Rust sources:\n$line_comments" "remove the comment or make it a doc comment (/// or //!)"
+bad_tests=$(grep -rn --include='*.rs' -E '^[[:space:]]*(pub(\([[:alnum:]_]+\) )? )?fn[[:space:]]+test_' crates/ || true)
+if [ -n "$bad_tests" ]; then
+  hit "test functions prefixed with test_:\n$bad_tests" "name tests for the behavior they exercise without a test_ prefix"
+fi
+
+local_uses=$(find crates -type f -name '*.rs' -exec awk '
+  FNR == 1 { last_item = "" }
+  $0 ~ /^(pub(\([a-z]+\))? )?(fn|impl|mod|struct|enum|trait|const|static)([[:space:]]|$)/ {
+    last_item = $0
+  }
+  $0 ~ /^ +use[[:space:]]/ {
+    spaces = match($0, /[^ ]/) - 1
+    if (spaces >= 8 || last_item !~ /^(pub(\([a-z]+\))? )?mod /) {
+      print FILENAME ":" FNR ":" $0
+    }
+  }
+' {} + || true)
+if [ -n "$local_uses" ]; then
+  hit "function-local use statements:\n$local_uses" "move imports to file scope; nested modules may keep their imports"
 fi
 
 py_comments=$(grep -n '^\s*#' modal/bench.py || true)
