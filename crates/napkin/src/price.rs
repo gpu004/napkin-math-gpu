@@ -127,6 +127,26 @@ pub struct PriceRecord {
 }
 
 impl PriceRecord {
+    /// Price formatted with its currency and billing unit.
+    #[must_use]
+    pub fn listed_price(&self) -> String {
+        if self.currency == "USD" {
+            format!("${}/{per}", self.amount, per = self.per)
+        } else {
+            format!("{} {}/{per}", self.amount, self.currency, per = self.per)
+        }
+    }
+
+    /// Terms formatted with any preemptibility qualifier.
+    #[must_use]
+    pub fn terms_label(&self) -> String {
+        if self.preemptible {
+            format!("{}, preemptible", self.terms)
+        } else {
+            self.terms.to_string()
+        }
+    }
+
     /// Price normalized to one GPU-hour.
     #[must_use]
     pub fn per_gpu_hour(&self) -> f64 {
@@ -179,6 +199,22 @@ mod tests {
     fn modal_h100_hourly_price_is_normalized() {
         let record = find("modal-h100").unwrap();
         assert!((record.per_gpu_hour() - 3.9492).abs() < 1e-12);
+    }
+
+    #[test]
+    fn listed_price_includes_currency_and_billing_unit() {
+        let mut record = *find("modal-h100").unwrap();
+        assert_eq!(record.listed_price(), "$0.001097/s");
+        record.currency = "EUR";
+        assert_eq!(record.listed_price(), "0.001097 EUR/s");
+    }
+
+    #[test]
+    fn terms_label_includes_preemptibility() {
+        let mut record = *find("modal-h100").unwrap();
+        assert_eq!(record.terms_label(), "on-demand, preemptible");
+        record.preemptible = false;
+        assert_eq!(record.terms_label(), "on-demand");
     }
 
     #[test]

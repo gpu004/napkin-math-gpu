@@ -8,7 +8,7 @@ use clap::{ArgGroup, Parser, Subcommand};
 use napkin::cost::{self, Job, Work};
 use napkin::estimate::{self, Mode, Workload};
 use napkin::fit;
-use napkin::price::{self, Date, PriceRecord, STALE_AFTER_DAYS};
+use napkin::price::{self, Date, STALE_AFTER_DAYS};
 use napkin::profile::{self, Basis, Dtype, Profile};
 use napkin::units::{self, fmt_count, fmt_duration, fmt_intensity, fmt_money, fmt_sig};
 
@@ -408,12 +408,8 @@ fn cmd_cost(
         let today =
             Date::today().ok_or_else(|| "system clock is before the Unix epoch".to_owned())?;
         let age = record.age_days(today);
-        let display_price = raw_price(record);
-        let terms = if record.preemptible {
-            format!("{}, preemptible", record.terms)
-        } else {
-            record.terms.to_string()
-        };
+        let display_price = record.listed_price();
+        let terms = record.terms_label();
         let first_line = format!(
             "{gpus} {} · {} {} ({}): {display_price} = {}/GPU-hour",
             if gpus == 1 { "GPU" } else { "GPUs" },
@@ -461,14 +457,13 @@ fn cmd_cost(
         .transpose()
         .map_err(|error| error.to_string())?;
     let work = match (work, throughput) {
-        (Some(value), None) => Some(Work::Count(
+        (Some(value), _) => Some(Work::Count(
             units::parse_number(value).map_err(|error| error.to_string())?,
         )),
-        (None, Some(value)) => Some(Work::Rate(
+        (_, Some(value)) => Some(Work::Rate(
             units::parse_number(value).map_err(|error| error.to_string())?,
         )),
         (None, None) => None,
-        (Some(_), Some(_)) => return Err("--work and --throughput conflict".to_owned()),
     };
     let job = Job {
         gpus,
@@ -491,7 +486,7 @@ fn cmd_cost(
         currency,
         unit,
     }
-    .append(&mut out, &job, &result)?;
+    .append(&mut out, &job, &result);
     Ok(out)
 }
 
@@ -504,7 +499,7 @@ struct CostDisplay<'a> {
 }
 
 impl CostDisplay<'_> {
-    fn append(&self, out: &mut String, job: &Job, result: &cost::Cost) -> Result<(), String> {
+    fn append(&self, out: &mut String, job: &Job, result: &cost::Cost) {
         let _ = writeln!(
             out,
             "{:<12}{} per GPU (--time)",
@@ -586,52 +581,37 @@ impl CostDisplay<'_> {
             "useful",
             fmt_sig(result.useful * 100.0, 2)
         );
-        self.append_work(out, job, result)
+        self.append_work(out, result);
     }
 
-    fn append_work(&self, out: &mut String, job: &Job, result: &cost::Cost) -> Result<(), String> {
-        match (job.work, result.work, result.work_per_dollar) {
-            (None, None, None) => {
-                out.push_str(
+    fn append_work(&self, out: &mut String, result: &cost::Cost) {
+        if let Some(total) = result.work {
+            match total.source {
+                Work::Count(_) => {
+                    let _ = writeln!(
+                        out,
+                        "work        {} {} (--work)",
+                        fmt_count(total.units, 3),
+                        self.unit
+                    );
+                }
+                Work::Rate(rate) => {
+                    let _ = writeln!(
+                        out,
+                        "work        {} {} = {} {}/s × busy",
+                        fmt_count(total.units, 3),
+                        self.unit,
+                        fmt_count(rate, 3),
+                        self.unit
+                    );
+                }
+            }
+            write_per_dollar(out, total.per_dollar, self.unit, self.currency);
+        } else {
+            out.push_str(
                 "work        none (pass --work or --throughput: a workload rate, never peak FLOPs)\n",
             );
-            }
-            (Some(Work::Count(_)), Some(count), Some(per_dollar)) => {
-                let _ = writeln!(
-                    out,
-                    "work        {} {} (--work)",
-                    fmt_count(count, 3),
-                    self.unit
-                );
-                write_per_dollar(out, per_dollar, self.unit, self.currency);
-            }
-            (Some(Work::Rate(rate)), Some(count), Some(per_dollar)) => {
-                let _ = writeln!(
-                    out,
-                    "work        {} {} = {} {}/s × busy",
-                    fmt_count(count, 3),
-                    self.unit,
-                    fmt_count(rate, 3),
-                    self.unit
-                );
-                write_per_dollar(out, per_dollar, self.unit, self.currency);
-            }
-            _ => return Err("inconsistent workload assumptions".to_owned()),
         }
-        Ok(())
-    }
-}
-
-fn raw_price(record: &PriceRecord) -> String {
-    if record.currency == "USD" {
-        format!("${}/{per}", record.amount, per = record.per)
-    } else {
-        format!(
-            "{} {}/{per}",
-            record.amount,
-            record.currency,
-            per = record.per
-        )
     }
 }
 

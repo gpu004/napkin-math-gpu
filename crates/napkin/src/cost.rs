@@ -9,6 +9,14 @@ pub enum Work {
     Rate(f64),
 }
 
+/// Work completed and its cost efficiency.
+#[derive(Clone, Copy, Debug)]
+pub struct WorkTotal {
+    pub source: Work,
+    pub units: f64,
+    pub per_dollar: f64,
+}
+
 /// Timing assumptions for a GPU job.
 #[derive(Clone, Copy, Debug)]
 pub struct Job {
@@ -30,8 +38,7 @@ pub struct Cost {
     pub gpu_hours: f64,
     pub cost: f64,
     pub useful: f64,
-    pub work: Option<f64>,
-    pub work_per_dollar: Option<f64>,
+    pub work: Option<WorkTotal>,
 }
 
 /// An invalid job or price assumption.
@@ -108,9 +115,16 @@ pub fn cost(job: &Job, price_per_gpu_hour: f64) -> Result<Cost, CostError> {
     let gpu_hours = f64::from(job.gpus) * billed_s / 3600.0;
     let cost = gpu_hours * price_per_gpu_hour;
     let useful = job.busy_s / billed_s;
-    let work = job.work.map(|work| match work {
-        Work::Count(value) => value,
-        Work::Rate(value) => value * job.busy_s,
+    let work = job.work.map(|source| {
+        let units = match source {
+            Work::Count(value) => value,
+            Work::Rate(value) => value * job.busy_s,
+        };
+        WorkTotal {
+            source,
+            units,
+            per_dollar: units / cost,
+        }
     });
     if ![running_s, wall_s, billed_s, gpu_hours, cost, useful]
         .into_iter()
@@ -121,8 +135,7 @@ pub fn cost(job: &Job, price_per_gpu_hour: f64) -> Result<Cost, CostError> {
             "job assumptions produce a non-finite or zero cost".to_owned(),
         ));
     }
-    let work_per_dollar = work.map(|value| value / cost);
-    if work_per_dollar.is_some_and(|value| !value.is_finite()) {
+    if work.is_some_and(|total| !total.units.is_finite() || !total.per_dollar.is_finite()) {
         return Err(CostError(
             "job assumptions produce a non-finite work-per-dollar estimate".to_owned(),
         ));
@@ -135,7 +148,6 @@ pub fn cost(job: &Job, price_per_gpu_hour: f64) -> Result<Cost, CostError> {
         cost,
         useful,
         work,
-        work_per_dollar,
     })
 }
 
@@ -209,15 +221,14 @@ mod tests {
         let mut input = job();
         input.work = Some(Work::Rate(2500.0));
         let rate = cost(&input, 3.0).unwrap();
-        assert_eq!(rate.work, Some(25_000.0));
-        assert_eq!(
-            rate.work_per_dollar,
-            Some(25_000.0 / (2.0 * 10.0 / 3600.0 * 3.0))
-        );
+        let total = rate.work.unwrap();
+        assert!(matches!(total.source, Work::Rate(2500.0)));
+        assert_eq!(total.units, 25_000.0);
+        assert_eq!(total.per_dollar, 25_000.0 / (2.0 * 10.0 / 3600.0 * 3.0));
         input.work = Some(Work::Count(1e6));
-        assert_eq!(cost(&input, 3.0).unwrap().work, Some(1e6));
+        assert_eq!(cost(&input, 3.0).unwrap().work.unwrap().units, 1e6);
         input.work = None;
-        assert_eq!(cost(&input, 3.0).unwrap().work, None);
+        assert!(cost(&input, 3.0).unwrap().work.is_none());
     }
 
     #[test]

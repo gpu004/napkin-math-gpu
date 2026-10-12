@@ -135,7 +135,7 @@ pub fn fmt_money(value: f64, currency: &str) -> String {
     }
 }
 
-/// Formats a count with an SI suffix through tera.
+/// Formats a count with a K/M/G/T suffix.
 #[must_use]
 pub fn fmt_count(value: f64, sig: u32) -> String {
     let magnitude = value.abs();

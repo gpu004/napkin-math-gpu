@@ -54,21 +54,8 @@ pub fn prices(records: &[PriceRecord]) -> String {
     );
     let mut notes: Vec<(&str, Vec<&str>)> = Vec::new();
     for record in records {
-        let price = if record.currency == "USD" {
-            format!("${}/{per}", record.amount, per = record.per)
-        } else {
-            format!(
-                "{} {}/{per}",
-                record.amount,
-                record.currency,
-                per = record.per
-            )
-        };
-        let terms = if record.preemptible {
-            format!("{}, preemptible", record.terms)
-        } else {
-            record.terms.to_string()
-        };
+        let price = record.listed_price();
+        let terms = record.terms_label();
         let source_text = record
             .source
             .strip_prefix("https://")
