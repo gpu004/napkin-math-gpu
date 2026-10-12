@@ -391,6 +391,14 @@ fn readme_checks_every_path() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn repo_markdown_blocks_are_current() {
+    let readme = concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md");
+    let problems = concat!(env!("CARGO_MANIFEST_DIR"), "/../../PROBLEMS.md");
+    let (_, stderr, code) = napkin(&["readme", "--check", readme, problems]);
+    assert_eq!(code, 0, "{stderr}");
+}
+
+#[test]
 fn readme_example_marker_runs_cli_and_rewrites_body() -> Result<(), Box<dyn std::error::Error>> {
     let path = stale_readme(
         "example",

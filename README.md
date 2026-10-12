@@ -453,6 +453,13 @@ utilizations the H100 is. With measured rates, the B200 wins only while its
 utilization stays above `(691 / 3.95) / (1325 / 6.25) ≈ 0.83` of the H100's;
 here it is `0.3 / 0.5 = 0.6`.
 
+## Practice problems
+
+[PROBLEMS.md](PROBLEMS.md) has seven problems with worked solutions hidden
+until you open them: HBM traffic for a copy versus an add, tiny-copy latency,
+a roofline crossover, KV-cache capacity, kernel fusion, decode batching, and
+cost per token. Try each on paper first.
+
 ## Usage
 
 ```sh
