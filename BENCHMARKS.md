@@ -37,10 +37,11 @@ device↔device, copy-engine and SM paths, directional and bidirectional tests,
 latency, verification, and JSON output.
 
 Use CUDA Samples'
-[`p2pBandwidthLatencyTest`](https://github.com/NVIDIA/cuda-samples/tree/v12.9/Samples/5_Domain_Specific/p2pBandwidthLatencyTest)
+[`p2pBandwidthLatencyTest`](https://github.com/NVIDIA/cuda-samples/tree/v13.3/cpp/5_Domain_Specific/p2pBandwidthLatencyTest)
 for its P2P latency/connectivity matrix, not as the sole bandwidth authority.
-Pin the CUDA Samples revision so a profile can be reproduced after samples move
-or change.
+CUDA Samples 13.4 removed it as obsolete, so pin `v13.3` or earlier; the link
+above points at that tag. Always pin the CUDA Samples revision so a profile can
+be reproduced after samples move or change.
 
 ## Evidence flow
 
