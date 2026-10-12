@@ -201,6 +201,76 @@ pub struct Measured {
     pub checks: BTreeMap<String, bool>,
     /// Raw per-round samples keyed by metric field name.
     pub samples_ms: BTreeMap<String, Vec<f64>>,
+    /// GPU 0 clocks, power, temperature and clock-limit reasons for each
+    /// timed GEMM round; None in profiles captured before it was recorded.
+    #[serde(default)]
+    pub gpu_state: Option<GpuState>,
+}
+
+impl Measured {
+    /// Slowest round over fastest round minus one, e.g. `0.15` when the
+    /// rounds of `samples_ms["gemm_fp16"]` range from 1.42 to 1.63 ms. This
+    /// is the observed range of a handful of rounds, not a confidence
+    /// interval. None when the metric has fewer than two positive rounds.
+    #[must_use]
+    pub fn round_spread(&self, metric: &str) -> Option<f64> {
+        let rounds = self.samples_ms.get(metric)?;
+        if rounds.len() < 2 || rounds.iter().any(|ms| *ms <= 0.0) {
+            return None;
+        }
+        let fastest = rounds.iter().copied().fold(f64::INFINITY, f64::min);
+        let slowest = rounds.iter().copied().fold(0.0, f64::max);
+        Some(slowest / fastest - 1.0)
+    }
+}
+
+/// GPU state behind the GEMM numbers, read through NVML on the GPU that ran
+/// them.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GpuState {
+    /// NVML and wrapper versions, e.g. `"NVML 12.580.95.05 via nvml-wrapper 0.13"`.
+    pub source: String,
+    /// Target time between NVML polls while a round runs.
+    pub poll_interval_ms: f64,
+    pub max_sm_clock_mhz: u32,
+    pub max_mem_clock_mhz: u32,
+    /// Enforced board power limit.
+    pub power_limit_w: f64,
+    /// Untimed GEMM work, at least this long, before the first timed round of
+    /// each dtype.
+    pub warmup_ms: f64,
+    /// Every timed round runs enough GEMMs to last at least this long.
+    pub round_ms: f64,
+    /// One entry per timed round, keyed and ordered like `samples_ms`.
+    pub rounds: BTreeMap<String, Vec<RoundState>>,
+}
+
+/// What NVML reported while one timed round ran.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RoundState {
+    /// NVML polls that landed inside the round; the spans are None and
+    /// `power_w` is None when a round was too short to catch any.
+    pub polls: u32,
+    pub sm_clock_mhz: Option<Span>,
+    pub mem_clock_mhz: Option<Span>,
+    /// Energy-counter delta over the round divided by the time it covers.
+    /// NVML's power reading is a one-second average on recent GPUs, so it
+    /// would smear neighbouring rounds together. None when the counter
+    /// ticked fewer than two times inside the round.
+    pub power_w: Option<f64>,
+    pub temperature_c: Option<Span>,
+    /// How many polls saw each clock-limit reason, in NVML's names
+    /// lowercased, e.g. `{"sw_power_cap": 40}`. Empty when clocks were never
+    /// limited.
+    pub clock_limit_reasons: BTreeMap<String, u32>,
+}
+
+/// Smallest, median and largest of the polled values.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct Span {
+    pub min: f64,
+    pub median: f64,
+    pub max: f64,
 }
 
 /// Where a rate came from.

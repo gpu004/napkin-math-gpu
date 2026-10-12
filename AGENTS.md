@@ -6,7 +6,8 @@
 - GPU runs happen only on Modal, never locally: `modal run modal/bench.py --gpu h100`.
 - Canonical runs pin GPUs with `!` where needed (`H100!`); never commit `--quick` output.
 - `napkin-profile` is the shared profile contract; `napkin-bench` may import only
-  `napkin_profile::{Measured, Dtype}`.
+  `Measured`, `Dtype`, and the GPU-state types `Measured` contains (`GpuState`,
+  `RoundState`, `Span`).
 - README number blocks are generated. Never hand-edit inside `<!-- napkin ... -->` markers; after changing
   profiles, table rendering, or anything a marker embeds, run `cargo run -p napkin -- readme --write README.md`.
 - GPU prices live in `prices/*.json`, never in hardware profiles. Every record needs a date and a source URL that you curl-checked; `napkin cost` never falls back to a default price.

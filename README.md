@@ -30,7 +30,7 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 | --- | ---: | ---: | ---: | ---: |
 | Kernel launch (back-to-back) | 2 μs |  |  |  |
 | Launch + sync round trip | 7 μs |  |  |  |
-| Pinned host RAM copy |  | 100 GB/s | 10 μs | 10 ms |
+| Pinned host RAM copy |  | 100 GB/s † | 10 μs | 10 ms |
 | Host → device, pinned | 10 μs | 60 GB/s | 20 μs | 20 ms |
 | Device → host, pinned | 10 μs | 60 GB/s | 20 μs | 20 ms |
 | HBM random read (pointer chase) | 300 ns |  |  |  |
@@ -40,10 +40,12 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 
 | Dense GEMM | Throughput | 1 GFLOP | 1 TFLOP | Ridge point |
 | --- | ---: | ---: | ---: | ---: |
-| fp16 | 700 TFLOP/s | 1 μs | 1 ms | 240 FLOP/B |
-| bf16 | 700 TFLOP/s | 1 μs | 1 ms | 240 FLOP/B |
-| tf32 | 400 TFLOP/s | 3 μs | 3 ms | 120 FLOP/B |
+| fp16 | 700 TFLOP/s † | 1 μs | 1 ms | 240 FLOP/B |
+| bf16 | 700 TFLOP/s † | 1 μs | 1 ms | 240 FLOP/B |
+| tf32 | 400 TFLOP/s † | 3 μs | 3 ms | 120 FLOP/B |
 | fp32 | 50 TFLOP/s | 20 μs | 20 ms | 17 FLOP/B |
+
+† Rounds disagree by more than 5%: host RAM copy 5.1%, fp16 GEMM 15%, bf16 GEMM 17%, tf32 GEMM 19%. Spread is the slowest of the 7 rounds over the fastest, minus one: the observed range, not a confidence interval. The cell shows the median round.
 <!-- /napkin -->
 
 ## Other GPUs
@@ -51,14 +53,14 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 <!-- napkin compare -->
 | GPU | Memory | HBM | Dense BF16 | BF16 ridge | NVLink | Host link | Launch | Basis |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 150 FLOP/B | 600 GB/s | 30 GB/s | 3 μs | measured 2026-10-12 |
+| A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 150 FLOP/B | 600 GB/s | 10 GB/s | 2 μs | measured 2026-10-12 |
 | H100 SXM 80GB | 80 GB | 3 TB/s | 700 TFLOP/s | 240 FLOP/B | 900 GB/s | 60 GB/s | 2 μs | measured 2026-10-12 |
 | B200 SXM 180GB | 180 GB | 6 TB/s | 2 PFLOP/s | 250 FLOP/B | 2 TB/s | 60 GB/s | 4 μs | measured 2026-10-12 |
 | B300 SXM 288GB | 288 GB | 6 TB/s | 2 PFLOP/s | 280 FLOP/B | 2 TB/s | 50 GB/s | 3 μs | measured 2026-10-12 |
 
 | GPU | HBM measured / ceiling | BF16 measured / ceiling |
 | --- | ---: | ---: |
-| A100 SXM 80GB | 1738 / 2039 GB/s (85%) | 265 / 312 TFLOP/s (85%) |
+| A100 SXM 80GB | 1738 / 2039 GB/s (85%) | 260 / 312 TFLOP/s (83%) |
 | H100 SXM 80GB | 3003 / 3350 GB/s (90%) | 734 / 990 TFLOP/s (74%) |
 | B200 SXM 180GB | 6322 / 8000 GB/s (79%) | 1585 / 2250 TFLOP/s (70%) |
 | B300 SXM 288GB | 6487 / 8000 GB/s (81%) | 1823 / 2250 TFLOP/s (81%) |
@@ -493,7 +495,25 @@ napkin readme --write README.md         # refreshes the tables
   fewer than 2 GPUs or no peer access.
 - `g2g_latency_us`: 4-byte peer copy plus stream synchronize, wall clock.
 - `compute_tflops`: cuBLAS GemmEx 8192³, `2·N³` FLOPs counted, validated
-  against a CPU float64 reference per dtype.
+  against a CPU float64 reference per dtype. Each dtype first runs untimed
+  GEMMs for 1 s, then times 7 rounds of at least 200 ms each. Tensor Core
+  GEMMs draw enough power that the GPU starts at its maximum SM clock and drops
+  it once the software power cap engages: on `H100!:2`, 10 warm-up calls and 10-call
+  rounds (about 15 ms each) caught the boost in the first rounds and the cap
+  in the later ones, a 15–26% spread on H100 and B300
+  ([#5](https://github.com/gpu004/napkin-math-gpu/issues/5)). The longer
+  warm-up reports the sustained rate under the power cap, which is the rate a
+  long training or prefill GEMM gets.
+- `gpu_state`: NVML (`libnvidia-ml`, loaded at run time) polls the GEMM GPU
+  every 5 ms during the timed rounds and stores, per round, its SM and memory
+  clocks, temperature, average power from the energy counter, and how often
+  each clock-limit reason (e.g. `sw_power_cap`) was active. `napkin table`
+  prints a row per dtype.
+- Round spread: every metric keeps its per-round samples in `samples_ms`, and
+  the tables show the median round. When a metric's slowest round is more than
+  5% slower than its fastest, `napkin table` marks the cell with † and names
+  the spread underneath. Seven rounds' min and max are an observed range, not
+  a confidence interval.
 
 Collective curves come from NVIDIA NCCL Tests, also run on Modal:
 

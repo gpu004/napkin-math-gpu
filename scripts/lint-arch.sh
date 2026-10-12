@@ -49,9 +49,9 @@ if [ -n "$allow_attrs" ]; then
   hit "#[allow(...)] attributes:\n$allow_attrs" "use #[expect(lint, reason = \"...\")] so the waiver fails when it becomes unnecessary"
 fi
 
-bad_imports=$(grep -rn 'napkin::' --include='*.rs' crates/napkin-bench/src/ | grep -v 'napkin::profile::{Measured, Dtype}\|napkin::profile::{Dtype, Measured}\|napkin::profile::Measured\|napkin::profile::Dtype' || true)
+bad_imports=$(grep -rnE 'napkin(_profile)?::' --include='*.rs' crates/napkin-bench/src/ | grep -vE 'use napkin_profile::(\{(Dtype|Measured|GpuState|RoundState|Span)(, (Dtype|Measured|GpuState|RoundState|Span))*\}|Dtype|Measured|GpuState|RoundState|Span);' || true)
 if [ -n "$bad_imports" ]; then
-  hit "napkin-bench imports beyond napkin::profile::{Measured, Dtype}:\n$bad_imports" "profile JSON types are the only shared contract between the crates"
+  hit "napkin-bench imports beyond napkin_profile::{Measured, Dtype} and the GPU-state types Measured contains:\n$bad_imports" "profile JSON types are the only shared contract between the crates"
 fi
 
 [ "$fail" -eq 0 ] && echo "lint-arch: clean"
