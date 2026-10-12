@@ -481,4 +481,3 @@ with vol.batch_upload() as batch:
 ```python
 rename(old_name, new_name, *, client=None, environment_name=None)
 ```
-

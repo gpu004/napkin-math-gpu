@@ -37,4 +37,3 @@ modal.Period(seconds=math.pi)  # runs every 3.141592653589793 seconds
 __init__(self, *, years=0, months=0, weeks=0, days=0, hours=0, minutes=0,
     seconds=0)
 ```
-

@@ -282,4 +282,3 @@ Current settings for the workspace.
 
 <Parameter name="default_environment" type="str" description="" />
 <Parameter name="image_builder_version" type="str" description="" />
-

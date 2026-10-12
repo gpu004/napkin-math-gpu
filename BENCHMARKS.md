@@ -183,5 +183,5 @@ extending the homegrown measurement loops.
 GPU-free checks run locally and in CI:
 
 ```sh
-sh scripts/check.sh
+uv run --only-dev --locked prek
 ```
