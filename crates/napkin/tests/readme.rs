@@ -136,6 +136,10 @@ fn problem_teaching_constants_match_profiles() -> Result<(), Box<dyn std::error:
         .compute_tflops
         .get(&Dtype::Bf16)
         .ok_or("h100 has no measured bf16")?;
+    let fp16 = measured
+        .compute_tflops
+        .get(&Dtype::Fp16)
+        .ok_or("h100 has no measured fp16")?;
     let bf16_ceiling = h100
         .ceiling
         .compute_tflops
@@ -149,14 +153,19 @@ fn problem_teaching_constants_match_profiles() -> Result<(), Box<dyn std::error:
             3000.0,
         ),
         (
-            "measured device-to-device copy, 3003 GB/s",
+            "measured device-to-device copy, 3002 GB/s",
             round_sig(measured.hbm_gbps, 4),
-            3003.0,
+            3002.0,
         ),
         (
-            "| Dense BF16, `F` | 730 TFLOP/s |",
+            "| Dense BF16, `F` | 690 TFLOP/s |",
             round_sig(*bf16, 2),
-            730.0,
+            690.0,
+        ),
+        (
+            "the 220 FLOP/B fp16 ridge",
+            round_sig(fp16 / measured.hbm_gbps * 1e3, 2),
+            220.0,
         ),
         (
             "| Dense BF16, datasheet | 990 TFLOP/s |",
@@ -174,19 +183,19 @@ fn problem_teaching_constants_match_profiles() -> Result<(), Box<dyn std::error:
             3350.0,
         ),
         (
-            "| Host → device, `P` | 55 GB/s |",
+            "| Host → device, `P` | 54 GB/s |",
             round_sig(measured.h2d_gbps, 2),
-            55.0,
+            54.0,
         ),
         (
-            "| Fixed cost per copy, `L_copy` | 10 μs |",
+            "| Fixed cost per copy, `L_copy` | 9 μs |",
             round_sig(h2d_latency_us, 1),
-            10.0,
+            9.0,
         ),
         (
-            "measured 4-byte synchronous copy, 9.8 μs",
+            "measured 4-byte synchronous copy, 8.8 μs",
             round_sig(h2d_latency_us, 2),
-            9.8,
+            8.8,
         ),
         (
             "| Kernel launch, `L_launch` | 2 μs |",
@@ -200,9 +209,9 @@ fn problem_teaching_constants_match_profiles() -> Result<(), Box<dyn std::error:
             3.95,
         ),
         (
-            "runs at 2795 GB/s",
+            "runs at 2794 GB/s",
             round_sig(measured.elementwise_gbps, 4),
-            2795.0,
+            2794.0,
         ),
         (
             "for the H100's 132 SMs",
@@ -236,9 +245,9 @@ fn problem_teaching_constants_match_profiles() -> Result<(), Box<dyn std::error:
 fn problem_answers_follow_from_teaching_constants() -> Result<(), Box<dyn std::error::Error>> {
     const GIB: f64 = 1_073_741_824.0;
     const M: f64 = 3e12;
-    const F: f64 = 730e12;
-    const P: f64 = 55e9;
-    const L_COPY: f64 = 10e-6;
+    const F: f64 = 690e12;
+    const P: f64 = 54e9;
+    const L_COPY: f64 = 9e-6;
     const L_LAUNCH: f64 = 2e-6;
     const USABLE: f64 = 72e9;
     const WEIGHTS: f64 = 8e9 * 16.0 / 8.0;
@@ -280,10 +289,10 @@ fn problem_answers_follow_from_teaching_constants() -> Result<(), Box<dyn std::e
         ),
         ("an intensity of 0.08 FLOP/B", 1.0 / 12.0, 1, 0.08),
         (
-            "about 100 ms for 10,000 copies",
+            "about 90 ms for 10,000 copies",
             (10_000.0 * L_COPY + 40e6 / P) * 1e3,
             1,
-            100.0,
+            90.0,
         ),
         (
             "against 0.7 ms for one packed copy",
@@ -291,18 +300,18 @@ fn problem_answers_follow_from_teaching_constants() -> Result<(), Box<dyn std::e
             1,
             0.7,
         ),
-        ("10 μs × 55 GB/s ≈ 550 KB", L_COPY * P / 1e3, 2, 550.0),
+        ("9 μs × 54 GB/s ≈ 490 KB", L_COPY * P / 1e3, 2, 490.0),
         (
-            "F / M = 730 × 10¹² / 3 × 10¹² ≈ 240  FLOP/B",
+            "F / M = 690 × 10¹² / 3 × 10¹² ≈ 230  FLOP/B",
             ridge,
             2,
-            240.0,
+            230.0,
         ),
         (
-            "N / 3     = 240  →  N ≈ 720",
+            "N / 3     = 230  →  N ≈ 690",
             3.0 * round_sig(ridge, 2),
             2,
-            720.0,
+            690.0,
         ),
         (
             "above N ≈ 700 by the measured numbers",
@@ -417,7 +426,7 @@ fn problem_answers_follow_from_teaching_constants() -> Result<(), Box<dyn std::e
             2,
             1.5,
         ),
-        ("/ 730 × 10¹² ≈ 0.7 ms", 2.0 * 8e9 * 32.0 / F * 1e3, 1, 0.7),
+        ("/ 690 × 10¹² ≈ 0.7 ms", 2.0 * 8e9 * 32.0 / F * 1e3, 1, 0.7),
         (
             "each request reads\n1.1 GB per step",
             8192.0 * KV_PER_TOKEN / 1e9,
