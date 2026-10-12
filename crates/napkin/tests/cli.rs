@@ -231,6 +231,7 @@ fn compare_prints_table() {
     let (stdout, _, code) = napkin(&["compare"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("| GPU |"), "{stdout}");
+    assert!(stdout.contains("CE / napkin-bench"), "{stdout}");
 }
 
 #[test]

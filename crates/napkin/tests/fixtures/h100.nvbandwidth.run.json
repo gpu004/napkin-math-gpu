@@ -1,0 +1,87 @@
+{
+  "tool": "nvbandwidth",
+  "repository": "https://github.com/NVIDIA/nvbandwidth",
+  "tag": "v0.10.0",
+  "commit": "82fc4e8c6afa0babb8687793678f615b3b8d793e",
+  "version_output": "nvbandwidth Version: v0.10.0\nBuilt from Git version: v0.10",
+  "command": [
+    "nvbandwidth",
+    "--format",
+    "json",
+    "--disableAffinity",
+    "--bufferSize",
+    "512",
+    "--testSamples",
+    "7",
+    "--testcase",
+    "host_to_device_memcpy_ce",
+    "device_to_host_memcpy_ce",
+    "host_to_device_memcpy_sm",
+    "device_to_host_memcpy_sm",
+    "device_to_device_memcpy_read_ce",
+    "device_to_device_memcpy_write_ce",
+    "device_to_device_memcpy_read_sm",
+    "device_to_device_memcpy_write_sm",
+    "host_device_latency_sm",
+    "device_to_device_latency_sm"
+  ],
+  "exit_code": 0,
+  "gpu_request": "H100!:2",
+  "captured_at": "2026-10-12T21:53:01Z",
+  "gpus": [
+    {
+      "index": "0",
+      "name": "NVIDIA H100 80GB HBM3",
+      "uuid": "GPU-95c59528-971e-ec20-e211-d0e8b38d15db",
+      "pci.bus_id": "[Unknown Error]",
+      "driver_version": "580.95.05",
+      "memory.total": "81559 MiB"
+    },
+    {
+      "index": "1",
+      "name": "NVIDIA H100 80GB HBM3",
+      "uuid": "GPU-8278c32f-fbe7-5d2e-4541-d340f47ad541",
+      "pci.bus_id": "[Unknown Error]",
+      "driver_version": "580.95.05",
+      "memory.total": "81559 MiB"
+    }
+  ],
+  "pcie_links": [
+    {
+      "index": 0,
+      "pcie_gen": 5,
+      "pcie_gen_max": 5,
+      "pcie_width": 16,
+      "pcie_width_max": 16
+    },
+    {
+      "index": 1,
+      "pcie_gen": 5,
+      "pcie_gen_max": 5,
+      "pcie_width": 16,
+      "pcie_width_max": 16
+    }
+  ],
+  "topology": [
+    {
+      "command": [
+        "nvidia-smi",
+        "topo",
+        "-m"
+      ],
+      "exit_code": 255,
+      "stdout": "\t\u001b[4mGPU0\tGPU1\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nFailed to run topology matrix\n\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "nvidia-smi",
+        "nvlink",
+        "--status"
+      ],
+      "exit_code": 0,
+      "stdout": "GPU 0: NVIDIA H100 80GB HBM3 (UUID: GPU-95c59528-971e-ec20-e211-d0e8b38d15db)\n\t Link 0: 26.562 GB/s\n\t Link 1: 26.562 GB/s\n\t Link 2: 26.562 GB/s\n\t Link 3: 26.562 GB/s\n\t Link 4: 26.562 GB/s\n\t Link 5: 26.562 GB/s\n\t Link 6: 26.562 GB/s\n\t Link 7: 26.562 GB/s\n\t Link 8: 26.562 GB/s\n\t Link 9: 26.562 GB/s\n\t Link 10: 26.562 GB/s\n\t Link 11: 26.562 GB/s\n\t Link 12: 26.562 GB/s\n\t Link 13: 26.562 GB/s\n\t Link 14: 26.562 GB/s\n\t Link 15: 26.562 GB/s\n\t Link 16: 26.562 GB/s\n\t Link 17: 26.562 GB/s\nGPU 1: NVIDIA H100 80GB HBM3 (UUID: GPU-8278c32f-fbe7-5d2e-4541-d340f47ad541)\n\t Link 0: 26.562 GB/s\n\t Link 1: 26.562 GB/s\n\t Link 2: 26.562 GB/s\n\t Link 3: 26.562 GB/s\n\t Link 4: 26.562 GB/s\n\t Link 5: 26.562 GB/s\n\t Link 6: 26.562 GB/s\n\t Link 7: 26.562 GB/s\n\t Link 8: 26.562 GB/s\n\t Link 9: 26.562 GB/s\n\t Link 10: 26.562 GB/s\n\t Link 11: 26.562 GB/s\n\t Link 12: 26.562 GB/s\n\t Link 13: 26.562 GB/s\n\t Link 14: 26.562 GB/s\n\t Link 15: 26.562 GB/s\n\t Link 16: 26.562 GB/s\n\t Link 17: 26.562 GB/s\n",
+      "stderr": ""
+    }
+  ]
+}

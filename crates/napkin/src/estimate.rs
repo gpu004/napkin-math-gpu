@@ -250,8 +250,11 @@ pub struct Estimate {
     pub compute_tflops: f64,
     /// Provenance of the selected throughput.
     pub compute_source: ComputeSource,
-    /// Whether the dtype throughput came from measurement or the datasheet.
+    /// Whether the dtype throughput came from napkin-bench or the datasheet.
     pub compute_basis: Basis,
+    pub h2d_basis: Option<Basis>,
+    pub d2h_basis: Option<Basis>,
+    pub g2g_basis: Basis,
 }
 
 /// Provenance for the compute throughput used by an estimate.
@@ -382,7 +385,7 @@ pub fn estimate(
         "h2d",
         workload.h2d,
         copy_mode,
-        rates.h2d_gbps,
+        rates.h2d.map(|rate| rate.gbps),
         rates.h2d_latency_us,
     )?;
     let d2h = transfer_time(
@@ -390,7 +393,7 @@ pub fn estimate(
         "d2h",
         workload.d2h,
         copy_mode,
-        rates.d2h_gbps,
+        rates.d2h.map(|rate| rate.gbps),
         rates.d2h_latency_us,
     )?;
     let g2g = transfer_time(
@@ -398,7 +401,7 @@ pub fn estimate(
         "g2g",
         workload.g2g,
         copy_mode,
-        Some(rates.g2g_gbps),
+        Some(rates.g2g.gbps),
         rates.g2g_latency_us,
     )?;
     #[expect(
@@ -458,6 +461,9 @@ pub fn estimate(
         compute_tflops,
         compute_source,
         compute_basis,
+        h2d_basis: rates.h2d.map(|rate| rate.basis),
+        d2h_basis: rates.d2h.map(|rate| rate.basis),
+        g2g_basis: rates.g2g.basis,
     })
 }
 
@@ -499,7 +505,7 @@ fn compute_throughput(
             }) {
                 Ok((
                     shape.tflops,
-                    Basis::Measured,
+                    Basis::NapkinBench,
                     ComputeSource::Shape {
                         name: shape.name.clone(),
                         captured_at: suite.captured_at.clone(),
@@ -530,7 +536,7 @@ fn compute_throughput(
             }
             Ok((
                 tflops,
-                default_compute.map_or(Basis::Ceiling, |compute| compute.basis),
+                default_compute.map_or(Basis::Datasheet, |compute| compute.basis),
                 ComputeSource::Override,
             ))
         }
@@ -591,6 +597,7 @@ mod tests {
                 compute_tflops: compute.clone(),
                 source: "fixture".to_owned(),
             },
+            nvbandwidth: None,
             measured: Some(Measured {
                 captured_at: "2026-08-08T00:00:00+00:00".to_owned(),
                 gpu_request: "TEST!:2".to_owned(),
@@ -632,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn serial_estimate_includes_copy_latency_and_launch() {
+    fn serial_estimate_includes_copy_latency_and_launch() -> Result<(), EstimateError> {
         let workload = Workload {
             dtype: Dtype::Fp16,
             throughput: Throughput::Peak,
@@ -654,22 +661,35 @@ mod tests {
             copy_mode: CopyMode::Sync,
             launches: 10,
         };
-        let e = estimate(&fixture(), &workload, Mode::Serial, false).unwrap();
+        let e = estimate(&fixture(), &workload, Mode::Serial, false)?;
         assert!((e.host_s - 0.020).abs() < 1e-9);
         assert!((e.compute_s - 0.010).abs() < 1e-9);
         assert!((e.memory_s - 0.100).abs() < 1e-9);
-        assert!((e.h2d.unwrap().seconds - 0.100_005).abs() < 1e-9);
-        assert!((e.d2h.unwrap().seconds - 0.100_006).abs() < 1e-9);
-        assert!((e.g2g.unwrap().seconds - 0.100_003).abs() < 1e-9);
+        let h2d = e
+            .h2d
+            .ok_or_else(|| EstimateError("H2D transfer was omitted".to_owned()))?;
+        let d2h = e
+            .d2h
+            .ok_or_else(|| EstimateError("D2H transfer was omitted".to_owned()))?;
+        let g2g = e
+            .g2g
+            .ok_or_else(|| EstimateError("GPU-to-GPU transfer was omitted".to_owned()))?;
+        assert!((h2d.seconds - 0.100_005).abs() < 1e-9);
+        assert!((d2h.seconds - 0.100_006).abs() < 1e-9);
+        assert!((g2g.seconds - 0.100_003).abs() < 1e-9);
+        assert_eq!(e.h2d_basis, Some(Basis::NapkinBench));
+        assert_eq!(e.d2h_basis, Some(Basis::NapkinBench));
+        assert_eq!(e.g2g_basis, Basis::NapkinBench);
         assert!((e.launch_s - 0.00005).abs() < 1e-9);
         assert!((e.total_s - 0.420_064).abs() < 1e-9);
         assert_eq!(e.bottleneck, Bottleneck::D2h);
         assert!((e.intensity - 40.0).abs() < 1e-9);
         assert!((e.ridge - 400.0).abs() < 1e-9);
+        Ok(())
     }
 
     #[test]
-    fn overlapped_total_is_max_of_stages() {
+    fn overlapped_total_is_max_of_stages() -> Result<(), EstimateError> {
         let workload = Workload {
             dtype: Dtype::Fp16,
             throughput: Throughput::Peak,
@@ -691,12 +711,13 @@ mod tests {
             copy_mode: CopyMode::Sync,
             launches: 10,
         };
-        let e = estimate(&fixture(), &workload, Mode::Overlapped, false).unwrap();
+        let e = estimate(&fixture(), &workload, Mode::Overlapped, false)?;
         assert!((e.total_s - 0.100_006).abs() < 1e-9);
+        Ok(())
     }
 
     #[test]
-    fn compute_only_intensity_is_infinite() {
+    fn compute_only_intensity_is_infinite() -> Result<(), EstimateError> {
         let workload = Workload {
             dtype: Dtype::Fp16,
             throughput: Throughput::Peak,
@@ -718,13 +739,14 @@ mod tests {
             copy_mode: CopyMode::Sync,
             launches: 1,
         };
-        let e = estimate(&fixture(), &workload, Mode::Serial, false).unwrap();
+        let e = estimate(&fixture(), &workload, Mode::Serial, false)?;
         assert!(e.intensity.is_infinite());
         assert_eq!(e.bottleneck, Bottleneck::Compute);
+        Ok(())
     }
 
     #[test]
-    fn idle_workload_has_zero_intensity() {
+    fn idle_workload_has_zero_intensity() -> Result<(), EstimateError> {
         let workload = Workload {
             dtype: Dtype::Fp16,
             throughput: Throughput::Peak,
@@ -746,9 +768,10 @@ mod tests {
             copy_mode: CopyMode::Sync,
             launches: 0,
         };
-        let e = estimate(&fixture(), &workload, Mode::Serial, false).unwrap();
+        let e = estimate(&fixture(), &workload, Mode::Serial, false)?;
         assert!((e.intensity - 0.0).abs() < f64::EPSILON);
         assert!((e.total_s - 0.0).abs() < f64::EPSILON);
+        Ok(())
     }
 
     #[test]
@@ -804,9 +827,10 @@ mod tests {
             copy_mode: CopyMode::Sync,
             launches: 0,
         };
-        let err = estimate(&profile, &workload, Mode::Serial, false)
-            .unwrap_err()
-            .to_string();
+        let err = match estimate(&profile, &workload, Mode::Serial, false) {
+            Err(error) => error.to_string(),
+            Ok(_) => String::new(),
+        };
         assert!(err.contains("no measured h2d bandwidth"), "{err}");
     }
 
@@ -835,9 +859,10 @@ mod tests {
             copy_mode: CopyMode::Sync,
             launches: 0,
         };
-        let err = estimate(&profile, &workload, Mode::Serial, false)
-            .unwrap_err()
-            .to_string();
+        let err = match estimate(&profile, &workload, Mode::Serial, false) {
+            Err(error) => error.to_string(),
+            Ok(_) => String::new(),
+        };
         assert!(err.contains("no fp8 throughput"), "{err}");
     }
 
@@ -998,7 +1023,7 @@ mod tests {
                     n: 8192,
                     k: 8192
                 },
-                basis: Basis::Measured
+                basis: Basis::NapkinBench
             }
         );
     }

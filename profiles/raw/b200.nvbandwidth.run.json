@@ -1,0 +1,87 @@
+{
+  "tool": "nvbandwidth",
+  "repository": "https://github.com/NVIDIA/nvbandwidth",
+  "tag": "v0.10.0",
+  "commit": "82fc4e8c6afa0babb8687793678f615b3b8d793e",
+  "version_output": "nvbandwidth Version: v0.10.0\nBuilt from Git version: v0.10",
+  "command": [
+    "nvbandwidth",
+    "--format",
+    "json",
+    "--disableAffinity",
+    "--bufferSize",
+    "512",
+    "--testSamples",
+    "7",
+    "--testcase",
+    "host_to_device_memcpy_ce",
+    "device_to_host_memcpy_ce",
+    "host_to_device_memcpy_sm",
+    "device_to_host_memcpy_sm",
+    "device_to_device_memcpy_read_ce",
+    "device_to_device_memcpy_write_ce",
+    "device_to_device_memcpy_read_sm",
+    "device_to_device_memcpy_write_sm",
+    "host_device_latency_sm",
+    "device_to_device_latency_sm"
+  ],
+  "exit_code": 0,
+  "gpu_request": "B200:2",
+  "captured_at": "2026-10-12T22:00:40Z",
+  "gpus": [
+    {
+      "index": "0",
+      "name": "NVIDIA B200",
+      "uuid": "GPU-43f9c093-7cdf-00d8-bf31-ae6219016f0b",
+      "pci.bus_id": "[Unknown Error]",
+      "driver_version": "610.57.04",
+      "memory.total": "183359 MiB"
+    },
+    {
+      "index": "1",
+      "name": "NVIDIA B200",
+      "uuid": "GPU-807314d3-4a52-1231-4b05-cee3dedc8fac",
+      "pci.bus_id": "[Unknown Error]",
+      "driver_version": "610.57.04",
+      "memory.total": "183359 MiB"
+    }
+  ],
+  "pcie_links": [
+    {
+      "index": 0,
+      "pcie_gen": 5,
+      "pcie_gen_max": 5,
+      "pcie_width": 16,
+      "pcie_width_max": 16
+    },
+    {
+      "index": 1,
+      "pcie_gen": 5,
+      "pcie_gen_max": 5,
+      "pcie_width": 16,
+      "pcie_width_max": 16
+    }
+  ],
+  "topology": [
+    {
+      "command": [
+        "nvidia-smi",
+        "topo",
+        "-m"
+      ],
+      "exit_code": 255,
+      "stdout": "\t\u001b[4mGPU0\tGPU1\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nFailed to run topology matrix\n\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "nvidia-smi",
+        "nvlink",
+        "--status"
+      ],
+      "exit_code": 0,
+      "stdout": "GPU 0: NVIDIA B200 (UUID: GPU-43f9c093-7cdf-00d8-bf31-ae6219016f0b)\n\t Link 0: 53.125 GB/s\n\t Link 1: 53.125 GB/s\n\t Link 2: 53.125 GB/s\n\t Link 3: 53.125 GB/s\n\t Link 4: 53.125 GB/s\n\t Link 5: 53.125 GB/s\n\t Link 6: 53.125 GB/s\n\t Link 7: 53.125 GB/s\n\t Link 8: 53.125 GB/s\n\t Link 9: 53.125 GB/s\n\t Link 10: 53.125 GB/s\n\t Link 11: 53.125 GB/s\n\t Link 12: 53.125 GB/s\n\t Link 13: 53.125 GB/s\n\t Link 14: 53.125 GB/s\n\t Link 15: 53.125 GB/s\n\t Link 16: 53.125 GB/s\n\t Link 17: 53.125 GB/s\nGPU 1: NVIDIA B200 (UUID: GPU-807314d3-4a52-1231-4b05-cee3dedc8fac)\n\t Link 0: 53.125 GB/s\n\t Link 1: 53.125 GB/s\n\t Link 2: 53.125 GB/s\n\t Link 3: 53.125 GB/s\n\t Link 4: 53.125 GB/s\n\t Link 5: 53.125 GB/s\n\t Link 6: 53.125 GB/s\n\t Link 7: 53.125 GB/s\n\t Link 8: 53.125 GB/s\n\t Link 9: 53.125 GB/s\n\t Link 10: 53.125 GB/s\n\t Link 11: 53.125 GB/s\n\t Link 12: 53.125 GB/s\n\t Link 13: 53.125 GB/s\n\t Link 14: 53.125 GB/s\n\t Link 15: 53.125 GB/s\n\t Link 16: 53.125 GB/s\n\t Link 17: 53.125 GB/s\n",
+      "stderr": ""
+    }
+  ]
+}

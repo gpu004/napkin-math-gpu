@@ -507,9 +507,12 @@ fn get_profile(id: &str) -> Result<&'static Profile, String> {
 fn cmd_gpus() -> String {
     let mut out = String::new();
     for p in profile::builtin() {
-        let basis = match &p.measured {
-            Some(m) => format!("measured {}", &m.captured_at[..10.min(m.captured_at.len())]),
-            None => "datasheet".to_owned(),
+        let basis = match (p.rates(false).basis, &p.measured) {
+            (Basis::NapkinBench, Some(m)) => format!(
+                "napkin-bench {}",
+                &m.captured_at[..10.min(m.captured_at.len())]
+            ),
+            _ => "datasheet".to_owned(),
         };
         let _ = writeln!(
             out,
@@ -550,7 +553,7 @@ fn bound(lower_bound: bool) -> &'static str {
     if lower_bound { "≥ " } else { "" }
 }
 
-fn transfer_line(out: &mut String, name: &str, t: &TransferTime) {
+fn transfer_line(out: &mut String, name: &str, t: &TransferTime, basis: Option<String>) {
     let noun = if t.copies == 1 { "copy" } else { "copies" };
     let latency = t.latency_us.map_or_else(String::new, |us| {
         format!("{} × {} + ", t.waits, fmt_duration(us / 1e6, 2))
@@ -567,6 +570,9 @@ fn transfer_line(out: &mut String, name: &str, t: &TransferTime) {
     );
     if let Some(reason) = t.lower_bound {
         let _ = write!(out, "; lower bound: {reason}");
+    }
+    if let Some(basis) = basis {
+        let _ = write!(out, "   {basis}");
     }
     out.push('\n');
 }
@@ -662,8 +668,12 @@ fn format_estimate(
     ceiling: bool,
     estimate: &estimate::Estimate,
 ) -> String {
-    let basis = match (&profile.measured, ceiling) {
-        (Some(m), false) => format!("measured {}", &m.captured_at[..10.min(m.captured_at.len())]),
+    let rates = profile.rates(ceiling);
+    let basis = match (rates.basis, &profile.measured) {
+        (Basis::NapkinBench, Some(m)) => format!(
+            "napkin-bench {}",
+            &m.captured_at[..10.min(m.captured_at.len())]
+        ),
         _ => "datasheet".to_owned(),
     };
     let mut out = format!("{} · {dtype} · {basis}\n", profile.name);
@@ -706,21 +716,23 @@ fn format_estimate(
     line("memory", estimate.memory_s, true);
     line("device", estimate.device_s, true);
     line("host", estimate.host_s, estimate.host_s > 0.0);
-    for (name, stage) in [
-        ("h2d", estimate.h2d),
-        ("d2h", estimate.d2h),
-        ("g2g", estimate.g2g),
+    for (name, stage, basis) in [
+        ("h2d", estimate.h2d, estimate.h2d_basis),
+        ("d2h", estimate.d2h, estimate.d2h_basis),
+        ("g2g", estimate.g2g, Some(estimate.g2g_basis)),
     ] {
         if let Some(t) = stage {
-            transfer_line(&mut out, name, &t);
+            transfer_line(&mut out, name, &t, basis.map(transfer_basis_label));
         }
     }
-    let mut line = |name: &str, seconds: f64, show: bool| {
-        if show {
-            let _ = writeln!(out, "{name:<12}{}", fmt_duration(seconds, 2));
-        }
-    };
-    line("launch", estimate.launch_s, estimate.launch_s > 0.0);
+    if estimate.launch_s > 0.0 {
+        let _ = writeln!(
+            out,
+            "{:<12}{}",
+            "launch",
+            fmt_duration(estimate.launch_s, 2)
+        );
+    }
     let _ = writeln!(
         out,
         "{:<12}{}{}   {}",
@@ -741,7 +753,7 @@ fn append_compute_source_note(
     estimate: &estimate::Estimate,
 ) {
     if matches!(&estimate.compute_source, ComputeSource::Profile(_))
-        && estimate.compute_basis == Basis::Ceiling
+        && estimate.compute_basis == Basis::Datasheet
         && profile.measured.is_some()
         && !ceiling
     {
@@ -794,8 +806,17 @@ fn append_compute_source_note(
 
 fn unmatched_compute_source(basis: Basis) -> &'static str {
     match basis {
-        Basis::Measured => "used the measured 8192³ GemmEx peak, a large-GEMM ceiling",
-        Basis::Ceiling => "used the datasheet dense ceiling",
+        Basis::NapkinBench => "used the measured 8192³ GemmEx peak, a large-GEMM ceiling",
+        Basis::Datasheet => "used the datasheet dense ceiling",
+        Basis::Nvbandwidth => "used the NVBandwidth estimate",
+    }
+}
+
+fn transfer_basis_label(basis: Basis) -> String {
+    match basis {
+        Basis::Nvbandwidth => "NVBandwidth CE".to_owned(),
+        Basis::NapkinBench => "napkin-bench".to_owned(),
+        Basis::Datasheet => "datasheet".to_owned(),
     }
 }
 
@@ -1727,11 +1748,11 @@ mod tests {
     #[test]
     fn unmatched_compute_source_names_its_peak_basis() {
         assert_eq!(
-            unmatched_compute_source(Basis::Measured),
+            unmatched_compute_source(Basis::NapkinBench),
             "used the measured 8192³ GemmEx peak, a large-GEMM ceiling"
         );
         assert_eq!(
-            unmatched_compute_source(Basis::Ceiling),
+            unmatched_compute_source(Basis::Datasheet),
             "used the datasheet dense ceiling"
         );
     }

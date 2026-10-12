@@ -7,8 +7,9 @@ use std::process::ExitCode;
 
 use napkin_profile::collective::{Collective, CollectiveEvidence, Curve, CurvePoint, Topology};
 use napkin_profile::{
-    Ceiling, Dtype, GemmAlgo, GemmCheck, GemmShape, GemmShapeSuite, GpuState, Measured, Profile,
-    RoundState, Span, tflops,
+    Access, Bandwidth, Ceiling, CopyPath, Dtype, Endpoint, GemmAlgo, GemmCheck, GemmShape,
+    GemmShapeSuite, GpuState, Latency, Measured, Nvbandwidth, Profile, RoundState, Span, Statistic,
+    TopologyProbe, tflops,
 };
 use serde::Deserialize;
 
@@ -50,6 +51,7 @@ enum PriceTermsInput {
 struct ProfilePaths {
     datasheets: BTreeMap<String, PathBuf>,
     measured: BTreeMap<String, PathBuf>,
+    nvbandwidth: BTreeMap<String, (PathBuf, PathBuf)>,
 }
 
 #[derive(Debug)]
@@ -73,7 +75,9 @@ fn run() -> Result<(), String> {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?;
     let profiles_dir = Path::new(&manifest_dir).join("../../profiles");
     println!("cargo:rerun-if-changed={}", profiles_dir.display());
-    let paths = profile_paths(&profiles_dir)?;
+    let raw_dir = profiles_dir.join("raw");
+    println!("cargo:rerun-if-changed={}", raw_dir.display());
+    let paths = profile_paths(&profiles_dir, &raw_dir)?;
     for (id, path) in &paths.measured {
         if !paths.datasheets.contains_key(id) {
             return Err(format!(
@@ -82,10 +86,21 @@ fn run() -> Result<(), String> {
             ));
         }
     }
+    for (id, (raw, run)) in &paths.nvbandwidth {
+        if !paths.measured.contains_key(id) {
+            return Err(format!(
+                "NVBandwidth evidence {} and {} has no measured profile",
+                raw.display(),
+                run.display()
+            ));
+        }
+    }
     let profiles = load_profiles(&paths.datasheets, &paths.measured)?;
     let nccl_dir = profiles_dir.join("nccl-tests");
     println!("cargo:rerun-if-changed={}", nccl_dir.display());
     let collectives = load_collectives(&nccl_dir, &profiles)?;
+    let profiles = attach_nvbandwidth(profiles, &paths.nvbandwidth)?;
+    validate_transfer_cross_checks(&profiles)?;
     let generated = emit_profiles(&profiles, &collectives);
     let out_dir = env::var("OUT_DIR").map_err(|e| e.to_string())?;
     let output = Path::new(&out_dir).join("profiles.rs");
@@ -360,7 +375,7 @@ fn emit_prices(prices: &[PriceRecordInput]) -> Result<String, String> {
     Ok(generated)
 }
 
-fn profile_paths(profiles_dir: &Path) -> Result<ProfilePaths, String> {
+fn profile_paths(profiles_dir: &Path, raw_dir: &Path) -> Result<ProfilePaths, String> {
     let mut datasheets = BTreeMap::new();
     let mut measured = BTreeMap::new();
     let entries = fs::read_dir(profiles_dir)
@@ -387,9 +402,51 @@ fn profile_paths(profiles_dir: &Path) -> Result<ProfilePaths, String> {
             datasheets.insert(id.to_owned(), path);
         }
     }
+    let mut nvbandwidth_raw = BTreeMap::new();
+    let mut nvbandwidth_runs = BTreeMap::new();
+    if raw_dir.exists() {
+        let entries = fs::read_dir(raw_dir)
+            .map_err(|error| format!("cannot read {}: {error}", raw_dir.display()))?;
+        for entry in entries {
+            let path = entry
+                .map_err(|error| format!("cannot read entry in {}: {error}", raw_dir.display()))?
+                .path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if let Some(id) = name.strip_suffix(".nvbandwidth.run.json") {
+                nvbandwidth_runs.insert(id.to_owned(), path);
+            } else if let Some(id) = name.strip_suffix(".nvbandwidth.json") {
+                nvbandwidth_raw.insert(id.to_owned(), path);
+            }
+        }
+    }
+    let ids: std::collections::BTreeSet<_> = nvbandwidth_raw
+        .keys()
+        .chain(nvbandwidth_runs.keys())
+        .cloned()
+        .collect();
+    let mut nvbandwidth = BTreeMap::new();
+    for id in ids {
+        let raw = nvbandwidth_raw.get(&id);
+        let run = nvbandwidth_runs.get(&id);
+        let (Some(raw), Some(run)) = (raw, run) else {
+            let found = raw
+                .or(run)
+                .map_or_else(String::new, |path| path.display().to_string());
+            return Err(format!(
+                "NVBandwidth evidence for {id:?} must include both raw and run files; found {found}"
+            ));
+        };
+        nvbandwidth.insert(id, (raw.clone(), run.clone()));
+    }
     Ok(ProfilePaths {
         datasheets,
         measured,
+        nvbandwidth,
     })
 }
 
@@ -432,6 +489,52 @@ fn load_profiles(
         profiles.push(profile);
     }
     Ok(profiles)
+}
+
+fn attach_nvbandwidth(
+    mut profiles: Vec<Profile>,
+    evidence_paths: &BTreeMap<String, (PathBuf, PathBuf)>,
+) -> Result<Vec<Profile>, String> {
+    for profile in &mut profiles {
+        if let Some((raw_path, run_path)) = evidence_paths.get(&profile.id) {
+            let raw = fs::read_to_string(raw_path)
+                .map_err(|error| format!("cannot read {}: {error}", raw_path.display()))?;
+            let run = fs::read_to_string(run_path)
+                .map_err(|error| format!("cannot read {}: {error}", run_path.display()))?;
+            let evidence = Nvbandwidth::parse(&raw, &run).map_err(|error| {
+                format!("invalid NVBandwidth evidence for {}: {error}", profile.id)
+            })?;
+            let measured = profile.measured.as_ref().ok_or_else(|| {
+                format!(
+                    "NVBandwidth evidence for {} has no measured profile",
+                    profile.id
+                )
+            })?;
+            evidence.check_identity(measured).map_err(|error| {
+                format!("NVBandwidth identity mismatch for {}: {error}", profile.id)
+            })?;
+            profile.nvbandwidth = Some(evidence);
+        }
+    }
+    Ok(profiles)
+}
+
+fn validate_transfer_cross_checks(profiles: &[Profile]) -> Result<(), String> {
+    for profile in profiles {
+        for check in profile.transfer_cross_check() {
+            if check.same_link && (check.ratio - 1.0).abs() > 0.05 {
+                return Err(format!(
+                    "{} {} cross-check differs: NVBandwidth {:.3} GB/s, napkin-bench {:.3} GB/s, ratio {:.5}; investigate before publishing",
+                    profile.id,
+                    check.metric,
+                    check.nvbandwidth_gbps,
+                    check.napkin_bench_gbps,
+                    check.ratio
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_ceiling(id: &str, ceiling: &Ceiling) -> Result<(), String> {
@@ -763,6 +866,7 @@ fn emit_profile(profile: &Profile, generated: &mut String) {
         memory_gb,
         ceiling,
         measured,
+        nvbandwidth,
     } = profile;
     let Ceiling {
         hbm_gbps,
@@ -823,7 +927,145 @@ fn emit_profile(profile: &Profile, generated: &mut String) {
         .as_ref()
         .map_or_else(|| "None".to_owned(), emit_measured);
     emit_field(generated, "        ", "measured", &measured);
+    let nvbandwidth = nvbandwidth
+        .as_ref()
+        .map_or_else(|| "None".to_owned(), emit_nvbandwidth);
+    emit_field(generated, "        ", "nvbandwidth", &nvbandwidth);
     generated.push_str("    }\n}\n");
+}
+
+fn emit_nvbandwidth(evidence: &Nvbandwidth) -> String {
+    let fields = [
+        ("version", string_literal(&evidence.version)),
+        ("git_version", string_literal(&evidence.git_version)),
+        ("repository", string_literal(&evidence.repository)),
+        ("commit", string_literal(&evidence.commit)),
+        ("command", string_vec(&evidence.command)),
+        ("captured_at", string_literal(&evidence.captured_at)),
+        ("gpu_request", string_literal(&evidence.gpu_request)),
+        ("driver_version", string_literal(&evidence.driver_version)),
+        (
+            "cuda_runtime_version",
+            string_literal(&evidence.cuda_runtime_version),
+        ),
+        (
+            "cuda_driver_version",
+            string_literal(&evidence.cuda_driver_version),
+        ),
+        ("devices", string_vec(&evidence.devices)),
+        ("pcie_links", pcie_links_literal(&evidence.pcie_links)),
+        ("topology", topology_literal(&evidence.topology)),
+        ("buffer_bytes", format!("{}_u64", evidence.buffer_bytes)),
+        ("samples", format!("{}_u32", evidence.samples)),
+        (
+            "statistic",
+            match evidence.statistic {
+                Statistic::Median => "Statistic::Median".to_owned(),
+                Statistic::Mean => "Statistic::Mean".to_owned(),
+            },
+        ),
+        ("verified", evidence.verified.to_string()),
+        ("bandwidths", bandwidths_literal(&evidence.bandwidths)),
+        ("latencies", latencies_literal(&evidence.latencies)),
+    ];
+    let mut generated = String::from("Some(Nvbandwidth {\n");
+    for (name, value) in fields {
+        emit_field(&mut generated, "            ", name, &value);
+    }
+    generated.push_str("        })");
+    generated
+}
+
+fn string_vec(values: &[String]) -> String {
+    format!(
+        "vec![{}]",
+        values
+            .iter()
+            .map(|value| string_literal(value))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn pcie_links_literal(links: &[napkin_profile::PcieLink]) -> String {
+    let links = links
+        .iter()
+        .map(|link| {
+            format!(
+                "PcieLink {{ r#gen: {}_u8, gen_max: {}_u8, width: {}_u8, width_max: {}_u8 }}",
+                link.r#gen, link.gen_max, link.width, link.width_max
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("vec![{links}]")
+}
+
+fn topology_literal(probes: &[TopologyProbe]) -> String {
+    let probes = probes
+        .iter()
+        .map(|probe| {
+            format!(
+                "TopologyProbe {{ command: {}, exit_code: {}_i32, output: {} }}",
+                string_literal(&probe.command),
+                probe.exit_code,
+                string_literal(&probe.output)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("vec![{probes}]")
+}
+
+fn bandwidths_literal(bandwidths: &[Bandwidth]) -> String {
+    let bandwidths = bandwidths
+        .iter()
+        .map(|bandwidth| {
+            let path = match bandwidth.path {
+                CopyPath::Ce => "CopyPath::Ce",
+                CopyPath::Sm => "CopyPath::Sm",
+            };
+            let access = match bandwidth.access {
+                Some(Access::Read) => "Some(Access::Read)",
+                Some(Access::Write) => "Some(Access::Write)",
+                None => "None",
+            };
+            format!(
+                "Bandwidth {{ testcase: {}, path: {path}, access: {access}, src: {}, dst: {}, initiator: {}_u32, gbps: {} }}",
+                string_literal(&bandwidth.testcase),
+                endpoint_literal(bandwidth.src),
+                endpoint_literal(bandwidth.dst),
+                bandwidth.initiator,
+                float_literal(bandwidth.gbps)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("vec![{bandwidths}]")
+}
+
+fn latencies_literal(latencies: &[Latency]) -> String {
+    let latencies = latencies
+        .iter()
+        .map(|latency| {
+            format!(
+                "Latency {{ testcase: {}, a: {}, b: {}, ns: {} }}",
+                string_literal(&latency.testcase),
+                endpoint_literal(latency.a),
+                endpoint_literal(latency.b),
+                float_literal(latency.ns)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("vec![{latencies}]")
+}
+
+fn endpoint_literal(endpoint: Endpoint) -> String {
+    match endpoint {
+        Endpoint::Host => "Endpoint::Host".to_owned(),
+        Endpoint::Gpu(index) => format!("Endpoint::Gpu({index}_u32)"),
+    }
 }
 
 fn emit_measured(measured: &Measured) -> String {

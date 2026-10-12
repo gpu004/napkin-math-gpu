@@ -1,0 +1,87 @@
+{
+  "tool": "nvbandwidth",
+  "repository": "https://github.com/NVIDIA/nvbandwidth",
+  "tag": "v0.10.0",
+  "commit": "82fc4e8c6afa0babb8687793678f615b3b8d793e",
+  "version_output": "nvbandwidth Version: v0.10.0\nBuilt from Git version: v0.10",
+  "command": [
+    "nvbandwidth",
+    "--format",
+    "json",
+    "--disableAffinity",
+    "--bufferSize",
+    "512",
+    "--testSamples",
+    "7",
+    "--testcase",
+    "host_to_device_memcpy_ce",
+    "device_to_host_memcpy_ce",
+    "host_to_device_memcpy_sm",
+    "device_to_host_memcpy_sm",
+    "device_to_device_memcpy_read_ce",
+    "device_to_device_memcpy_write_ce",
+    "device_to_device_memcpy_read_sm",
+    "device_to_device_memcpy_write_sm",
+    "host_device_latency_sm",
+    "device_to_device_latency_sm"
+  ],
+  "exit_code": 0,
+  "gpu_request": "A100-80GB:2",
+  "captured_at": "2026-10-12T21:54:17Z",
+  "gpus": [
+    {
+      "index": "0",
+      "name": "NVIDIA A100-SXM4-80GB",
+      "uuid": "GPU-baf1f8d6-bc42-455b-448a-e17e0daf3b97",
+      "pci.bus_id": "[Unknown Error]",
+      "driver_version": "580.95.05",
+      "memory.total": "81920 MiB"
+    },
+    {
+      "index": "1",
+      "name": "NVIDIA A100-SXM4-80GB",
+      "uuid": "GPU-44523d1c-2d3a-0d3b-1b51-81497436e20e",
+      "pci.bus_id": "[Unknown Error]",
+      "driver_version": "580.95.05",
+      "memory.total": "81920 MiB"
+    }
+  ],
+  "pcie_links": [
+    {
+      "index": 0,
+      "pcie_gen": 4,
+      "pcie_gen_max": 4,
+      "pcie_width": 16,
+      "pcie_width_max": 16
+    },
+    {
+      "index": 1,
+      "pcie_gen": 4,
+      "pcie_gen_max": 4,
+      "pcie_width": 16,
+      "pcie_width_max": 16
+    }
+  ],
+  "topology": [
+    {
+      "command": [
+        "nvidia-smi",
+        "topo",
+        "-m"
+      ],
+      "exit_code": 255,
+      "stdout": "\t\u001b[4mGPU0\tGPU1\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nFailed to run topology matrix\n\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "nvidia-smi",
+        "nvlink",
+        "--status"
+      ],
+      "exit_code": 0,
+      "stdout": "GPU 0: NVIDIA A100-SXM4-80GB (UUID: GPU-baf1f8d6-bc42-455b-448a-e17e0daf3b97)\n\t Link 0: 25 GB/s\n\t Link 1: 25 GB/s\n\t Link 2: 25 GB/s\n\t Link 3: 25 GB/s\n\t Link 4: 25 GB/s\n\t Link 5: 25 GB/s\n\t Link 6: 25 GB/s\n\t Link 7: 25 GB/s\n\t Link 8: 25 GB/s\n\t Link 9: 25 GB/s\n\t Link 10: 25 GB/s\n\t Link 11: 25 GB/s\nGPU 1: NVIDIA A100-SXM4-80GB (UUID: GPU-44523d1c-2d3a-0d3b-1b51-81497436e20e)\n\t Link 0: 25 GB/s\n\t Link 1: 25 GB/s\n\t Link 2: 25 GB/s\n\t Link 3: 25 GB/s\n\t Link 4: 25 GB/s\n\t Link 5: 25 GB/s\n\t Link 6: 25 GB/s\n\t Link 7: 25 GB/s\n\t Link 8: 25 GB/s\n\t Link 9: 25 GB/s\n\t Link 10: 25 GB/s\n\t Link 11: 25 GB/s\n",
+      "stderr": ""
+    }
+  ]
+}

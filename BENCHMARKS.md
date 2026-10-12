@@ -226,6 +226,9 @@ notes. Measured calibrations live in `profiles/<id>.measured.json`, produced by
   [H100 × 8](profiles/nccl-tests/h100x8) (a different Modal host: driver
   610.57.04 and a PCIe Gen 4 host link, versus 580.95.05 and Gen 5 for × 2)
 
+NVBandwidth v0.10.0 evidence is ingested with per-metric provenance from
+`profiles/raw/*.nvbandwidth.json` and the corresponding run metadata.
+
 The `napkin-profile` types are the shared contract between the estimator
 crate and the `napkin-bench` producer. The measured files must be replaced
 metric-by-metric by the source policy above before being called canonical.
