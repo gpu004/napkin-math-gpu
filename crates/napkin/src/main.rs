@@ -6,14 +6,17 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{ArgGroup, Parser, Subcommand};
+use napkin::collective::{self, Query, Regime};
 use napkin::cost::{self, Job, Work};
 use napkin::estimate::{self, CopyMode, Mode, Transfer, TransferTime, Workload};
 use napkin::fit;
 use napkin::llm::{self, Model, Workload as LlmWorkload};
 use napkin::price::{self, Date, STALE_AFTER_DAYS};
+use napkin::profile::collective::{Collective, Topology};
 use napkin::profile::{self, Basis, Dtype, Profile};
 use napkin::units::{
-    self, fmt_bytes, fmt_count, fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_si, fmt_sig,
+    self, fmt_binary_bytes, fmt_bytes, fmt_count, fmt_duration, fmt_gbps, fmt_intensity, fmt_money,
+    fmt_si, fmt_sig,
 };
 
 /// GPU napkin math: estimate workload performance from first principles.
@@ -88,6 +91,24 @@ enum Command {
         /// Force datasheet ceilings even when a measurement exists.
         #[arg(long)]
         ceiling: bool,
+    },
+    /// Estimate one NCCL collective from measured NCCL Tests curves.
+    Collective {
+        #[arg(long, default_value = "h100")]
+        gpu: String,
+        /// GPUs taking part.
+        #[arg(long)]
+        count: u32,
+        #[arg(long, value_enum)]
+        topology: Topology,
+        #[arg(long, value_enum)]
+        op: Collective,
+        #[arg(long, value_enum, default_value_t = Dtype::Bf16)]
+        dtype: Dtype,
+        /// NCCL Tests size: per-rank buffer for `AllReduce`, total gathered
+        /// output for `AllGather`, or total per-rank input for `ReduceScatter`.
+        #[arg(long)]
+        bytes: String,
     },
     /// Capacity: does the model fit, and on how many GPUs.
     Fit {
@@ -269,6 +290,14 @@ fn dispatch(command: &Command) -> Result<String, String> {
             *overlap,
             *ceiling,
         ),
+        Command::Collective {
+            gpu,
+            count,
+            topology,
+            op,
+            dtype,
+            bytes,
+        } => cmd_collective(gpu, *count, *topology, *op, *dtype, bytes),
         Command::Fit {
             gpu,
             params,
@@ -315,6 +344,125 @@ fn dispatch(command: &Command) -> Result<String, String> {
         Command::Prices => cmd_prices(),
         Command::Readme { check, path, .. } => cmd_readme(path, *check),
     }
+}
+
+fn cmd_collective(
+    gpu: &str,
+    gpu_count: u32,
+    topology: Topology,
+    op: Collective,
+    dtype: Dtype,
+    bytes: &str,
+) -> Result<String, String> {
+    let gpu_profile = get_profile(gpu)?;
+    let query = Query {
+        gpu,
+        gpu_count,
+        topology,
+        collective: op,
+        dtype,
+        bytes: units::parse_bytes(bytes).map_err(|error| error.to_string())?,
+    };
+    let estimate = collective::estimate(&query)?;
+    let evidence = estimate.evidence;
+    let redop = if op == Collective::AllGather {
+        String::new()
+    } else {
+        format!(" {}", evidence.redop)
+    };
+    let mut out = format!(
+        "{} × {} · {} · {} · {}{} · {} ({})\n",
+        gpu_profile.name,
+        gpu_count,
+        topology,
+        op,
+        dtype,
+        redop,
+        fmt_binary_bytes(query.bytes, 3),
+        op.size_convention()
+    );
+    let regime_detail = match estimate.regime {
+        Regime::Latency => "fixed per-call cost is at least half the time",
+        Regime::Bandwidth => "time grows with size",
+    };
+    let _ = writeln!(out, "regime      {} ({regime_detail})", estimate.regime);
+    let _ = writeln!(out, "time        {}", fmt_duration(estimate.time_s, 3));
+    let bus_factor = match op {
+        Collective::AllReduce => "2(n-1)/n",
+        Collective::AllGather | Collective::ReduceScatter => "(n-1)/n",
+    };
+    let _ = writeln!(
+        out,
+        "collective  algbw {} · busbw {} (busbw = algbw × {bus_factor})",
+        fmt_gbps(estimate.algbw_gbps, 3),
+        fmt_gbps(estimate.busbw_gbps, 3)
+    );
+    if estimate.lower == estimate.upper {
+        let _ = write!(
+            out,
+            "curve       {} {}",
+            fmt_curve_bytes(estimate.lower.bytes),
+            fmt_duration(estimate.lower.time_us / 1e6, 3)
+        );
+    } else {
+        let _ = write!(
+            out,
+            "curve       {} {} .. {} {}",
+            fmt_curve_bytes(estimate.lower.bytes),
+            fmt_duration(estimate.lower.time_us / 1e6, 3),
+            fmt_curve_bytes(estimate.upper.bytes),
+            fmt_duration(estimate.upper.time_us / 1e6, 3)
+        );
+    }
+    let _ = writeln!(
+        out,
+        " · floor {} · peak busbw {} at {}",
+        fmt_duration(estimate.floor_us / 1e6, 3),
+        fmt_gbps(estimate.peak.busbw_gbps, 3),
+        fmt_curve_bytes(estimate.peak.bytes)
+    );
+    let peer_copy = gpu_profile
+        .measured
+        .as_ref()
+        .and_then(|measured| measured.g2g_gbps)
+        .map_or_else(
+            || "not measured".to_owned(),
+            |rate| {
+                format!(
+                    "{} measured (napkin-bench cuMemcpyPeer, one GPU pair; not used here)",
+                    fmt_gbps(rate, 3)
+                )
+            },
+        );
+    let _ = writeln!(out, "peer copy   {peer_copy}");
+    let _ = writeln!(
+        out,
+        "nvlink      {} per-GPU datasheet aggregate, both directions (not used here)",
+        fmt_gbps(gpu_profile.ceiling.nvlink_gbps, 3)
+    );
+    let captured_date = evidence
+        .captured_at
+        .get(..10)
+        .map_or(evidence.captured_at.as_str(), |captured| captured);
+    let _ = writeln!(
+        out,
+        "evidence    NCCL {} · nccl-tests {} · {} · {} · {}",
+        evidence.nccl_version,
+        evidence.nccl_tests,
+        evidence.modal_request,
+        captured_date,
+        evidence.raw_dir
+    );
+    Ok(out)
+}
+
+fn fmt_curve_bytes(bytes: u64) -> String {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "NCCL curve sizes are exactly representable through 2^53 bytes"
+    )]
+    let bytes = bytes as f64;
+    fmt_binary_bytes(bytes, 3)
 }
 
 fn get_profile(id: &str) -> Result<&'static Profile, String> {
@@ -858,7 +1006,7 @@ fn cmd_llm(args: &LlmArgs) -> Result<String, String> {
     } else {
         let _ = writeln!(
             out,
-            "\nhypothetical: the {} working set exceeds {} usable on one {},\nso both estimates assume one GPU's bandwidth and compute. Sharding needs at least {} GPUs;\nit divides weights and KV, not per-GPU memory, and a tensor-parallel speedup needs\na communication term (--g2g) before you claim one.",
+            "\nhypothetical: the {} working set exceeds {} usable on one {},\nso both estimates assume one GPU's bandwidth and compute. Sharding needs at least {} GPUs;\nit divides weights and KV, not per-GPU memory, and a tensor-parallel speedup needs\na communication term (napkin collective) before you claim one.",
             fmt_bytes(capacity.working_bytes, 3),
             fmt_bytes(capacity.usable_bytes_per_gpu, 3),
             p.name,
@@ -1124,4 +1272,19 @@ fn cmd_readme(path: &std::path::Path, check: bool) -> Result<String, String> {
         return Ok(format!("{}: napkin blocks updated\n", path.display()));
     }
     Ok(format!("{}: already current\n", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collective_example_marker_renders_user_facing_command_output() -> Result<(), String> {
+        let command = "example collective --gpu h100 --count 2 --topology nvlink --op all-reduce --bytes 16KiB";
+        let output = render_marker(command)?;
+        assert!(output.starts_with(&format!("```text\n$ napkin {command}\n")));
+        assert!(output.contains("H100 SXM 80GB × 2 · nvlink · AllReduce · bf16 sum · 16 KiB"));
+        assert!(output.ends_with("\n```\n"));
+        Ok(())
+    }
 }

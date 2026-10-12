@@ -1,0 +1,15 @@
+{
+  "args": ["/opt/nccl-tests/build/all_reduce_perf", "-b", "8", "-e", "4G", "-f", "2", "-w", "5", "-n", "20", "-c", "1", "-g", "2", "-d", "bfloat16", "-o", "sum", "-J", "/tmp/all_reduce_perf.json"],
+  "nccl_version": 22703,
+  "config": {"nthreads": 1, "ngpus": 2, "validation": 1},
+  "out_of_bounds": {"count": 0, "okay": "true"},
+  "results": [
+    {"size":8,"count":4,"type":"bfloat16","redop":"sum","root":"    -1","out_of_place":{"time":10.4621,"alg_bw":0.000765,"bus_bw":0.000765,"nwrong":0.0},"in_place":{"time":9.98685,"alg_bw":0.000801,"bus_bw":0.000801,"nwrong":0.0},"actual_iterations":20,"experiment_name":""},
+    {"size":16,"count":8,"type":"bfloat16","redop":"sum","root":"    -1","out_of_place":{"time":9.7715,"alg_bw":0.001637,"bus_bw":0.001637,"nwrong":0.0},"in_place":{"time":9.7489,"alg_bw":0.001641,"bus_bw":0.001641,"nwrong":0.0},"actual_iterations":20,"experiment_name":""},
+    {"size":32,"count":16,"type":"bfloat16","redop":"sum","root":"    -1","out_of_place":{"time":15.85295,"alg_bw":0.002019,"bus_bw":0.002019,"nwrong":0.0},"in_place":{"time":11.20305,"alg_bw":0.002856,"bus_bw":0.002856,"nwrong":0.0},"actual_iterations":20,"experiment_name":""},
+    {"size":2048,"count":1024,"type":"bfloat16","redop":"sum","root":"    -1","out_of_place":{"time":9.919,"alg_bw":0.206472,"bus_bw":0.206472,"nwrong":0.0},"in_place":{"time":10.20775,"alg_bw":0.200632,"bus_bw":0.200632,"nwrong":0.0},"actual_iterations":20,"experiment_name":""},
+    {"size":32768,"count":16384,"type":"bfloat16","redop":"sum","root":"    -1","out_of_place":{"time":10.0802,"alg_bw":3.250729,"bus_bw":3.250729,"nwrong":0.0},"in_place":{"time":10.10855,"alg_bw":3.241612,"bus_bw":3.241612,"nwrong":0.0},"actual_iterations":20,"experiment_name":""},
+    {"size":65536,"count":32768,"type":"bfloat16","redop":"sum","root":"    -1","out_of_place":{"time":10.5853,"alg_bw":6.191227,"bus_bw":6.191227,"nwrong":0.0},"in_place":{"time":10.44395,"alg_bw":6.27502,"bus_bw":6.27502,"nwrong":0.0},"actual_iterations":20,"experiment_name":""},
+    {"size":4294967296,"count":2147483648,"type":"bfloat16","redop":"sum","root":"    -1","out_of_place":{"time":12296.9965,"alg_bw":349.26962,"bus_bw":349.26962,"nwrong":0.0},"in_place":{"time":12230.78025,"alg_bw":351.160532,"bus_bw":351.160532,"nwrong":0.0},"actual_iterations":20,"experiment_name":""}
+  ]
+}
