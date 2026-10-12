@@ -1,0 +1,48 @@
+# Writing JSON output to /tmp/all_gather_perf.json
+# nccl-tests version 2.21.1 (afd59ab) nccl-headers=22703 nccl-library=22703
+# Collective test starting: all_gather_perf
+# nThread 1 nGpus 2 minBytes 8 maxBytes 4294967296 step: 2(factor) warmup iters: 5 iters: 20 agg iters: 1 validation: 1 graph: 0 unalign: 0
+#
+# Using devices
+#  Rank  0 Group  0 Pid     56 on      modal device  0 [0000:3b:00] NVIDIA H100 80GB HBM3
+#  Rank  1 Group  0 Pid     56 on      modal device  1 [0000:44:00] NVIDIA H100 80GB HBM3
+NCCL version 2.27.3+cuda12.9
+#
+#                                                              out-of-place                       in-place
+#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong
+#        (B)    (elements)                               (us)  (GB/s)  (GB/s)             (us)  (GB/s)  (GB/s)
+           0             0  bfloat16    none      -1     0.41    0.00    0.00       0     0.36    0.00    0.00       0
+           0             0  bfloat16    none      -1     0.39    0.00    0.00       0     0.37    0.00    0.00       0
+          32             8  bfloat16    none      -1    12.15    0.00    0.00       0    10.02    0.00    0.00       0
+          64            16  bfloat16    none      -1     9.93    0.01    0.00       0     9.96    0.01    0.00       0
+         128            32  bfloat16    none      -1    10.82    0.01    0.01       0    11.46    0.01    0.01       0
+         256            64  bfloat16    none      -1    11.32    0.02    0.01       0    11.32    0.02    0.01       0
+         512           128  bfloat16    none      -1    13.06    0.04    0.02       0    10.08    0.05    0.03       0
+        1024           256  bfloat16    none      -1     9.97    0.10    0.05       0    10.35    0.10    0.05       0
+        2048           512  bfloat16    none      -1     9.87    0.21    0.10       0     9.90    0.21    0.10       0
+        4096          1024  bfloat16    none      -1     9.93    0.41    0.21       0     9.99    0.41    0.20       0
+        8192          2048  bfloat16    none      -1     9.99    0.82    0.41       0     9.90    0.83    0.41       0
+       16384          4096  bfloat16    none      -1    10.14    1.62    0.81       0    10.17    1.61    0.81       0
+       32768          8192  bfloat16    none      -1    10.40    3.15    1.58       0    10.44    3.14    1.57       0
+       65536         16384  bfloat16    none      -1    10.88    6.02    3.01       0    10.69    6.13    3.07       0
+      131072         32768  bfloat16    none      -1    11.21   11.69    5.85       0    11.20   11.71    5.85       0
+      262144         65536  bfloat16    none      -1    11.93   21.98   10.99       0    11.68   22.45   11.22       0
+      524288        131072  bfloat16    none      -1    11.80   44.45   22.22       0    11.87   44.17   22.09       0
+     1048576        262144  bfloat16    none      -1    12.06   86.93   43.47       0    12.31   85.19   42.59       0
+     2097152        524288  bfloat16    none      -1    18.01  116.48   58.24       0    16.60  126.37   63.18       0
+     4194304       1048576  bfloat16    none      -1    29.04  144.44   72.22       0    27.05  155.07   77.54       0
+     8388608       2097152  bfloat16    none      -1    42.57  197.04   98.52       0    36.11  232.32  116.16       0
+    16777216       4194304  bfloat16    none      -1    59.65  281.28  140.64       0    55.10  304.48  152.24       0
+    33554432       8388608  bfloat16    none      -1    93.74  357.96  178.98       0    91.16  368.09  184.04       0
+    67108864      16777216  bfloat16    none      -1   161.18  416.37  208.19       0   157.83  425.19  212.60       0
+   134217728      33554432  bfloat16    none      -1   295.81  453.73  226.87       0   283.39  473.61  236.81       0
+   268435456      67108864  bfloat16    none      -1   552.25  486.08  243.04       0   529.89  506.59  253.29       0
+   536870912     134217728  bfloat16    none      -1  1054.18  509.28  254.64       0   984.92  545.09  272.54       0
+  1073741824     268435456  bfloat16    none      -1  2011.60  533.77  266.89       0  1824.02  588.67  294.33       0
+  2147483648     536870912  bfloat16    none      -1  3878.21  553.73  276.87       0  3349.86  641.07  320.53       0
+  4294967296    1073741824  bfloat16    none      -1  7442.54  577.08  288.54       0  6704.04  640.65  320.33       0
+# Out of bounds values : 0 OK
+# Avg bus bandwidth    : 83.233
+#
+# Collective test concluded: all_gather_perf
+#
