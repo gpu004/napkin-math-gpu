@@ -48,7 +48,7 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 | tf32 | 400 TFLOP/s † | 3 μs | 3 ms | 120 FLOP/B |
 | fp32 | 50 TFLOP/s | 20 μs | 20 ms | 17 FLOP/B |
 
-Dense GEMM rows are cuBLAS `GemmEx` 8192³ peaks, not universal rates for arbitrary shapes.
+Dense GEMM rows are the cuBLAS `GemmEx` 8192³ rate, a large-GEMM library ceiling, not the rate of every GEMM.
 
 † Rounds disagree by more than 5%: host RAM copy 13%, host → device 24%, device → host 6.4%, fp16 GEMM 10%, bf16 GEMM 14%, tf32 GEMM 13%. Spread is the slowest of the 7 rounds over the fastest, minus one: the observed range, not a confidence interval. The cell shows the median round.
 

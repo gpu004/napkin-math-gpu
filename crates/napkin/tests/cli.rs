@@ -57,7 +57,10 @@ fn gemm_estimate_reports_derived_work_and_unmatched_shape() {
         stdout.contains("no measured bf16 GEMM shape 4096x4096x4096"),
         "{stdout}"
     );
-    assert!(stdout.contains("used 8192³ peak"), "{stdout}");
+    assert!(
+        stdout.contains("used the measured 8192³ GemmEx peak, a large-GEMM ceiling"),
+        "{stdout}"
+    );
     assert!(
         stdout.contains("measured shapes: none; no interpolation"),
         "{stdout}"

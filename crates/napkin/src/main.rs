@@ -745,6 +745,7 @@ fn append_compute_source_note(
             );
         }
         ComputeSource::Unmatched { dims, basis } => {
+            let ceiling_source = unmatched_compute_source(*basis);
             let measured_shapes = profile
                 .measured
                 .as_ref()
@@ -760,7 +761,7 @@ fn append_compute_source_note(
                 .unwrap_or_else(|| "none".to_owned());
             let _ = writeln!(
                 out,
-                "(compute: no measured {dtype} GEMM shape {dims}; used 8192³ peak ({basis}); measured shapes: {measured_shapes}; no interpolation)"
+                "(compute: no measured {dtype} GEMM shape {dims}; {ceiling_source}; measured shapes: {measured_shapes}; no interpolation)"
             );
         }
         ComputeSource::Override => {
@@ -770,6 +771,13 @@ fn append_compute_source_note(
                 fmt_sig(estimate.compute_tflops, 4)
             );
         }
+    }
+}
+
+fn unmatched_compute_source(basis: Basis) -> &'static str {
+    match basis {
+        Basis::Measured => "used the measured 8192³ GemmEx peak, a large-GEMM ceiling",
+        Basis::Ceiling => "used the datasheet dense ceiling",
     }
 }
 
@@ -1612,8 +1620,10 @@ fn render_estimate_example(case: &Case) -> Result<(String, String), String> {
     let output = cmd_estimate(
         &case.gpu,
         workload.dtype,
-        &flops,
-        &bytes,
+        Some(&flops),
+        Some(&bytes),
+        None,
+        None,
         workload.h2d,
         workload.d2h,
         None,
@@ -1695,6 +1705,18 @@ fn format_range(range: Option<&RangeInfo>, unit: &str, precision: usize) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unmatched_compute_source_names_its_peak_basis() {
+        assert_eq!(
+            unmatched_compute_source(Basis::Measured),
+            "used the measured 8192³ GemmEx peak, a large-GEMM ceiling"
+        );
+        assert_eq!(
+            unmatched_compute_source(Basis::Ceiling),
+            "used the datasheet dense ceiling"
+        );
+    }
 
     #[test]
     fn collective_example_marker_renders_user_facing_command_output() -> Result<(), String> {

@@ -194,8 +194,14 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
     for dtype in [Dtype::Fp16, Dtype::Bf16, Dtype::Tf32, Dtype::Fp32] {
         emit_gemm_row(&mut out, m, dtype, sig, exact);
     }
-    out.push_str(
-        "\nDense GEMM rows are cuBLAS `GemmEx` 8192³ peaks, not universal rates for arbitrary shapes.\n",
+    let measured_shapes = if m.gemm_shapes.is_empty() {
+        ""
+    } else {
+        "; measured shapes follow below"
+    };
+    let _ = writeln!(
+        out,
+        "\nDense GEMM rows are the cuBLAS `GemmEx` 8192³ rate, a large-GEMM library ceiling, not the rate of every GEMM{measured_shapes}."
     );
     spread_footnote(&mut out, m);
     emit_gemm_shape_rows(&mut out, m, sig, exact);
@@ -259,9 +265,7 @@ fn emit_gemm_shape_rows(out: &mut String, m: &Measured, sig: u32, exact: bool) {
         ],
     );
     emit(out, &["---", "---:", "---", "---:", "---:", "---:"]);
-    let mut shapes: Vec<_> = m.gemm_shapes.iter().collect();
-    shapes.sort_by_key(|shape| (&shape.name, shape.dtype));
-    for shape in shapes {
+    for shape in &m.gemm_shapes {
         let rate = if exact {
             shape.tflops
         } else {
@@ -672,49 +676,31 @@ mod tests {
     #[test]
     fn renders_shape_rates_and_names_their_spread() {
         let mut profile = h100_with(&[("gemm_shape_prefill_bf16", vec![2.0, 2.2])], None);
-        profile
-            .measured
-            .as_mut()
-            .unwrap()
-            .gemm_shapes
-            .push(crate::profile::GemmShape {
-                name: "prefill".to_owned(),
-                m: 4096,
-                n: 28672,
-                k: 8192,
-                dtype: Dtype::Bf16,
-                compute_type: "CUBLAS_COMPUTE_32F".to_owned(),
-                scale_type: "CUDA_R_32F".to_owned(),
-                trans_a: "T".to_owned(),
-                trans_b: "N".to_owned(),
-                lda: 8192,
-                ldb: 8192,
-                ldc: 4096,
-                epilogue: "CUBLASLT_EPILOGUE_DEFAULT".to_owned(),
-                library: "cuBLASLt 120901".to_owned(),
-                algorithm: crate::profile::GemmAlgo {
-                    id: 1,
-                    tile: 1,
-                    stages: 1,
-                    split_k: 0,
-                    reduction_scheme: 0,
-                    cta_swizzling: 0,
-                    custom_option: 0,
-                    workspace_bytes: 0,
-                    waves: 1.0,
-                },
-                workspace_limit_bytes: 32 * 1024 * 1024,
-                tflops: 123.0,
-                check: crate::profile::GemmCheck {
-                    sampled: 256,
-                    max_abs_error: 0.1,
-                    rtol: 0.08,
-                    atol: 1.0,
-                    passed: true,
-                },
-            });
+        let mut shapes = Vec::new();
+        for (name, m, n, k) in [
+            ("square", 8192, 8192, 8192),
+            ("prefill", 4096, 28672, 8192),
+            ("decode-m8", 8, 8192, 8192),
+            ("decode-m64", 64, 8192, 8192),
+            ("square-k8191", 8192, 8192, 8191),
+        ] {
+            for dtype in [Dtype::Fp16, Dtype::Bf16] {
+                let mut shape = shape_fixture("prefill", 4096, 28672, 8192, Dtype::Bf16);
+                shape.name = name.to_owned();
+                shape.m = m;
+                shape.n = n;
+                shape.k = k;
+                shape.dtype = dtype;
+                shapes.push(shape);
+            }
+        }
+        profile.measured.as_mut().unwrap().gemm_shapes = shapes;
         let table = numbers(&profile, true).unwrap();
         assert!(table.contains("| Dense GEMM, 8192³ |"), "{table}");
+        assert!(
+            table.contains("Dense GEMM rows are the cuBLAS `GemmEx` 8192³ rate, a large-GEMM library ceiling, not the rate of every GEMM; measured shapes follow below."),
+            "{table}"
+        );
         assert!(
             table.contains("| prefill | 4096×28672×8192 | bf16 | 123 TFLOP/s † |"),
             "{table}"
@@ -724,6 +710,87 @@ mod tests {
             table.contains("cuBLASLt 120901: TN column-major"),
             "{table}"
         );
+        let rows: Vec<_> = table
+            .lines()
+            .filter(|line| {
+                [
+                    "square",
+                    "prefill",
+                    "decode-m8",
+                    "decode-m64",
+                    "square-k8191",
+                ]
+                .iter()
+                .any(|name| line.starts_with(&format!("| {name} |")))
+            })
+            .collect();
+        let expected = [
+            "| square | 8192×8192×8192 | fp16 |",
+            "| square | 8192×8192×8192 | bf16 |",
+            "| prefill | 4096×28672×8192 | fp16 |",
+            "| prefill | 4096×28672×8192 | bf16 |",
+            "| decode-m8 | 8×8192×8192 | fp16 |",
+            "| decode-m8 | 8×8192×8192 | bf16 |",
+            "| decode-m64 | 64×8192×8192 | fp16 |",
+            "| decode-m64 | 64×8192×8192 | bf16 |",
+            "| square-k8191 | 8192×8192×8191 | fp16 |",
+            "| square-k8191 | 8192×8192×8191 | bf16 |",
+        ];
+        for (row, expected) in rows.iter().zip(expected) {
+            assert!(row.starts_with(expected), "{row}");
+        }
+        assert_eq!(rows.len(), expected.len());
+        let without_shapes = numbers(&h100_with(&[], None), false).unwrap();
+        assert!(
+            without_shapes.contains("Dense GEMM rows are the cuBLAS `GemmEx` 8192³ rate, a large-GEMM library ceiling, not the rate of every GEMM."),
+            "{without_shapes}"
+        );
+        assert!(!without_shapes.contains("measured shapes follow below"));
+    }
+
+    fn shape_fixture(
+        name: &str,
+        m: u32,
+        n: u32,
+        k: u32,
+        dtype: Dtype,
+    ) -> crate::profile::GemmShape {
+        crate::profile::GemmShape {
+            name: name.to_owned(),
+            m,
+            n,
+            k,
+            dtype,
+            compute_type: "CUBLAS_COMPUTE_32F".to_owned(),
+            scale_type: "CUDA_R_32F".to_owned(),
+            trans_a: "T".to_owned(),
+            trans_b: "N".to_owned(),
+            lda: k,
+            ldb: k,
+            ldc: m,
+            epilogue: "CUBLASLT_EPILOGUE_DEFAULT".to_owned(),
+            library: "cuBLASLt 120901".to_owned(),
+            algorithm: crate::profile::GemmAlgo {
+                id: 1,
+                tile: 1,
+                stages: 1,
+                split_k: 0,
+                reduction_scheme: 0,
+                cta_swizzling: 0,
+                custom_option: 0,
+                workspace_bytes: 0,
+                waves: 1.0,
+            },
+            workspace_limit_bytes: 32 * 1024 * 1024,
+            tflops: 123.0,
+            check: crate::profile::GemmCheck {
+                sampled: 256,
+                max_abs_error: 0.1,
+                rtol: 0.08,
+                atol: 1.0,
+                passed: true,
+            },
+        }
     }
 
     #[test]
