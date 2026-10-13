@@ -206,34 +206,40 @@ mod tests {
         paths.sort();
         assert!(!paths.is_empty(), "no committed measured profiles found");
 
-        let mut mergeable_profiles = 0;
+        let expected_profiles = paths.len();
+        let mut merged_profiles = 0;
         for path in paths {
             let source = std::fs::read_to_string(&path)?;
-            let original: profile::Measured = serde_json::from_str(&source)?;
-            if original.gemm_shapes.is_some() {
-                let error = merge_gemm_shapes_json(&source, fixture_run(&original))
-                    .err()
-                    .ok_or_else(|| {
-                        format!("{} unexpectedly accepted a second suite", path.display())
-                    })?;
-                assert!(
-                    error.contains("restore the profile from main first"),
-                    "{}",
-                    path.display()
-                );
-                continue;
-            }
-            mergeable_profiles += 1;
+            let mut original: profile::Measured = serde_json::from_str(&source)?;
             let trailing_newline = source.ends_with('\n');
             let body = if trailing_newline {
                 source.strip_suffix('\n').unwrap_or(&source)
             } else {
                 &source
             };
-            let prefix = body
+            let mut profile_text = source.clone();
+            if original.gemm_shapes.take().is_some() {
+                let prefix = body
+                    .strip_suffix("\n}")
+                    .ok_or("profile does not end in a newline and closing brace")?;
+                let suite_start = prefix
+                    .rfind(",\n  \"gemm_shapes\":")
+                    .ok_or("profile suite field is missing from its JSON text")?;
+                profile_text = format!(
+                    "{}\n}}{}",
+                    &prefix[..suite_start],
+                    if trailing_newline { "\n" } else { "" }
+                );
+            }
+            let prefix = profile_text
+                .strip_suffix(if trailing_newline { "\n" } else { "" })
+                .unwrap_or(&profile_text)
                 .strip_suffix("\n}")
                 .ok_or("profile does not end in a newline and closing brace")?;
-            let merged = merge_gemm_shapes_json(&source, fixture_run(&original))?;
+            let mut original_without_suite = original;
+            original_without_suite.gemm_shapes = None;
+            let merged =
+                merge_gemm_shapes_json(&profile_text, fixture_run(&original_without_suite))?;
             assert!(merged.starts_with(prefix), "{}", path.display());
             assert_eq!(
                 merged.ends_with('\n'),
@@ -245,19 +251,15 @@ mod tests {
             let mut merged_profile: profile::Measured = serde_json::from_str(&merged)?;
             assert!(merged_profile.gemm_shapes.is_some(), "{}", path.display());
             merged_profile.gemm_shapes = None;
-            let mut original_without_suite = original;
-            original_without_suite.gemm_shapes = None;
             assert_eq!(
                 serde_json::to_value(merged_profile)?,
                 serde_json::to_value(original_without_suite)?,
                 "{}",
                 path.display()
             );
+            merged_profiles += 1;
         }
-        assert!(
-            mergeable_profiles > 0,
-            "no measured profiles without shape suites found"
-        );
+        assert_eq!(merged_profiles, expected_profiles);
         Ok(())
     }
 
