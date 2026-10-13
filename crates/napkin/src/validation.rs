@@ -304,6 +304,7 @@ fn parse_case(embedded: &EmbeddedCase) -> Result<Case, String> {
 fn build_workload(input: &WorkloadInput) -> (Workload, Mode) {
     let workload = Workload {
         dtype: input.dtype,
+        throughput: estimate::Throughput::Peak,
         flops: input.flops,
         hbm_bytes: input.hbm_bytes,
         host_bytes: 0.0,
@@ -488,6 +489,7 @@ mod tests {
         .map_err(|error| error.to_string())?;
         let workload = Workload {
             dtype: Dtype::Fp32,
+            throughput: estimate::Throughput::Peak,
             flops: 0.0,
             hbm_bytes: 0.0,
             host_bytes: 0.0,

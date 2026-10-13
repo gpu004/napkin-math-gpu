@@ -8,9 +8,11 @@ use std::process::ExitCode;
 use clap::{ArgGroup, Parser, Subcommand};
 use napkin::collective::{self, Query, Regime};
 use napkin::cost::{self, Job, Work};
-use napkin::estimate::{self, CopyMode, Mode, Transfer, TransferTime, Workload};
+use napkin::estimate::{
+    self, ComputeSource, CopyMode, GemmDims, Mode, Throughput, Transfer, TransferTime, Workload,
+};
 use napkin::fit;
-use napkin::llm::{self, Model, Workload as LlmWorkload};
+use napkin::llm::{self, Model, Workload as LlmWorkload, element_bytes};
 use napkin::price::{self, Date, STALE_AFTER_DAYS};
 use napkin::profile::collective::{Collective, Topology};
 use napkin::profile::{self, Basis, Dtype, Profile};
@@ -47,17 +49,24 @@ enum Command {
         exact: bool,
     },
     /// Estimate a workload against a GPU profile.
+    #[command(group(ArgGroup::new("compute_source").args(["gemm", "tflops"]).multiple(false)))]
     Estimate {
         #[arg(long, default_value = "h100")]
         gpu: String,
         #[arg(long, value_enum, default_value_t = Dtype::Fp16)]
         dtype: Dtype,
         /// Total FLOPs, e.g. "200T", "2e14".
-        #[arg(long)]
-        flops: String,
+        #[arg(long, required_unless_present = "gemm")]
+        flops: Option<String>,
         /// HBM bytes touched, e.g. "1TB".
+        #[arg(long, required_unless_present = "gemm")]
+        bytes: Option<String>,
+        /// Dense GEMM dimensions `MxNxK` (or M×N×K).
+        #[arg(long, conflicts_with = "ceiling")]
+        gemm: Option<String>,
+        /// Override compute throughput in decimal TFLOP/s.
         #[arg(long)]
-        bytes: String,
+        tflops: Option<f64>,
         /// Host-to-device bytes, e.g. "2GB".
         #[arg(long)]
         h2d: Option<String>,
@@ -196,6 +205,15 @@ enum Command {
         #[arg(long, value_name = "PATH", conflicts_with = "write")]
         check: Option<PathBuf>,
     },
+    /// Merge a successful benchmark's GEMM shape suite into a measured profile.
+    MergeShapes {
+        /// Run JSON produced by napkin-bench.
+        #[arg(long, value_name = "RUN")]
+        from: PathBuf,
+        /// Measured profile JSON to update.
+        #[arg(value_name = "PROFILE")]
+        profile: PathBuf,
+    },
 }
 
 #[derive(clap::Args, Debug)]
@@ -275,6 +293,8 @@ fn dispatch(command: &Command) -> Result<String, String> {
             dtype,
             flops,
             bytes,
+            gemm,
+            tflops,
             h2d,
             h2d_copies,
             d2h,
@@ -289,8 +309,10 @@ fn dispatch(command: &Command) -> Result<String, String> {
         } => cmd_estimate(
             gpu,
             *dtype,
-            flops,
-            bytes,
+            flops.as_deref(),
+            bytes.as_deref(),
+            gemm.as_deref(),
+            *tflops,
             transfer(h2d.as_deref(), *h2d_copies)?,
             transfer(d2h.as_deref(), *d2h_copies)?,
             host.as_deref(),
@@ -354,6 +376,8 @@ fn dispatch(command: &Command) -> Result<String, String> {
         Command::Prices => cmd_prices(),
         Command::Readme { check, paths, .. } => cmd_readme(paths, *check),
         Command::Validate { write, check } => cmd_validate(write.as_deref(), check.as_deref()),
+        Command::MergeShapes { from, profile } => napkin::merge_shapes(from, profile)
+            .map(|()| format!("Merged GEMM shape suite into {}.\n", profile.display())),
     }
 }
 
@@ -554,8 +578,10 @@ fn transfer_line(out: &mut String, name: &str, t: &TransferTime) {
 fn cmd_estimate(
     gpu: &str,
     dtype: Dtype,
-    flops: &str,
-    bytes: &str,
+    flops: Option<&str>,
+    bytes: Option<&str>,
+    gemm: Option<&str>,
+    tflops_override: Option<f64>,
     h2d: Transfer,
     d2h: Transfer,
     host: Option<&str>,
@@ -566,10 +592,42 @@ fn cmd_estimate(
     ceiling: bool,
 ) -> Result<String, String> {
     let p = get_profile(gpu)?;
+    let dimensions = gemm
+        .map(str::parse::<GemmDims>)
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let throughput = if let Some(dimensions) = dimensions {
+        Throughput::Shape(dimensions)
+    } else if let Some(tflops) = tflops_override {
+        Throughput::Override(tflops)
+    } else {
+        Throughput::Peak
+    };
+    let flops = match (flops, dimensions) {
+        (Some(flops), _) => units::parse_number(flops).map_err(|error| error.to_string())?,
+        (None, Some(dims)) => 2.0 * f64::from(dims.m) * f64::from(dims.n) * f64::from(dims.k),
+        (None, None) => {
+            return Err("estimate requires --flops unless --gemm is supplied".to_owned());
+        }
+    };
+    let minimum_hbm_bytes = dimensions.map(|dims| {
+        (f64::from(dims.m) * f64::from(dims.k)
+            + f64::from(dims.k) * f64::from(dims.n)
+            + f64::from(dims.m) * f64::from(dims.n))
+            * element_bytes(dtype)
+    });
+    let hbm_bytes = match (bytes, minimum_hbm_bytes) {
+        (Some(bytes), _) => units::parse_bytes(bytes).map_err(|error| error.to_string())?,
+        (None, Some(bytes)) => bytes,
+        (None, None) => {
+            return Err("estimate requires --bytes unless --gemm is supplied".to_owned());
+        }
+    };
     let workload = Workload {
         dtype,
-        flops: units::parse_number(flops).map_err(|e| e.to_string())?,
-        hbm_bytes: units::parse_bytes(bytes).map_err(|e| e.to_string())?,
+        throughput,
+        flops,
+        hbm_bytes,
         host_bytes: opt_bytes(host)?,
         h2d,
         d2h,
@@ -584,29 +642,75 @@ fn cmd_estimate(
     };
     let e = estimate::estimate(p, &workload, mode, ceiling).map_err(|e| e.to_string())?;
 
-    let basis = match (&p.measured, ceiling) {
+    Ok(format_estimate(
+        p,
+        dtype,
+        flops,
+        dimensions,
+        minimum_hbm_bytes,
+        ceiling,
+        &e,
+    ))
+}
+
+fn format_estimate(
+    profile: &Profile,
+    dtype: Dtype,
+    flops: f64,
+    dimensions: Option<GemmDims>,
+    minimum_hbm_bytes: Option<f64>,
+    ceiling: bool,
+    estimate: &estimate::Estimate,
+) -> String {
+    let basis = match (&profile.measured, ceiling) {
         (Some(m), false) => format!("measured {}", &m.captured_at[..10.min(m.captured_at.len())]),
         _ => "datasheet".to_owned(),
     };
-    let mut out = format!("{} · {dtype} · {basis}\n", p.name);
+    let mut out = format!("{} · {dtype} · {basis}\n", profile.name);
+    if let (Some(dims), Some(minimum_bytes)) = (dimensions, minimum_hbm_bytes) {
+        let _ = writeln!(
+            out,
+            "GEMM FLOPs  2 × {} × {} × {} = {} FLOP",
+            dims.m,
+            dims.n,
+            dims.k,
+            fmt_si(flops, 3)
+        );
+        let _ = writeln!(
+            out,
+            "minimum HBM (A+B+C)  ({}×{} + {}×{} + {}×{}) × {} B = {}",
+            dims.m,
+            dims.k,
+            dims.k,
+            dims.n,
+            dims.m,
+            dims.n,
+            fmt_sig(element_bytes(dtype), 2),
+            fmt_bytes(minimum_bytes, 3)
+        );
+    }
     let _ = writeln!(
         out,
         "{:<12}{}   ridge {}   {}",
         "intensity",
-        fmt_intensity(e.intensity, 2),
-        fmt_intensity(e.ridge, 2),
-        e.bottleneck
+        fmt_intensity(estimate.intensity, 2),
+        fmt_intensity(estimate.ridge, 2),
+        estimate.bottleneck
     );
     let mut line = |name: &str, seconds: f64, show: bool| {
         if show {
             let _ = writeln!(out, "{name:<12}{}", fmt_duration(seconds, 2));
         }
     };
-    line("compute", e.compute_s, true);
-    line("memory", e.memory_s, true);
-    line("device", e.device_s, true);
-    line("host", e.host_s, e.host_s > 0.0);
-    for (name, stage) in [("h2d", e.h2d), ("d2h", e.d2h), ("g2g", e.g2g)] {
+    line("compute", estimate.compute_s, true);
+    line("memory", estimate.memory_s, true);
+    line("device", estimate.device_s, true);
+    line("host", estimate.host_s, estimate.host_s > 0.0);
+    for (name, stage) in [
+        ("h2d", estimate.h2d),
+        ("d2h", estimate.d2h),
+        ("g2g", estimate.g2g),
+    ] {
         if let Some(t) = stage {
             transfer_line(&mut out, name, &t);
         }
@@ -616,19 +720,83 @@ fn cmd_estimate(
             let _ = writeln!(out, "{name:<12}{}", fmt_duration(seconds, 2));
         }
     };
-    line("launch", e.launch_s, e.launch_s > 0.0);
+    line("launch", estimate.launch_s, estimate.launch_s > 0.0);
     let _ = writeln!(
         out,
         "{:<12}{}{}   {}",
         "total",
-        bound(e.is_lower_bound()),
-        fmt_duration(e.total_s, 2),
-        e.bottleneck
+        bound(estimate.is_lower_bound()),
+        fmt_duration(estimate.total_s, 2),
+        estimate.bottleneck
     );
-    if e.compute_basis == Basis::Ceiling && p.measured.is_some() && !ceiling {
+    append_compute_source_note(&mut out, profile, dtype, ceiling, estimate);
+    out
+}
+
+fn append_compute_source_note(
+    out: &mut String,
+    profile: &Profile,
+    dtype: Dtype,
+    ceiling: bool,
+    estimate: &estimate::Estimate,
+) {
+    if matches!(&estimate.compute_source, ComputeSource::Profile(_))
+        && estimate.compute_basis == Basis::Ceiling
+        && profile.measured.is_some()
+        && !ceiling
+    {
         let _ = writeln!(out, "(compute: no measured {dtype}; datasheet used)");
     }
-    Ok(out)
+    match &estimate.compute_source {
+        ComputeSource::Profile(_) => {}
+        ComputeSource::Shape { name, captured_at } => {
+            let _ = writeln!(
+                out,
+                "(compute: matched measured GEMM shape {name} from suite captured {captured_at}; achieved rate already includes shape-specific memory traffic)"
+            );
+        }
+        ComputeSource::Unmatched { dims, basis } => {
+            let ceiling_source = unmatched_compute_source(*basis);
+            let measured_shapes = profile
+                .measured
+                .as_ref()
+                .map(|measured| {
+                    measured
+                        .gemm_shapes
+                        .as_ref()
+                        .map_or_else(String::new, |suite| {
+                            suite
+                                .shapes
+                                .iter()
+                                .map(|shape| {
+                                    format!("{} {}x{}x{}", shape.name, shape.m, shape.n, shape.k)
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                })
+                .filter(|shapes| !shapes.is_empty())
+                .unwrap_or_else(|| "none".to_owned());
+            let _ = writeln!(
+                out,
+                "(compute: no measured {dtype} GEMM shape {dims}; {ceiling_source}; measured shapes: {measured_shapes}; no interpolation)"
+            );
+        }
+        ComputeSource::Override => {
+            let _ = writeln!(
+                out,
+                "(compute: --tflops override at {} TFLOP/s)",
+                fmt_sig(estimate.compute_tflops, 4)
+            );
+        }
+    }
+}
+
+fn unmatched_compute_source(basis: Basis) -> &'static str {
+    match basis {
+        Basis::Measured => "used the measured 8192³ GemmEx peak, a large-GEMM ceiling",
+        Basis::Ceiling => "used the datasheet dense ceiling",
+    }
 }
 
 fn cmd_fit(
@@ -1470,8 +1638,10 @@ fn render_estimate_example(case: &Case) -> Result<(String, String), String> {
     let output = cmd_estimate(
         &case.gpu,
         workload.dtype,
-        &flops,
-        &bytes,
+        Some(&flops),
+        Some(&bytes),
+        None,
+        None,
         workload.h2d,
         workload.d2h,
         None,
@@ -1553,6 +1723,18 @@ fn format_range(range: Option<&RangeInfo>, unit: &str, precision: usize) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unmatched_compute_source_names_its_peak_basis() {
+        assert_eq!(
+            unmatched_compute_source(Basis::Measured),
+            "used the measured 8192³ GemmEx peak, a large-GEMM ceiling"
+        );
+        assert_eq!(
+            unmatched_compute_source(Basis::Ceiling),
+            "used the datasheet dense ceiling"
+        );
+    }
 
     #[test]
     fn collective_example_marker_renders_user_facing_command_output() -> Result<(), String> {

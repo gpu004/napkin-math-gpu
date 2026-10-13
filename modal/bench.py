@@ -5,8 +5,10 @@ Usage:
     modal run modal/bench.py --gpu a100 --quick
 
 Full runs write profiles/<gpu>.measured.json. Quick runs print to stdout only.
+Full --merge-shapes runs preserve scalar profile data and write target/modal/<gpu>.run.json.
 """
 
+import subprocess
 from pathlib import Path
 
 import modal
@@ -58,12 +60,35 @@ FUNCS = {
 
 
 @app.local_entrypoint()
-def main(gpu: str = "h100", quick: bool = False) -> None:
+def main(gpu: str = "h100", quick: bool = False, merge_shapes: bool = False) -> None:
     if gpu not in FUNCS:
         raise ValueError(f"--gpu must be one of: {sorted(FUNCS)}")
+    if quick and merge_shapes:
+        raise ValueError("--merge-shapes cannot be used with --quick")
     result = FUNCS[gpu].remote(quick, GPUS[gpu])
     if quick:
         print(result)
+        return
+    if merge_shapes:
+        run_file = ROOT / "target" / "modal" / f"{gpu}.run.json"
+        run_file.parent.mkdir(parents=True, exist_ok=True)
+        run_file.write_text(result)
+        subprocess.run(
+            [
+                "cargo",
+                "run",
+                "-q",
+                "-p",
+                "napkin",
+                "--",
+                "merge-shapes",
+                "--from",
+                str(run_file.relative_to(ROOT)),
+                str((ROOT / "profiles" / f"{gpu}.measured.json").relative_to(ROOT)),
+            ],
+            cwd=ROOT,
+            check=True,
+        )
         return
     out = ROOT / "profiles" / f"{gpu}.measured.json"
     out.write_text(result)

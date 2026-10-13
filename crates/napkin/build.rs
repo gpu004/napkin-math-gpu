@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use napkin_profile::collective::{Collective, CollectiveEvidence, Curve, CurvePoint, Topology};
-use napkin_profile::{Ceiling, Dtype, GpuState, Measured, Profile, RoundState, Span};
+use napkin_profile::{
+    Ceiling, Dtype, GemmAlgo, GemmCheck, GemmShape, GemmShapeSuite, GpuState, Measured, Profile,
+    RoundState, Span, tflops,
+};
 use serde::Deserialize;
 
 const DATASHEET_IDS: [&str; 4] = ["a100", "h100", "b200", "b300"];
@@ -457,6 +460,105 @@ fn validate_measured(id: &str, measured: &Measured) -> Result<(), String> {
             "measured profile {id:?} has failing check {name:?}"
         ));
     }
+    if let Some(suite) = &measured.gemm_shapes {
+        validate_gemm_shape_suite(id, measured, suite)?;
+    }
+    Ok(())
+}
+
+fn validate_gemm_shape_suite(
+    id: &str,
+    measured: &Measured,
+    suite: &GemmShapeSuite,
+) -> Result<(), String> {
+    for (name, value) in [
+        ("captured_at", suite.captured_at.as_str()),
+        ("gpu_request", suite.gpu_request.as_str()),
+        ("device_name", suite.device_name.as_str()),
+        ("driver_version", suite.driver_version.as_str()),
+        ("cuda_version", suite.cuda_version.as_str()),
+        ("library", suite.library.as_str()),
+    ] {
+        if value.is_empty() {
+            return Err(format!(
+                "measured profile {id:?} GEMM shape suite has an empty {name}"
+            ));
+        }
+    }
+    if suite.device_name != measured.device_name {
+        return Err(format!(
+            "measured profile {id:?} GEMM shape suite names {:?}, profile names {:?}",
+            suite.device_name, measured.device_name
+        ));
+    }
+    if let Some((name, _)) = suite.checks.iter().find(|(_, passed)| !**passed) {
+        return Err(format!(
+            "measured profile {id:?} GEMM shape suite has failing check {name:?}"
+        ));
+    }
+    let mut shape_ids = std::collections::BTreeSet::new();
+    for shape in &suite.shapes {
+        if !shape_ids.insert((shape.name.as_str(), shape.dtype)) {
+            return Err(format!(
+                "measured profile {id:?} has duplicate GEMM shape ({:?}, {})",
+                shape.name, shape.dtype
+            ));
+        }
+        if shape.m == 0 || shape.n == 0 || shape.k == 0 {
+            return Err(format!(
+                "measured profile {id:?} GEMM shape {:?} has a zero dimension",
+                shape.name
+            ));
+        }
+        if !shape.check.passed {
+            return Err(format!(
+                "measured profile {id:?} GEMM shape {:?} {} has a failing correctness check",
+                shape.name, shape.dtype
+            ));
+        }
+        let key = shape.samples_key();
+        let check_key = format!("{key}_check");
+        if suite.checks.get(&check_key) != Some(&shape.check.passed) {
+            return Err(format!(
+                "measured profile {id:?} GEMM shape {:?} {} has a missing or inconsistent suite check {check_key:?}",
+                shape.name, shape.dtype
+            ));
+        }
+        let samples = suite.samples_ms.get(&key).ok_or_else(|| {
+            format!(
+                "measured profile {id:?} GEMM shape {:?} {} is missing suite.samples_ms[{key:?}]",
+                shape.name, shape.dtype
+            )
+        })?;
+        if samples.is_empty()
+            || samples
+                .iter()
+                .any(|sample| !sample.is_finite() || *sample <= 0.0)
+        {
+            return Err(format!(
+                "measured profile {id:?} GEMM shape {:?} {} has invalid round samples",
+                shape.name, shape.dtype
+            ));
+        }
+        let mut sorted = samples.clone();
+        sorted.sort_by(f64::total_cmp);
+        let median_ms = if sorted.len() % 2 == 0 {
+            let middle = sorted.len() / 2;
+            f64::midpoint(sorted[middle - 1], sorted[middle])
+        } else {
+            sorted[sorted.len() / 2]
+        };
+        let expected = tflops(shape.flops(), median_ms);
+        if !shape.tflops.is_finite()
+            || shape.tflops <= 0.0
+            || (shape.tflops - expected).abs() > expected.abs() * 1e-9
+        {
+            return Err(format!(
+                "measured profile {id:?} GEMM shape {:?} {} stores {} TFLOP/s, expected {expected} from median {median_ms} ms",
+                shape.name, shape.dtype, shape.tflops
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -757,6 +859,7 @@ fn emit_measured(measured: &Measured) -> String {
         g2g_latency_us,
         compute_tflops,
         gemm_shape,
+        gemm_shapes,
         checks,
         samples_ms,
         gpu_state,
@@ -799,6 +902,10 @@ fn emit_measured(measured: &Measured) -> String {
                 gemm_shape[0], gemm_shape[1], gemm_shape[2]
             ),
         ),
+        (
+            "gemm_shapes",
+            gemm_shape_suite_literal(gemm_shapes.as_ref()),
+        ),
         ("checks", bool_map(checks)),
         ("samples_ms", samples_map(samples_ms)),
         (
@@ -814,6 +921,100 @@ fn emit_measured(measured: &Measured) -> String {
     }
     generated.push_str("        })");
     generated
+}
+
+fn gemm_shapes_literal(shapes: &[GemmShape]) -> String {
+    let values = shapes
+        .iter()
+        .map(gemm_shape_literal)
+        .collect::<Vec<_>>()
+        .join(",\n                ");
+    format!("vec![{values}]")
+}
+
+fn gemm_shape_suite_literal(suite: Option<&GemmShapeSuite>) -> String {
+    let Some(suite) = suite else {
+        return "None".to_owned();
+    };
+    format!(
+        "Some(GemmShapeSuite {{ captured_at: {}, gpu_request: {}, device_name: {}, driver_version: {}, cuda_version: {}, library: {}, pcie_gen: {}, pcie_width: {}, shapes: {}, checks: {}, samples_ms: {}, gpu_state: {} }})",
+        string_literal(&suite.captured_at),
+        string_literal(&suite.gpu_request),
+        string_literal(&suite.device_name),
+        string_literal(&suite.driver_version),
+        string_literal(&suite.cuda_version),
+        string_literal(&suite.library),
+        option_u8_literal(suite.pcie_gen),
+        option_u8_literal(suite.pcie_width),
+        gemm_shapes_literal(&suite.shapes),
+        bool_map(&suite.checks),
+        samples_map(&suite.samples_ms),
+        suite
+            .gpu_state
+            .as_ref()
+            .map_or_else(|| "None".to_owned(), gpu_state_literal),
+    )
+}
+
+fn gemm_shape_literal(shape: &GemmShape) -> String {
+    let GemmShape {
+        name,
+        m,
+        n,
+        k,
+        dtype,
+        compute_type,
+        scale_type,
+        trans_a,
+        trans_b,
+        lda,
+        ldb,
+        ldc,
+        epilogue,
+        algorithm,
+        workspace_limit_bytes,
+        tflops,
+        check,
+    } = shape;
+    format!(
+        "GemmShape {{ name: {}, m: {m}_u32, n: {n}_u32, k: {k}_u32, dtype: {}, compute_type: {}, scale_type: {}, trans_a: {}, trans_b: {}, lda: {lda}_u32, ldb: {ldb}_u32, ldc: {ldc}_u32, epilogue: {}, algorithm: {}, workspace_limit_bytes: {workspace_limit_bytes}_u64, tflops: {}, check: {} }}",
+        string_literal(name),
+        dtype_literal(*dtype),
+        string_literal(compute_type),
+        string_literal(scale_type),
+        string_literal(trans_a),
+        string_literal(trans_b),
+        string_literal(epilogue),
+        gemm_algo_literal(algorithm),
+        float_literal(*tflops),
+        gemm_check_literal(check),
+    )
+}
+
+fn gemm_algo_literal(algo: &GemmAlgo) -> String {
+    format!(
+        "GemmAlgo {{ id: {}, tile: {}, stages: {}, split_k: {}, reduction_scheme: {}, cta_swizzling: {}, custom_option: {}, workspace_bytes: {}_u64, waves: {} }}",
+        algo.id,
+        algo.tile,
+        algo.stages,
+        algo.split_k,
+        algo.reduction_scheme,
+        algo.cta_swizzling,
+        algo.custom_option,
+        algo.workspace_bytes,
+        float_literal(algo.waves),
+    )
+}
+
+fn gemm_check_literal(check: &GemmCheck) -> String {
+    format!(
+        "GemmCheck {{ sampled: {}_u32, max_abs_error: {}, rtol: {}, atol: {}, passed: {} }}",
+        check.sampled,
+        float_literal(check.max_abs_error),
+        float_literal(check.rtol),
+        float_literal(check.atol),
+        check.passed,
+    )
 }
 
 fn emit_field(generated: &mut String, indent: &str, name: &str, value: &str) {

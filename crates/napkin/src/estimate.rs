@@ -2,8 +2,59 @@
 //! interconnect, and launch stages, summed serially or overlapped.
 
 use std::fmt;
+use std::str::FromStr;
 
-use crate::profile::{Basis, Dtype, Profile};
+use crate::profile::{Basis, Dtype, Profile, Rates};
+
+/// Explicit dimensions for a dense GEMM, M×N×K.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GemmDims {
+    /// Output rows M.
+    pub m: u32,
+    /// Output columns N.
+    pub n: u32,
+    /// Reduction dimension K.
+    pub k: u32,
+}
+
+impl fmt::Display for GemmDims {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}x{}x{}", self.m, self.n, self.k)
+    }
+}
+
+impl FromStr for GemmDims {
+    type Err = EstimateError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let dimensions = value.split(['x', '×']);
+        let parsed = dimensions
+            .map(str::parse::<u32>)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| EstimateError(format!("invalid GEMM dimensions {value:?}; use MxNxK")))?;
+        if parsed.len() != 3 || parsed.contains(&0) {
+            return Err(EstimateError(format!(
+                "invalid GEMM dimensions {value:?}; use three positive dimensions MxNxK"
+            )));
+        }
+        Ok(Self {
+            m: parsed[0],
+            n: parsed[1],
+            k: parsed[2],
+        })
+    }
+}
+
+/// Where compute throughput should come from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Throughput {
+    /// Use the measured or datasheet peak.
+    Peak,
+    /// Use a measured exact dtype and dimension match, falling back to peak.
+    Shape(GemmDims),
+    /// Use this decimal TFLOP/s rate.
+    Override(f64),
+}
 
 /// How the stages compose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -154,6 +205,8 @@ impl TransferTime {
 #[derive(Clone, Copy, Debug)]
 pub struct Workload {
     pub dtype: Dtype,
+    /// Dense peak, an exact measured shape, or a caller-supplied TFLOP/s rate.
+    pub throughput: Throughput,
     /// Total FLOPs.
     pub flops: f64,
     /// Bytes of HBM traffic (algorithmic bytes).
@@ -175,7 +228,7 @@ pub struct Workload {
 }
 
 /// Stage times in seconds plus roofline diagnostics.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Estimate {
     pub compute_s: f64,
     pub memory_s: f64,
@@ -193,8 +246,25 @@ pub struct Estimate {
     /// `compute_tflops * 1000 / hbm_gbps` in FLOP/byte.
     pub ridge: f64,
     pub bottleneck: Bottleneck,
+    /// TFLOP/s used for the compute stage.
+    pub compute_tflops: f64,
+    /// Provenance of the selected throughput.
+    pub compute_source: ComputeSource,
     /// Whether the dtype throughput came from measurement or the datasheet.
     pub compute_basis: Basis,
+}
+
+/// Provenance for the compute throughput used by an estimate.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ComputeSource {
+    /// The generic profile throughput and its measured/datasheet basis.
+    Profile(Basis),
+    /// An exact measured shape rate.
+    Shape { name: String, captured_at: String },
+    /// No exact shape was measured; the generic peak was used.
+    Unmatched { dims: GemmDims, basis: Basis },
+    /// A caller-supplied rate.
+    Override,
 }
 
 impl Estimate {
@@ -293,13 +363,9 @@ pub fn estimate(
     check_quantity("host bytes", workload.host_bytes)?;
 
     let rates = profile.rates(force_ceiling);
-    let compute = rates.compute_tflops.get(&workload.dtype).ok_or_else(|| {
-        EstimateError(format!(
-            "{} has no {} throughput, measured or datasheet",
-            profile.id, workload.dtype
-        ))
-    })?;
-    let compute_s = workload.flops / (compute.tflops * 1e12);
+    let (compute_tflops, compute_basis, compute_source) =
+        compute_throughput(profile, workload.dtype, workload.throughput, &rates)?;
+    let compute_s = workload.flops / (compute_tflops * 1e12);
     let memory_s = workload.hbm_bytes / (rates.hbm_gbps * 1e9);
 
     let host_s = if workload.host_bytes > 0.0 {
@@ -372,7 +438,7 @@ pub fn estimate(
     } else {
         workload.flops / workload.hbm_bytes
     };
-    let ridge = compute.tflops * 1000.0 / rates.hbm_gbps;
+    let ridge = compute_tflops * 1000.0 / rates.hbm_gbps;
 
     let bottleneck = bottleneck(stages, compute_s, memory_s);
 
@@ -389,8 +455,86 @@ pub fn estimate(
         intensity,
         ridge,
         bottleneck,
-        compute_basis: compute.basis,
+        compute_tflops,
+        compute_source,
+        compute_basis,
     })
+}
+
+fn compute_throughput(
+    profile: &Profile,
+    dtype: Dtype,
+    throughput: Throughput,
+    rates: &Rates,
+) -> Result<(f64, Basis, ComputeSource), EstimateError> {
+    let default_compute = rates.compute_tflops.get(&dtype);
+    match throughput {
+        Throughput::Peak => {
+            let compute = default_compute.ok_or_else(|| {
+                EstimateError(format!(
+                    "{} has no {} throughput, measured or datasheet",
+                    profile.id, dtype
+                ))
+            })?;
+            Ok((
+                compute.tflops,
+                compute.basis,
+                ComputeSource::Profile(compute.basis),
+            ))
+        }
+        Throughput::Shape(dims) => {
+            if let Some((suite, shape)) = profile.measured.as_ref().and_then(|measured| {
+                measured.gemm_shapes.as_ref().and_then(|suite| {
+                    suite
+                        .shapes
+                        .iter()
+                        .find(|shape| {
+                            shape.dtype == dtype
+                                && shape.m == dims.m
+                                && shape.n == dims.n
+                                && shape.k == dims.k
+                        })
+                        .map(|shape| (suite, shape))
+                })
+            }) {
+                Ok((
+                    shape.tflops,
+                    Basis::Measured,
+                    ComputeSource::Shape {
+                        name: shape.name.clone(),
+                        captured_at: suite.captured_at.clone(),
+                    },
+                ))
+            } else {
+                let compute = default_compute.ok_or_else(|| {
+                    EstimateError(format!(
+                        "{} has no {} throughput, measured or datasheet",
+                        profile.id, dtype
+                    ))
+                })?;
+                Ok((
+                    compute.tflops,
+                    compute.basis,
+                    ComputeSource::Unmatched {
+                        dims,
+                        basis: compute.basis,
+                    },
+                ))
+            }
+        }
+        Throughput::Override(tflops) => {
+            if !(tflops.is_finite() && tflops > 0.0) {
+                return Err(EstimateError(
+                    "TFLOP/s override must be a positive finite rate".to_owned(),
+                ));
+            }
+            Ok((
+                tflops,
+                default_compute.map_or(Basis::Ceiling, |compute| compute.basis),
+                ComputeSource::Override,
+            ))
+        }
+    }
 }
 
 fn bottleneck(stages: [f64; 6], compute_s: f64, memory_s: f64) -> Bottleneck {
@@ -479,6 +623,7 @@ mod tests {
                 g2g_latency_us: Some(3.0),
                 compute_tflops: compute,
                 gemm_shape: [8192, 8192, 8192],
+                gemm_shapes: None,
                 checks: BTreeMap::from([("hbm_copy".to_owned(), true)]),
                 samples_ms: BTreeMap::new(),
                 gpu_state: None,
@@ -490,6 +635,7 @@ mod tests {
     fn serial_estimate_includes_copy_latency_and_launch() {
         let workload = Workload {
             dtype: Dtype::Fp16,
+            throughput: Throughput::Peak,
             flops: 8e12,
             hbm_bytes: 200e9,
             host_bytes: 2e9,
@@ -526,6 +672,7 @@ mod tests {
     fn overlapped_total_is_max_of_stages() {
         let workload = Workload {
             dtype: Dtype::Fp16,
+            throughput: Throughput::Peak,
             flops: 8e12,
             hbm_bytes: 200e9,
             host_bytes: 2e9,
@@ -552,6 +699,7 @@ mod tests {
     fn compute_only_intensity_is_infinite() {
         let workload = Workload {
             dtype: Dtype::Fp16,
+            throughput: Throughput::Peak,
             flops: 8e12,
             hbm_bytes: 0.0,
             host_bytes: 0.0,
@@ -579,6 +727,7 @@ mod tests {
     fn idle_workload_has_zero_intensity() {
         let workload = Workload {
             dtype: Dtype::Fp16,
+            throughput: Throughput::Peak,
             flops: 0.0,
             hbm_bytes: 0.0,
             host_bytes: 0.0,
@@ -606,6 +755,7 @@ mod tests {
     fn negative_and_nan_work_is_rejected() {
         let mut workload = Workload {
             dtype: Dtype::Fp16,
+            throughput: Throughput::Peak,
             flops: -1.0,
             hbm_bytes: 0.0,
             host_bytes: 0.0,
@@ -635,6 +785,7 @@ mod tests {
         profile.measured = None;
         let workload = Workload {
             dtype: Dtype::Fp16,
+            throughput: Throughput::Peak,
             flops: 1e12,
             hbm_bytes: 1e9,
             host_bytes: 0.0,
@@ -665,6 +816,7 @@ mod tests {
         profile.measured = None;
         let workload = Workload {
             dtype: Dtype::Fp8,
+            throughput: Throughput::Peak,
             flops: 1e12,
             hbm_bytes: 1e9,
             host_bytes: 0.0,
@@ -692,6 +844,7 @@ mod tests {
     fn copies_only(h2d: Transfer, copy_mode: CopyMode) -> Workload {
         Workload {
             dtype: Dtype::Fp16,
+            throughput: Throughput::Peak,
             flops: 0.0,
             hbm_bytes: 0.0,
             host_bytes: 0.0,
@@ -700,6 +853,177 @@ mod tests {
             g2g: Transfer::default(),
             copy_mode,
             launches: 0,
+        }
+    }
+
+    fn shape_fixture() -> napkin_profile::GemmShape {
+        napkin_profile::GemmShape {
+            name: "prefill".to_owned(),
+            m: 4096,
+            n: 28672,
+            k: 8192,
+            dtype: Dtype::Bf16,
+            compute_type: "CUBLAS_COMPUTE_32F".to_owned(),
+            scale_type: "CUDA_R_32F".to_owned(),
+            trans_a: "T".to_owned(),
+            trans_b: "N".to_owned(),
+            lda: 8192,
+            ldb: 8192,
+            ldc: 4096,
+            epilogue: "CUBLASLT_EPILOGUE_DEFAULT".to_owned(),
+            algorithm: napkin_profile::GemmAlgo {
+                id: 7,
+                tile: 3,
+                stages: 4,
+                split_k: 0,
+                reduction_scheme: 0,
+                cta_swizzling: 0,
+                custom_option: 0,
+                workspace_bytes: 0,
+                waves: 2.0,
+            },
+            workspace_limit_bytes: 32 * 1024 * 1024,
+            tflops: 123.0,
+            check: napkin_profile::GemmCheck {
+                sampled: 256,
+                max_abs_error: 0.1,
+                rtol: 0.08,
+                atol: 1.0,
+                passed: true,
+            },
+        }
+    }
+
+    #[test]
+    fn gemm_shape_counts_two_flops_per_multiply_add() {
+        let shape = shape_fixture();
+        assert_eq!(shape.flops(), 2.0 * 4096.0 * 28672.0 * 8192.0);
+        assert_eq!(shape.samples_key(), "gemm_shape_prefill_bf16");
+    }
+
+    #[test]
+    fn gemm_dimensions_parse_ascii_and_unicode_separators() {
+        assert_eq!(
+            "4096x28672x8192".parse::<GemmDims>().unwrap(),
+            GemmDims {
+                m: 4096,
+                n: 28672,
+                k: 8192
+            }
+        );
+        assert_eq!(
+            "8×8192×8192".parse::<GemmDims>().unwrap(),
+            GemmDims {
+                m: 8,
+                n: 8192,
+                k: 8192
+            }
+        );
+        for malformed in ["0x2x3", "1x2", "1x2x3x4", "Mx2x3", "1xx3"] {
+            assert!(malformed.parse::<GemmDims>().is_err(), "{malformed}");
+        }
+    }
+
+    #[test]
+    fn exact_gemm_uses_measured_shape_rate() {
+        let mut profile = fixture();
+        let measured = profile.measured.as_mut().unwrap();
+        measured.gemm_shapes = Some(napkin_profile::GemmShapeSuite {
+            captured_at: "2026-10-14T00:00:00Z".to_owned(),
+            gpu_request: "H100!:2".to_owned(),
+            device_name: measured.device_name.clone(),
+            driver_version: "580.95.05".to_owned(),
+            cuda_version: "12.9".to_owned(),
+            library: "cuBLASLt 120901".to_owned(),
+            pcie_gen: Some(5),
+            pcie_width: Some(16),
+            shapes: vec![shape_fixture()],
+            checks: BTreeMap::from([("gemm_shape_prefill_bf16_check".to_owned(), true)]),
+            samples_ms: BTreeMap::from([("gemm_shape_prefill_bf16".to_owned(), vec![2.0, 2.0])]),
+            gpu_state: None,
+        });
+        let workload = Workload {
+            dtype: Dtype::Bf16,
+            throughput: Throughput::Shape(GemmDims {
+                m: 4096,
+                n: 28672,
+                k: 8192,
+            }),
+            flops: 1e12,
+            hbm_bytes: 1e9,
+            host_bytes: 0.0,
+            h2d: Transfer::default(),
+            d2h: Transfer::default(),
+            g2g: Transfer::default(),
+            copy_mode: CopyMode::Sync,
+            launches: 0,
+        };
+        let estimate = estimate(&profile, &workload, Mode::Serial, false).unwrap();
+        assert_eq!(estimate.compute_tflops, 123.0);
+        assert_eq!(
+            estimate.compute_source,
+            ComputeSource::Shape {
+                name: "prefill".to_owned(),
+                captured_at: "2026-10-14T00:00:00Z".to_owned()
+            }
+        );
+        assert_eq!(estimate.compute_s, 1e12 / (123.0 * 1e12));
+    }
+
+    #[test]
+    fn unmatched_gemm_uses_peak_without_interpolation() {
+        let workload = Workload {
+            dtype: Dtype::Bf16,
+            throughput: Throughput::Shape(GemmDims {
+                m: 8,
+                n: 8192,
+                k: 8192,
+            }),
+            flops: 1e12,
+            hbm_bytes: 1e9,
+            host_bytes: 0.0,
+            h2d: Transfer::default(),
+            d2h: Transfer::default(),
+            g2g: Transfer::default(),
+            copy_mode: CopyMode::Sync,
+            launches: 0,
+        };
+        let estimate = estimate(&fixture(), &workload, Mode::Serial, false).unwrap();
+        assert_eq!(estimate.compute_tflops, 750.0);
+        assert_eq!(
+            estimate.compute_source,
+            ComputeSource::Unmatched {
+                dims: GemmDims {
+                    m: 8,
+                    n: 8192,
+                    k: 8192
+                },
+                basis: Basis::Measured
+            }
+        );
+    }
+
+    #[test]
+    fn positive_finite_throughput_override_is_used() {
+        let workload = Workload {
+            dtype: Dtype::Bf16,
+            throughput: Throughput::Override(300.0),
+            flops: 1e12,
+            hbm_bytes: 1e9,
+            host_bytes: 0.0,
+            h2d: Transfer::default(),
+            d2h: Transfer::default(),
+            g2g: Transfer::default(),
+            copy_mode: CopyMode::Sync,
+            launches: 0,
+        };
+        let result = estimate(&fixture(), &workload, Mode::Serial, false).unwrap();
+        assert_eq!(result.compute_tflops, 300.0);
+        assert_eq!(result.compute_source, ComputeSource::Override);
+        for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let mut invalid_workload = workload;
+            invalid_workload.throughput = Throughput::Override(invalid);
+            assert!(estimate(&fixture(), &invalid_workload, Mode::Serial, false).is_err());
         }
     }
 

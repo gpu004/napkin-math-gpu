@@ -179,6 +179,20 @@ a handwritten matrix-multiply kernel. The evidence record must include shape,
 dtype, accumulation type, layouts, epilogue, workspace, and selected algorithm.
 Query cuBLASLt heuristics once and reuse the selected algorithm during timing.
 
+The existing `compute_tflops` field remains the cuBLAS `GemmEx` 8192³ peak; it
+is not a universal rate for arbitrary GEMM dimensions. `gemm_shapes` stores
+separate cuBLASLt measurements for the `square`, `prefill`, `decode-m8`,
+`decode-m64`, and `square-k8191` cases in fp16 and bf16. They use TN
+column-major layouts, fp32 accumulation and scale, default epilogue, and a
+32 MiB heuristic workspace limit. Each heuristic is queried once before the
+existing warm-up and sustained-round timing, then that algorithm is reused for
+all timed calls. Per-round samples and matching NVML state are retained; a
+deterministic 256-output sample is checked against a float64 reference built
+from the dtype-rounded inputs. The estimate command selects a shape rate only
+for an exact dtype and M/N/K match; otherwise it explicitly reports that the
+shape is unmatched and falls back to the 8192³ `GemmEx` peak without
+interpolation.
+
 ### MLPerf
 
 [MLPerf Inference](https://mlcommons.org/benchmarks/inference-datacenter/) is the
@@ -225,6 +239,21 @@ declares the workload and tolerance, while the raw observation and `run.json`
 record the measured evidence. `napkin validate` builds the GPU-free report in
 `VALIDATION.md`; collect or refresh observations with the opt-in
 `modal run modal/validate.py`.
+
+## Merge a GEMM shape suite without replacing scalar calibration
+
+Run a full benchmark and merge only its cuBLASLt shape records into the
+existing measured profile:
+
+```sh
+modal run modal/bench.py --gpu h100 --merge-shapes
+```
+
+The run is preserved at `target/modal/<gpu>.run.json`. `napkin merge-shapes`
+requires successful run and shape checks plus matching device name and memory
+size; it copies only the provenance-bearing `gemm_shapes` suite. The profile's
+generic cuBLAS `GemmEx` rate, scalar samples, checks, and NVML state remain from
+their original capture. Quick runs cannot be merged.
 
 ## Development checks
 

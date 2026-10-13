@@ -183,7 +183,7 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
     emit(
         &mut out,
         &[
-            "Dense GEMM",
+            "Dense GEMM, 8192³",
             "Throughput",
             "1 GFLOP",
             "1 TFLOP",
@@ -194,7 +194,21 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
     for dtype in [Dtype::Fp16, Dtype::Bf16, Dtype::Tf32, Dtype::Fp32] {
         emit_gemm_row(&mut out, m, dtype, sig, exact);
     }
+    let measured_shapes = if m
+        .gemm_shapes
+        .as_ref()
+        .is_some_and(|suite| !suite.shapes.is_empty())
+    {
+        "; measured shapes follow below"
+    } else {
+        ""
+    };
+    let _ = writeln!(
+        out,
+        "\nDense GEMM rows are the cuBLAS `GemmEx` 8192³ rate, a large-GEMM library ceiling, not the rate of every GEMM{measured_shapes}."
+    );
     spread_footnote(&mut out, m);
+    emit_gemm_shape_rows(&mut out, m, sig, exact);
     if let Some(state) = &m.gpu_state {
         gpu_state_table(&mut out, state);
     }
@@ -204,7 +218,7 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
 /// Names every flagged metric with its round spread, e.g.
 /// "† Rounds disagree by more than 5%: fp16 GEMM 15%, bf16 GEMM 17%. ..."
 fn spread_footnote(out: &mut String, m: &Measured) {
-    let spreads: Vec<String> = SAMPLE_NAMES
+    let mut spreads: Vec<String> = SAMPLE_NAMES
         .iter()
         .filter_map(|(key, name)| {
             m.round_spread(key)
@@ -212,17 +226,117 @@ fn spread_footnote(out: &mut String, m: &Measured) {
                 .map(|spread| format!("{name} {}%", fmt_sig(spread * 100.0, 2)))
         })
         .collect();
+    if let Some(suite) = &m.gemm_shapes {
+        spreads.extend(suite.shapes.iter().filter_map(|shape| {
+            suite
+                .round_spread(&shape.samples_key())
+                .filter(|spread| *spread > SPREAD_FLAG)
+                .map(|spread| {
+                    format!(
+                        "{} {} GEMM {}%",
+                        shape.name,
+                        shape.dtype,
+                        fmt_sig(spread * 100.0, 2)
+                    )
+                })
+        }));
+    }
     if spreads.is_empty() {
         return;
     }
     let _ = write!(
         out,
-        "\n† Rounds disagree by more than {:.0}%: {}. Spread is the slowest of the {} rounds over \
+        "\n† Rounds disagree by more than {:.0}%: {}. Spread is the slowest measured round over \
          the fastest, minus one: the observed range, not a confidence interval. The cell shows the \
          median round.\n",
         SPREAD_FLAG * 100.0,
         spreads.join(", "),
-        m.rounds,
+    );
+}
+
+fn emit_gemm_shape_rows(out: &mut String, m: &Measured, sig: u32, exact: bool) {
+    let Some(suite) = &m.gemm_shapes else {
+        return;
+    };
+    if suite.shapes.is_empty() {
+        return;
+    }
+    out.push('\n');
+    emit(
+        out,
+        &[
+            "cuBLASLt GEMM shape",
+            "Dimensions (M×N×K)",
+            "dtype",
+            "Throughput",
+            "of 8192³ peak",
+            "1 TFLOP",
+        ],
+    );
+    emit(out, &["---", "---:", "---", "---:", "---:", "---:"]);
+    for shape in &suite.shapes {
+        let rate = if exact {
+            shape.tflops
+        } else {
+            round_sig(shape.tflops, SIG)
+        };
+        let dimensions = format!("{}×{}×{}", shape.m, shape.n, shape.k);
+        let key = shape.samples_key();
+        let peak_percent = m
+            .compute_tflops
+            .get(&shape.dtype)
+            .map(|peak| {
+                format!(
+                    "{}%",
+                    fmt_sig(shape.tflops / peak * 100.0, if exact { 3 } else { 2 })
+                )
+            })
+            .unwrap_or_default();
+        let throughput = fmt_tflops(shape.tflops, sig);
+        let throughput = if suite
+            .round_spread(&key)
+            .is_some_and(|spread| spread > SPREAD_FLAG)
+        {
+            format!("{throughput} †")
+        } else {
+            throughput
+        };
+        emit(
+            out,
+            &[
+                &shape.name,
+                &dimensions,
+                &shape.dtype.to_string(),
+                &throughput,
+                &peak_percent,
+                &fmt_duration(1.0 / rate, sig),
+            ],
+        );
+    }
+    let pcie = match (suite.pcie_gen, suite.pcie_width) {
+        (Some(generation), Some(width)) => format!(", PCIe Gen{generation} x{width}"),
+        (Some(generation), None) => format!(", PCIe Gen{generation}"),
+        (None, Some(width)) => format!(", PCIe x{width}"),
+        (None, None) => String::new(),
+    };
+    let different_run = if suite.captured_at == m.captured_at {
+        String::new()
+    } else {
+        format!(
+            "; a different run from the generic peak captured {}",
+            m.captured_at
+        )
+    };
+    let _ = writeln!(
+        out,
+        "\nShape suite: {} captured {} from {} on {} (driver {}, CUDA {}{}){different_run}; % of peak uses the preserved profile's generic 8192³ `GemmEx` rate. TN column-major, fp32 accumulation and CUDA_R_32F scaling, 32 MiB heuristic workspace; query once before warm-up and reuse the selected algorithm.",
+        suite.library,
+        suite.captured_at,
+        suite.gpu_request,
+        suite.device_name,
+        suite.driver_version,
+        suite.cuda_version,
+        pcie,
     );
 }
 
@@ -568,6 +682,7 @@ mod tests {
             .map(|(key, rounds)| ((*key).to_owned(), rounds.clone()))
             .collect();
         measured.gpu_state = gpu_state;
+        measured.gemm_shapes = None;
         profile
     }
 
@@ -593,6 +708,206 @@ mod tests {
         let profile = h100_with(&[("gemm_fp16", vec![1.40, 1.41, 1.42])], None);
         let table = numbers(&profile, false).unwrap();
         assert!(!table.contains('†'), "{table}");
+    }
+
+    #[test]
+    fn renders_shape_rates_and_names_their_spread() {
+        let mut profile = h100_with(&[], None);
+        let mut shapes = Vec::new();
+        for (name, m, n, k) in [
+            ("square", 8192, 8192, 8192),
+            ("prefill", 4096, 28672, 8192),
+            ("decode-m8", 8, 8192, 8192),
+            ("decode-m64", 64, 8192, 8192),
+            ("square-k8191", 8192, 8192, 8191),
+        ] {
+            for dtype in [Dtype::Fp16, Dtype::Bf16] {
+                let mut shape = shape_fixture("prefill", 4096, 28672, 8192, Dtype::Bf16);
+                shape.name = name.to_owned();
+                shape.m = m;
+                shape.n = n;
+                shape.k = k;
+                shape.dtype = dtype;
+                shapes.push(shape);
+            }
+        }
+        let mut suite = shape_suite_fixture(shapes);
+        suite
+            .samples_ms
+            .insert("gemm_shape_prefill_bf16".to_owned(), vec![2.0, 2.2]);
+        profile.measured.as_mut().unwrap().gemm_shapes = Some(suite);
+        let table = numbers(&profile, true).unwrap();
+        assert!(table.contains("| Dense GEMM, 8192³ |"), "{table}");
+        assert!(
+            table.contains("Dense GEMM rows are the cuBLAS `GemmEx` 8192³ rate, a large-GEMM library ceiling, not the rate of every GEMM; measured shapes follow below."),
+            "{table}"
+        );
+        assert!(
+            table.contains("| prefill | 4096×28672×8192 | bf16 | 123 TFLOP/s † |"),
+            "{table}"
+        );
+        assert!(table.contains("prefill bf16 GEMM 10%."), "{table}");
+        assert!(
+            table.contains("Shape suite: cuBLASLt 120901 captured"),
+            "{table}"
+        );
+        assert!(
+            table.contains("different run from the generic peak"),
+            "{table}"
+        );
+        assert!(table.contains("TN column-major"), "{table}");
+        let rows: Vec<_> = table
+            .lines()
+            .filter(|line| {
+                [
+                    "square",
+                    "prefill",
+                    "decode-m8",
+                    "decode-m64",
+                    "square-k8191",
+                ]
+                .iter()
+                .any(|name| line.starts_with(&format!("| {name} |")))
+            })
+            .collect();
+        let expected = [
+            "| square | 8192×8192×8192 | fp16 |",
+            "| square | 8192×8192×8192 | bf16 |",
+            "| prefill | 4096×28672×8192 | fp16 |",
+            "| prefill | 4096×28672×8192 | bf16 |",
+            "| decode-m8 | 8×8192×8192 | fp16 |",
+            "| decode-m8 | 8×8192×8192 | bf16 |",
+            "| decode-m64 | 64×8192×8192 | fp16 |",
+            "| decode-m64 | 64×8192×8192 | bf16 |",
+            "| square-k8191 | 8192×8192×8191 | fp16 |",
+            "| square-k8191 | 8192×8192×8191 | bf16 |",
+        ];
+        for (row, expected) in rows.iter().zip(expected) {
+            assert!(row.starts_with(expected), "{row}");
+        }
+        assert_eq!(rows.len(), expected.len());
+        let without_shapes = numbers(&h100_with(&[], None), false).unwrap();
+        assert!(
+            without_shapes.contains("Dense GEMM rows are the cuBLAS `GemmEx` 8192³ rate, a large-GEMM library ceiling, not the rate of every GEMM."),
+            "{without_shapes}"
+        );
+        assert!(!without_shapes.contains("measured shapes follow below"));
+    }
+
+    #[test]
+    fn renders_shape_peak_shares_as_percentages() {
+        let mut profile = h100_with(&[], None);
+        let peak = profile.measured.as_ref().unwrap().compute_tflops[&Dtype::Fp16];
+        let shapes = [
+            ("full", 100.0),
+            ("quarter", 25.74),
+            ("small", 3.276),
+            ("fifth", 19.8),
+        ]
+        .into_iter()
+        .map(|(name, percentage)| {
+            let mut shape = shape_fixture(name, 8, 8, 8, Dtype::Fp16);
+            shape.tflops = peak * percentage / 100.0;
+            shape
+        })
+        .collect();
+        profile.measured.as_mut().unwrap().gemm_shapes = Some(shape_suite_fixture(shapes));
+
+        let assert_shares = |table: &str, expected: &[(&str, &str)]| {
+            for (name, percentage) in expected {
+                let row = table
+                    .lines()
+                    .find(|line| line.starts_with(&format!("| {name} |")))
+                    .unwrap_or_default();
+                assert!(row.contains(&format!("| {percentage} |")), "{row}");
+            }
+        };
+
+        let rounded = numbers(&profile, false).unwrap();
+        assert!(rounded.contains("| of 8192³ peak |"), "{rounded}");
+        assert_shares(
+            &rounded,
+            &[
+                ("full", "100%"),
+                ("quarter", "26%"),
+                ("small", "3.3%"),
+                ("fifth", "20%"),
+            ],
+        );
+
+        let exact = numbers(&profile, true).unwrap();
+        assert_shares(
+            &exact,
+            &[
+                ("full", "100%"),
+                ("quarter", "25.7%"),
+                ("small", "3.28%"),
+                ("fifth", "19.8%"),
+            ],
+        );
+    }
+
+    fn shape_fixture(
+        name: &str,
+        m: u32,
+        n: u32,
+        k: u32,
+        dtype: Dtype,
+    ) -> crate::profile::GemmShape {
+        crate::profile::GemmShape {
+            name: name.to_owned(),
+            m,
+            n,
+            k,
+            dtype,
+            compute_type: "CUBLAS_COMPUTE_32F".to_owned(),
+            scale_type: "CUDA_R_32F".to_owned(),
+            trans_a: "T".to_owned(),
+            trans_b: "N".to_owned(),
+            lda: k,
+            ldb: k,
+            ldc: m,
+            epilogue: "CUBLASLT_EPILOGUE_DEFAULT".to_owned(),
+            algorithm: crate::profile::GemmAlgo {
+                id: 1,
+                tile: 1,
+                stages: 1,
+                split_k: 0,
+                reduction_scheme: 0,
+                cta_swizzling: 0,
+                custom_option: 0,
+                workspace_bytes: 0,
+                waves: 1.0,
+            },
+            workspace_limit_bytes: 32 * 1024 * 1024,
+            tflops: 123.0,
+            check: crate::profile::GemmCheck {
+                sampled: 256,
+                max_abs_error: 0.1,
+                rtol: 0.08,
+                atol: 1.0,
+                passed: true,
+            },
+        }
+    }
+
+    fn shape_suite_fixture(
+        shapes: Vec<crate::profile::GemmShape>,
+    ) -> crate::profile::GemmShapeSuite {
+        crate::profile::GemmShapeSuite {
+            captured_at: "2026-10-14T00:00:00Z".to_owned(),
+            gpu_request: "H100!:2".to_owned(),
+            device_name: "NVIDIA H100 SXM 80GB".to_owned(),
+            driver_version: "580.95.05".to_owned(),
+            cuda_version: "12.9".to_owned(),
+            library: "cuBLASLt 120901".to_owned(),
+            pcie_gen: Some(5),
+            pcie_width: Some(16),
+            shapes,
+            checks: std::collections::BTreeMap::new(),
+            samples_ms: std::collections::BTreeMap::new(),
+            gpu_state: None,
+        }
     }
 
     #[test]
