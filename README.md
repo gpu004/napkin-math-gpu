@@ -52,18 +52,18 @@ Dense GEMM rows are the cuBLAS `GemmEx` 8192³ rate, a large-GEMM library ceilin
 
 † Rounds disagree by more than 5%: host RAM copy 13%, host → device 24%, device → host 6.4%, fp16 GEMM 10%, bf16 GEMM 14%, tf32 GEMM 13%, square fp16 GEMM 11%, square bf16 GEMM 11%, prefill fp16 GEMM 16%, prefill bf16 GEMM 13%. Spread is the slowest measured round over the fastest, minus one: the observed range, not a confidence interval. The cell shows the median round.
 
-| cuBLASLt GEMM shape | Dimensions (M×N×K) | dtype | Throughput | % of 8192³ peak | 1 TFLOP |
+| cuBLASLt GEMM shape | Dimensions (M×N×K) | dtype | Throughput | of 8192³ peak | 1 TFLOP |
 | --- | ---: | --- | ---: | ---: | ---: |
-| square | 8192×8192×8192 | fp16 | 700 TFLOP/s † | 100 | 1 ms |
-| square | 8192×8192×8192 | bf16 | 700 TFLOP/s † | 100 | 1 ms |
-| prefill | 4096×28672×8192 | fp16 | 700 TFLOP/s † | 100 | 1 ms |
-| prefill | 4096×28672×8192 | bf16 | 700 TFLOP/s † | 100 | 1 ms |
-| decode-m8 | 8×8192×8192 | fp16 | 20 TFLOP/s | 3 | 50 ms |
-| decode-m8 | 8×8192×8192 | bf16 | 20 TFLOP/s | 3 | 50 ms |
-| decode-m64 | 64×8192×8192 | fp16 | 200 TFLOP/s | 30 | 5 ms |
-| decode-m64 | 64×8192×8192 | bf16 | 200 TFLOP/s | 30 | 5 ms |
-| square-k8191 | 8192×8192×8191 | fp16 | 100 TFLOP/s | 20 | 10 ms |
-| square-k8191 | 8192×8192×8191 | bf16 | 100 TFLOP/s | 20 | 10 ms |
+| square | 8192×8192×8192 | fp16 | 700 TFLOP/s † | 100% | 1 ms |
+| square | 8192×8192×8192 | bf16 | 700 TFLOP/s † | 100% | 1 ms |
+| prefill | 4096×28672×8192 | fp16 | 700 TFLOP/s † | 100% | 1 ms |
+| prefill | 4096×28672×8192 | bf16 | 700 TFLOP/s † | 100% | 1 ms |
+| decode-m8 | 8×8192×8192 | fp16 | 20 TFLOP/s | 3.5% | 50 ms |
+| decode-m8 | 8×8192×8192 | bf16 | 20 TFLOP/s | 3.3% | 50 ms |
+| decode-m64 | 64×8192×8192 | fp16 | 200 TFLOP/s | 27% | 5 ms |
+| decode-m64 | 64×8192×8192 | bf16 | 200 TFLOP/s | 26% | 5 ms |
+| square-k8191 | 8192×8192×8191 | fp16 | 100 TFLOP/s | 21% | 10 ms |
+| square-k8191 | 8192×8192×8191 | bf16 | 100 TFLOP/s | 20% | 10 ms |
 
 Shape suite: cuBLASLt 120901 (cublasLtGetVersion) captured 2026-10-12T23:51:29Z from H100!:2 on NVIDIA H100 80GB HBM3 (driver 580.95.05, CUDA 12.9, PCIe Gen5 x16); a different run from the generic peak captured 2026-10-12T22:23:05Z; % of peak uses the preserved profile's generic 8192³ `GemmEx` rate. TN column-major, fp32 accumulation and CUDA_R_32F scaling, 32 MiB heuristic workspace; query once before warm-up and reuse the selected algorithm.
 

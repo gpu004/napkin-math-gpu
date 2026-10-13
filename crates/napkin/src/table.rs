@@ -269,7 +269,7 @@ fn emit_gemm_shape_rows(out: &mut String, m: &Measured, sig: u32, exact: bool) {
             "Dimensions (M×N×K)",
             "dtype",
             "Throughput",
-            "% of 8192³ peak",
+            "of 8192³ peak",
             "1 TFLOP",
         ],
     );
@@ -285,7 +285,12 @@ fn emit_gemm_shape_rows(out: &mut String, m: &Measured, sig: u32, exact: bool) {
         let peak_percent = m
             .compute_tflops
             .get(&shape.dtype)
-            .map(|peak| fmt_sig(shape.tflops / peak * 100.0, if exact { 3 } else { SIG }))
+            .map(|peak| {
+                format!(
+                    "{}%",
+                    fmt_sig(shape.tflops / peak * 100.0, if exact { 3 } else { 2 })
+                )
+            })
             .unwrap_or_default();
         let throughput = fmt_tflops(shape.tflops, sig);
         let throughput = if suite
@@ -787,6 +792,59 @@ mod tests {
             "{without_shapes}"
         );
         assert!(!without_shapes.contains("measured shapes follow below"));
+    }
+
+    #[test]
+    fn renders_shape_peak_shares_as_percentages() {
+        let mut profile = h100_with(&[], None);
+        let peak = profile.measured.as_ref().unwrap().compute_tflops[&Dtype::Fp16];
+        let shapes = [
+            ("full", 100.0),
+            ("quarter", 25.74),
+            ("small", 3.276),
+            ("fifth", 19.8),
+        ]
+        .into_iter()
+        .map(|(name, percentage)| {
+            let mut shape = shape_fixture(name, 8, 8, 8, Dtype::Fp16);
+            shape.tflops = peak * percentage / 100.0;
+            shape
+        })
+        .collect();
+        profile.measured.as_mut().unwrap().gemm_shapes = Some(shape_suite_fixture(shapes));
+
+        let assert_shares = |table: &str, expected: &[(&str, &str)]| {
+            for (name, percentage) in expected {
+                let row = table
+                    .lines()
+                    .find(|line| line.starts_with(&format!("| {name} |")))
+                    .unwrap_or_default();
+                assert!(row.contains(&format!("| {percentage} |")), "{row}");
+            }
+        };
+
+        let rounded = numbers(&profile, false).unwrap();
+        assert!(rounded.contains("| of 8192³ peak |"), "{rounded}");
+        assert_shares(
+            &rounded,
+            &[
+                ("full", "100%"),
+                ("quarter", "26%"),
+                ("small", "3.3%"),
+                ("fifth", "20%"),
+            ],
+        );
+
+        let exact = numbers(&profile, true).unwrap();
+        assert_shares(
+            &exact,
+            &[
+                ("full", "100%"),
+                ("quarter", "25.7%"),
+                ("small", "3.28%"),
+                ("fifth", "19.8%"),
+            ],
+        );
     }
 
     fn shape_fixture(
