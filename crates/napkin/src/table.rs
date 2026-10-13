@@ -5,7 +5,10 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::price::PriceRecord;
-use crate::profile::{Dtype, GpuState, Measured, Profile, Rates, RoundState, Span};
+use crate::profile::{
+    Basis, CopyPath, CrossCheck, Dtype, GpuState, Measured, Profile, Rates, RoundState, Span,
+    TransferMetric, TransferRate,
+};
 use crate::units::{
     fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_sig, fmt_tflops, round_sig,
 };
@@ -94,11 +97,12 @@ fn host_link_label(
 
 fn host_link_cell(rates: &Rates, measured: Option<&Measured>, sig: u32) -> String {
     let bandwidth = rates
-        .h2d_gbps
-        .zip(rates.d2h_gbps)
-        .map(|(a, b)| a.min(b))
-        .or(rates.h2d_gbps)
-        .map(|v| fmt_gbps(v, sig));
+        .h2d
+        .map(|rate| rate.gbps)
+        .into_iter()
+        .chain(rates.d2h.map(|rate| rate.gbps))
+        .reduce(f64::min)
+        .map(|value| fmt_gbps(value, sig));
     let (gpu_gen, effective_gen, width) = measured.map_or((None, None, None), |m| {
         (m.pcie_gen, m.pcie_effective_gen(), m.pcie_width)
     });
@@ -176,24 +180,12 @@ pub fn prices(records: &[PriceRecord]) -> String {
 #[must_use]
 pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
     let m = profile.measured.as_ref()?;
+    let rates = profile.rates(false);
     let sig = if exact { 3 } else { SIG };
     let mut out = String::new();
-    emit_movement_rows(&mut out, m, exact);
+    append_operation_table(&mut out, m, &rates, exact);
     out.push('\n');
-    emit(
-        &mut out,
-        &[
-            "Dense GEMM, 8192³",
-            "Throughput",
-            "1 GFLOP",
-            "1 TFLOP",
-            "Ridge point",
-        ],
-    );
-    emit(&mut out, &["---", "---:", "---:", "---:", "---:"]);
-    for dtype in [Dtype::Fp16, Dtype::Bf16, Dtype::Tf32, Dtype::Fp32] {
-        emit_gemm_row(&mut out, m, dtype, sig, exact);
-    }
+    append_gemm_table(&mut out, m, exact);
     let measured_shapes = if m
         .gemm_shapes
         .as_ref()
@@ -215,8 +207,188 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
     Some(out)
 }
 
-/// Names every flagged metric with its round spread, e.g.
-/// "† Rounds disagree by more than 5%: fp16 GEMM 15%, bf16 GEMM 17%. ..."
+fn append_operation_table(out: &mut String, m: &Measured, rates: &Rates, exact: bool) {
+    emit(
+        out,
+        &[
+            "Operation",
+            "Latency",
+            "Throughput",
+            "1 MB",
+            "1 GB",
+            "Basis",
+        ],
+    );
+    emit(out, &["---", "---:", "---:", "---:", "---:", "---"]);
+    for cells in operation_rows(m, rates, exact) {
+        if cells[1..5].iter().all(String::is_empty) {
+            continue;
+        }
+        emit(
+            out,
+            &[
+                &cells[0], &cells[1], &cells[2], &cells[3], &cells[4], &cells[5],
+            ],
+        );
+    }
+}
+
+fn operation_rows(m: &Measured, rates: &Rates, exact: bool) -> Vec<[String; 6]> {
+    let sig = if exact { 3 } else { SIG };
+    let lat_us = |value: f64| fmt_duration(value / 1e6, sig);
+    let gbps = |value: f64| fmt_gbps(value, sig);
+    let mb = |value: f64| cell_time(1e6, value, exact);
+    let gb = |value: f64| cell_time(1e9, value, exact);
+    let mut rows = non_transfer_rows(m, sig, &gbps, &mb, &gb, &lat_us);
+    rows.insert(
+        3,
+        transfer_row(
+            "Host → device, pinned",
+            m.h2d_latency_us,
+            rates.h2d,
+            sig,
+            exact,
+        ),
+    );
+    rows.insert(
+        4,
+        transfer_row(
+            "Device → host, pinned",
+            m.d2h_latency_us,
+            rates.d2h,
+            sig,
+            exact,
+        ),
+    );
+    rows.push(transfer_row(
+        "GPU ↔ GPU, NVLink one-way, slower direction",
+        m.g2g_latency_us,
+        Some(rates.g2g),
+        sig,
+        exact,
+    ));
+    rows
+}
+
+fn non_transfer_rows(
+    m: &Measured,
+    sig: u32,
+    gbps: &impl Fn(f64) -> String,
+    mb: &impl Fn(f64) -> String,
+    gb: &impl Fn(f64) -> String,
+    lat_us: &impl Fn(f64) -> String,
+) -> Vec<[String; 6]> {
+    vec![
+        [
+            "Kernel launch (back-to-back)".to_owned(),
+            mark(m, &["launch_us"], lat_us(m.launch_us)),
+            String::new(),
+            String::new(),
+            String::new(),
+            "napkin-bench".to_owned(),
+        ],
+        [
+            "Launch + sync round trip".to_owned(),
+            mark(m, &["sync_us"], m.sync_us.map_or_else(String::new, lat_us)),
+            String::new(),
+            String::new(),
+            String::new(),
+            "napkin-bench".to_owned(),
+        ],
+        [
+            "Pinned host RAM copy".to_owned(),
+            String::new(),
+            mark(m, &["host_copy_gbps"], gbps(m.host_copy_gbps)),
+            mb(m.host_copy_gbps),
+            gb(m.host_copy_gbps),
+            "napkin-bench".to_owned(),
+        ],
+        [
+            "HBM random read (pointer chase)".to_owned(),
+            mark(
+                m,
+                &["hbm_latency_ns"],
+                m.hbm_latency_ns
+                    .map_or_else(String::new, |ns| format!("{} ns", fmt_sig(ns, sig))),
+            ),
+            String::new(),
+            String::new(),
+            String::new(),
+            "napkin-bench".to_owned(),
+        ],
+        [
+            "HBM copy (read + write)".to_owned(),
+            String::new(),
+            mark(m, &["hbm_gbps"], gbps(m.hbm_gbps)),
+            mb(m.hbm_gbps),
+            gb(m.hbm_gbps),
+            "napkin-bench".to_owned(),
+        ],
+        [
+            "Elementwise add".to_owned(),
+            String::new(),
+            mark(m, &["elementwise_gbps"], gbps(m.elementwise_gbps)),
+            mb(m.elementwise_gbps),
+            gb(m.elementwise_gbps),
+            "napkin-bench".to_owned(),
+        ],
+    ]
+}
+
+fn transfer_row(
+    name: &str,
+    latency_us: Option<f64>,
+    rate: Option<TransferRate>,
+    sig: u32,
+    exact: bool,
+) -> [String; 6] {
+    [
+        name.to_owned(),
+        latency_us.map_or_else(String::new, |value| fmt_duration(value / 1e6, sig)),
+        rate.map_or_else(String::new, |value| fmt_gbps(value.gbps, sig)),
+        rate.map_or_else(String::new, |value| cell_time(1e6, value.gbps, exact)),
+        rate.map_or_else(String::new, |value| cell_time(1e9, value.gbps, exact)),
+        rate.map_or_else(String::new, |value| {
+            transfer_row_basis(value, latency_us.is_some())
+        }),
+    ]
+}
+
+fn transfer_row_basis(rate: TransferRate, has_latency: bool) -> String {
+    let mut label = format!(
+        "{}{}",
+        rate.basis,
+        if rate.basis == Basis::Nvbandwidth {
+            " CE"
+        } else {
+            ""
+        }
+    );
+    if has_latency && rate.basis == Basis::Nvbandwidth {
+        label.push_str("; latency napkin-bench");
+    }
+    label
+}
+
+fn append_gemm_table(out: &mut String, m: &Measured, exact: bool) {
+    let sig = if exact { 3 } else { SIG };
+    emit(
+        out,
+        &[
+            "Dense GEMM, 8192³",
+            "Throughput",
+            "1 GFLOP",
+            "1 TFLOP",
+            "Ridge point",
+            "Basis",
+        ],
+    );
+    emit(out, &["---", "---:", "---:", "---:", "---:", "---"]);
+    for dtype in [Dtype::Fp16, Dtype::Bf16, Dtype::Tf32, Dtype::Fp32] {
+        emit_gemm_row(out, m, dtype, sig, exact);
+    }
+}
+
 fn spread_footnote(out: &mut String, m: &Measured) {
     let mut spreads: Vec<String> = SAMPLE_NAMES
         .iter()
@@ -244,11 +416,11 @@ fn spread_footnote(out: &mut String, m: &Measured) {
     if spreads.is_empty() {
         return;
     }
-    let _ = write!(
+    let _ = writeln!(
         out,
         "\n† Rounds disagree by more than {:.0}%: {}. Spread is the slowest measured round over \
          the fastest, minus one: the observed range, not a confidence interval. The cell shows the \
-         median round.\n",
+         median round.",
         SPREAD_FLAG * 100.0,
         spreads.join(", "),
     );
@@ -340,7 +512,6 @@ fn emit_gemm_shape_rows(out: &mut String, m: &Measured, sig: u32, exact: bool) {
     );
 }
 
-/// One row per GEMM dtype with what NVML saw across its timed rounds.
 fn gpu_state_table(out: &mut String, state: &GpuState) {
     out.push('\n');
     emit(
@@ -362,13 +533,13 @@ fn gpu_state_table(out: &mut String, state: &GpuState) {
         let lows_highs = |pick: fn(&RoundState) -> Option<Span>| {
             let spans: Vec<_> = rounds.iter().filter_map(pick).collect();
             fmt_range(
-                spans.iter().map(|s| s.min).reduce(f64::min),
-                spans.iter().map(|s| s.max).reduce(f64::max),
+                spans.iter().map(|span| span.min).reduce(f64::min),
+                spans.iter().map(|span| span.max).reduce(f64::max),
             )
         };
-        let mut power: Vec<f64> = rounds.iter().filter_map(|r| r.power_w).collect();
+        let mut power: Vec<f64> = rounds.iter().filter_map(|round| round.power_w).collect();
         power.sort_by(f64::total_cmp);
-        let polls: u32 = rounds.iter().map(|r| r.polls).sum();
+        let polls: u32 = rounds.iter().map(|round| round.polls).sum();
         let mut reasons = BTreeMap::new();
         for round in rounds {
             for (name, count) in &round.clock_limit_reasons {
@@ -389,13 +560,13 @@ fn gpu_state_table(out: &mut String, state: &GpuState) {
             out,
             &[
                 &dtype.to_string(),
-                &with_unit(&lows_highs(|r| r.sm_clock_mhz), "MHz"),
-                &with_unit(&lows_highs(|r| r.mem_clock_mhz), "MHz"),
+                &with_unit(&lows_highs(|round| round.sm_clock_mhz), "MHz"),
+                &with_unit(&lows_highs(|round| round.mem_clock_mhz), "MHz"),
                 &with_unit(
                     &median(&power).map_or_else(String::new, |w| format!("{w:.0}")),
                     "W",
                 ),
-                &with_unit(&lows_highs(|r| r.temperature_c), "°C"),
+                &with_unit(&lows_highs(|round| round.temperature_c), "°C"),
                 if limits.is_empty() { "none" } else { &limits },
             ],
         );
@@ -416,7 +587,6 @@ fn gpu_state_table(out: &mut String, state: &GpuState) {
     );
 }
 
-/// `"1590–1980"`, or one number when both ends round to the same value.
 fn fmt_range(low: Option<f64>, high: Option<f64>) -> String {
     match (low, high) {
         (Some(low), Some(high)) if low.round() < high.round() => {
@@ -444,110 +614,6 @@ fn with_unit(value: &str, unit: &str) -> String {
     }
 }
 
-/// The "Operation" table: launch, host, HBM and GPU-to-GPU rows.
-fn emit_movement_rows(out: &mut String, m: &Measured, exact: bool) {
-    let sig = if exact { 3 } else { SIG };
-    let lat_us = |v: f64| fmt_duration(v / 1e6, sig);
-    let gbps = |v: f64| fmt_gbps(v, sig);
-    let mb = |v: f64| cell_time(1e6, v, exact);
-    let gb = |v: f64| cell_time(1e9, v, exact);
-
-    emit(out, &["Operation", "Latency", "Throughput", "1 MB", "1 GB"]);
-    emit(out, &["---", "---:", "---:", "---:", "---:"]);
-    let rows: [[String; 5]; 8] = [
-        [
-            "Kernel launch (back-to-back)".to_owned(),
-            mark(m, &["launch_us"], lat_us(m.launch_us)),
-            String::new(),
-            String::new(),
-            String::new(),
-        ],
-        [
-            "Launch + sync round trip".to_owned(),
-            mark(m, &["sync_us"], m.sync_us.map_or_else(String::new, lat_us)),
-            String::new(),
-            String::new(),
-            String::new(),
-        ],
-        [
-            "Pinned host RAM copy".to_owned(),
-            String::new(),
-            mark(m, &["host_copy_gbps"], gbps(m.host_copy_gbps)),
-            mb(m.host_copy_gbps),
-            gb(m.host_copy_gbps),
-        ],
-        [
-            "Host → device, pinned".to_owned(),
-            mark(
-                m,
-                &["h2d_latency_us"],
-                m.h2d_latency_us.map_or_else(String::new, lat_us),
-            ),
-            mark(m, &["h2d_gbps"], gbps(m.h2d_gbps)),
-            mb(m.h2d_gbps),
-            gb(m.h2d_gbps),
-        ],
-        [
-            "Device → host, pinned".to_owned(),
-            mark(
-                m,
-                &["d2h_latency_us"],
-                m.d2h_latency_us.map_or_else(String::new, lat_us),
-            ),
-            mark(m, &["d2h_gbps"], gbps(m.d2h_gbps)),
-            mb(m.d2h_gbps),
-            gb(m.d2h_gbps),
-        ],
-        [
-            "HBM random read (pointer chase)".to_owned(),
-            mark(
-                m,
-                &["hbm_latency_ns"],
-                m.hbm_latency_ns
-                    .map_or_else(String::new, |ns| format!("{} ns", fmt_sig(ns, sig))),
-            ),
-            String::new(),
-            String::new(),
-            String::new(),
-        ],
-        [
-            "HBM copy (read + write)".to_owned(),
-            String::new(),
-            mark(m, &["hbm_gbps"], gbps(m.hbm_gbps)),
-            mb(m.hbm_gbps),
-            gb(m.hbm_gbps),
-        ],
-        [
-            "Elementwise add".to_owned(),
-            String::new(),
-            mark(m, &["elementwise_gbps"], gbps(m.elementwise_gbps)),
-            mb(m.elementwise_gbps),
-            gb(m.elementwise_gbps),
-        ],
-    ];
-    let g2g_row = [
-        "GPU ↔ GPU, NVLink one-way".to_owned(),
-        mark(
-            m,
-            &["g2g_latency_us"],
-            m.g2g_latency_us.map_or_else(String::new, lat_us),
-        ),
-        mark(
-            m,
-            &["g2g_forward_gbps", "g2g_reverse_gbps"],
-            m.g2g_gbps.map_or_else(String::new, gbps),
-        ),
-        m.g2g_gbps.map_or_else(String::new, mb),
-        m.g2g_gbps.map_or_else(String::new, gb),
-    ];
-    for r in rows.iter().chain(std::iter::once(&g2g_row)) {
-        if r[1..].iter().all(String::is_empty) {
-            continue;
-        }
-        emit(out, &[&r[0], &r[1], &r[2], &r[3], &r[4]]);
-    }
-}
-
 fn emit_gemm_row(out: &mut String, m: &Measured, dtype: Dtype, sig: u32, exact: bool) {
     if let Some(&tflops) = m.compute_tflops.get(&dtype) {
         let rate = if exact {
@@ -565,15 +631,60 @@ fn emit_gemm_row(out: &mut String, m: &Measured, dtype: Dtype, sig: u32, exact: 
                 &ts(1e9),
                 &ts(1e12),
                 &ridge,
+                "napkin-bench",
             ],
         );
     }
 }
 
 fn basis_label(profile: &Profile) -> String {
-    match &profile.measured {
-        Some(m) => format!("measured {}", &m.captured_at[..10.min(m.captured_at.len())]),
-        None => "datasheet".to_owned(),
+    match (profile.rates(false).basis, &profile.measured) {
+        (Basis::NapkinBench, Some(m)) => {
+            format!(
+                "napkin-bench {}",
+                &m.captured_at[..10.min(m.captured_at.len())]
+            )
+        }
+        _ => "datasheet".to_owned(),
+    }
+}
+
+fn transfer_basis_label(profile: &Profile, rate: TransferRate) -> String {
+    match rate.basis {
+        Basis::NapkinBench => profile.measured.as_ref().map_or_else(
+            || "napkin-bench".to_owned(),
+            |m| {
+                format!(
+                    "napkin-bench {}",
+                    &m.captured_at[..10.min(m.captured_at.len())]
+                )
+            },
+        ),
+        Basis::Nvbandwidth => profile.nvbandwidth.as_ref().map_or_else(
+            || "NVBandwidth".to_owned(),
+            |evidence| {
+                format!(
+                    "NVBandwidth {}",
+                    &evidence.captured_at[..10.min(evidence.captured_at.len())]
+                )
+            },
+        ),
+        Basis::Datasheet => "datasheet".to_owned(),
+    }
+}
+
+fn transfer_basis(rates: &[Option<TransferRate>], profile: &Profile) -> String {
+    let mut labels = Vec::new();
+    for rate in rates.iter().flatten() {
+        let label = transfer_basis_label(profile, *rate);
+        if !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
+    if labels.is_empty() {
+        "datasheet".to_owned()
+    } else {
+        labels.join("; ")
     }
 }
 
@@ -595,12 +706,13 @@ pub fn compare(profiles: &[Profile], exact: bool) -> String {
             "Host link",
             "Launch",
             "Basis",
+            "Transfer basis",
         ],
     );
     emit(
         &mut out,
         &[
-            "---", "---:", "---:", "---:", "---:", "---:", "---:", "---:", "---",
+            "---", "---:", "---:", "---:", "---:", "---:", "---:", "---:", "---", "---",
         ],
     );
     for p in profiles {
@@ -630,18 +742,25 @@ pub fn compare(profiles: &[Profile], exact: bool) -> String {
                     .launch_us
                     .map_or_else(|| "—".to_owned(), |v| fmt_duration(v / 1e6, sig)),
                 &basis_label(p),
+                &transfer_basis(&[rates.h2d, rates.d2h, Some(rates.g2g)], p),
             ],
         );
     }
 
+    append_measured_table(&mut out, profiles);
+    append_transfer_cross_check_table(&mut out, profiles);
+    out
+}
+
+fn append_measured_table(out: &mut String, profiles: &[Profile]) {
     let measured: Vec<&Profile> = profiles.iter().filter(|p| p.measured.is_some()).collect();
     if !measured.is_empty() {
         out.push('\n');
         emit(
-            &mut out,
+            out,
             &["GPU", "HBM measured / ceiling", "BF16 measured / ceiling"],
         );
-        emit(&mut out, &["---", "---:", "---:"]);
+        emit(out, &["---", "---:", "---:"]);
         for p in measured {
             let Some(m) = &p.measured else { continue };
             let hbm_pct = m.hbm_gbps / p.ceiling.hbm_gbps * 100.0;
@@ -654,7 +773,7 @@ pub fn compare(profiles: &[Profile], exact: bool) -> String {
                     |(mv, cv)| format!("{mv:.0} / {cv:.0} TFLOP/s ({:.0}%)", mv / cv * 100.0),
                 );
             emit(
-                &mut out,
+                out,
                 &[
                     &p.name,
                     &format!(
@@ -666,7 +785,85 @@ pub fn compare(profiles: &[Profile], exact: bool) -> String {
             );
         }
     }
-    out
+}
+
+fn append_transfer_cross_check_table(out: &mut String, profiles: &[Profile]) {
+    let evidenced: Vec<&Profile> = profiles
+        .iter()
+        .filter(|profile| profile.nvbandwidth.is_some())
+        .collect();
+    if !evidenced.is_empty() {
+        out.push('\n');
+        emit(
+            out,
+            &[
+                "GPU",
+                "Transfer",
+                "NVBandwidth CE",
+                "NVBandwidth SM",
+                "napkin-bench",
+                "CE / napkin-bench",
+                "PCIe (NVBandwidth / napkin-bench)",
+            ],
+        );
+        emit(out, &["---", "---", "---:", "---:", "---:", "---:", "---"]);
+        for profile in evidenced {
+            let (Some(evidence), Some(measured)) = (&profile.nvbandwidth, &profile.measured) else {
+                continue;
+            };
+            for check in profile.transfer_cross_check() {
+                let (ce, sm) = cross_check_rates(evidence, &check);
+                let pcie = match check.metric {
+                    TransferMetric::Peer { .. } => "n/a (NVLink)".to_owned(),
+                    TransferMetric::H2d | TransferMetric::D2h => format!(
+                        "{} / {}",
+                        pcie_label(
+                            evidence
+                                .pcie_links
+                                .first()
+                                .map(|link| (link.r#gen, link.width)),
+                        ),
+                        pcie_label(measured.pcie_gen.zip(measured.pcie_width))
+                    ),
+                };
+                let metric = check.metric.to_string();
+                let measured = fmt_gbps(check.napkin_bench_gbps, 3);
+                emit(
+                    out,
+                    &[
+                        &profile.name,
+                        &metric,
+                        &ce.map_or_else(|| "—".to_owned(), |rate| fmt_gbps(rate, 3)),
+                        &sm.map_or_else(|| "—".to_owned(), |rate| fmt_gbps(rate, 3)),
+                        &measured,
+                        &format!("{:.3}", check.ratio),
+                        &pcie,
+                    ],
+                );
+            }
+        }
+    }
+}
+
+fn cross_check_rates(
+    profile: &crate::profile::Nvbandwidth,
+    check: &CrossCheck,
+) -> (Option<f64>, Option<f64>) {
+    match check.metric {
+        TransferMetric::H2d => (profile.h2d(CopyPath::Ce), profile.h2d(CopyPath::Sm)),
+        TransferMetric::D2h => (profile.d2h(CopyPath::Ce), profile.d2h(CopyPath::Sm)),
+        TransferMetric::Peer { src, dst } => (
+            profile.peer(CopyPath::Ce, src, dst),
+            profile.peer(CopyPath::Sm, src, dst),
+        ),
+    }
+}
+
+fn pcie_label(link: Option<(u8, u8)>) -> String {
+    link.map_or_else(
+        || "—".to_owned(),
+        |(generation, width)| format!("Gen{generation} x{width}"),
+    )
 }
 
 #[cfg(test)]

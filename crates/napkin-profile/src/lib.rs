@@ -7,6 +7,12 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+pub mod nvbandwidth;
+
+pub use nvbandwidth::{
+    Access, Bandwidth, CopyPath, Endpoint, Latency, Nvbandwidth, PcieLink, Statistic,
+};
+
 /// GPU numeric precisions, ordered low to high bit-width.
 #[derive(
     Clone,
@@ -76,17 +82,28 @@ pub struct Profile {
     /// Attached by the registry from `<id>.measured.json` when it exists.
     #[serde(skip)]
     pub measured: Option<Measured>,
+    #[serde(skip)]
+    pub nvbandwidth: Option<Nvbandwidth>,
 }
 
 impl Profile {
-    /// Resolves the rates used for estimation: measured values when a measured
-    /// profile is attached, else datasheet ceilings. `force_ceiling` implements
-    /// `--ceiling`. GPU-to-GPU falls back to the `NVLink` ceiling when unmeasured;
-    /// host-link, launch, and copy-latency figures have no datasheet fallback.
+    /// Resolves each transfer rate from `NVBandwidth`, napkin-bench, or datasheet
+    /// evidence. Copy latency and launch rates come from napkin-bench only.
+    /// `force_ceiling` implements `--ceiling`.
     #[must_use]
     pub fn rates(&self, force_ceiling: bool) -> Rates {
+        let measured = if force_ceiling {
+            None
+        } else {
+            self.measured.as_ref()
+        };
+        let nvbandwidth = if force_ceiling {
+            None
+        } else {
+            self.nvbandwidth.as_ref()
+        };
         let mut compute_tflops = BTreeMap::new();
-        if !force_ceiling && let Some(m) = &self.measured {
+        if let Some(m) = measured {
             for (dtype, _) in self
                 .ceiling
                 .compute_tflops
@@ -94,51 +111,163 @@ impl Profile {
                 .chain(m.compute_tflops.iter())
             {
                 let (tflops, basis) = match m.compute_tflops.get(dtype) {
-                    Some(&v) => (v, Basis::Measured),
+                    Some(&v) => (v, Basis::NapkinBench),
                     None => match self.ceiling.compute_tflops.get(dtype) {
-                        Some(&v) => (v, Basis::Ceiling),
+                        Some(&v) => (v, Basis::Datasheet),
                         None => continue,
                     },
                 };
                 compute_tflops.insert(*dtype, ComputeRate { tflops, basis });
             }
-            return Rates {
-                compute_tflops,
-                hbm_gbps: m.hbm_gbps,
-                h2d_gbps: Some(m.h2d_gbps),
-                d2h_gbps: Some(m.d2h_gbps),
-                host_copy_gbps: Some(m.host_copy_gbps),
-                g2g_gbps: m.g2g_gbps.unwrap_or(self.ceiling.nvlink_gbps),
-                h2d_latency_us: m.h2d_latency_us,
-                d2h_latency_us: m.d2h_latency_us,
-                g2g_latency_us: m.g2g_latency_us,
-                launch_us: Some(m.launch_us),
-                basis: Basis::Measured,
-            };
+        } else {
+            for (dtype, &tflops) in &self.ceiling.compute_tflops {
+                compute_tflops.insert(
+                    *dtype,
+                    ComputeRate {
+                        tflops,
+                        basis: Basis::Datasheet,
+                    },
+                );
+            }
         }
-        for (dtype, &tflops) in &self.ceiling.compute_tflops {
-            compute_tflops.insert(
-                *dtype,
-                ComputeRate {
-                    tflops,
-                    basis: Basis::Ceiling,
-                },
-            );
-        }
+        let h2d = nvbandwidth
+            .and_then(|evidence| {
+                evidence.h2d(CopyPath::Ce).map(|gbps| TransferRate {
+                    gbps,
+                    basis: Basis::Nvbandwidth,
+                })
+            })
+            .or_else(|| {
+                measured.map(|m| TransferRate {
+                    gbps: m.h2d_gbps,
+                    basis: Basis::NapkinBench,
+                })
+            });
+        let d2h = nvbandwidth
+            .and_then(|evidence| {
+                evidence.d2h(CopyPath::Ce).map(|gbps| TransferRate {
+                    gbps,
+                    basis: Basis::Nvbandwidth,
+                })
+            })
+            .or_else(|| {
+                measured.map(|m| TransferRate {
+                    gbps: m.d2h_gbps,
+                    basis: Basis::NapkinBench,
+                })
+            });
+        let g2g = nvbandwidth
+            .and_then(|evidence| {
+                evidence.g2g(CopyPath::Ce).map(|gbps| TransferRate {
+                    gbps,
+                    basis: Basis::Nvbandwidth,
+                })
+            })
+            .or_else(|| {
+                measured.and_then(|m| {
+                    m.g2g_gbps.map(|gbps| TransferRate {
+                        gbps,
+                        basis: Basis::NapkinBench,
+                    })
+                })
+            })
+            .unwrap_or(TransferRate {
+                gbps: self.ceiling.nvlink_gbps,
+                basis: Basis::Datasheet,
+            });
         Rates {
             compute_tflops,
-            hbm_gbps: self.ceiling.hbm_gbps,
-            h2d_gbps: None,
-            d2h_gbps: None,
-            host_copy_gbps: None,
-            g2g_gbps: self.ceiling.nvlink_gbps,
-            h2d_latency_us: None,
-            d2h_latency_us: None,
-            g2g_latency_us: None,
-            launch_us: None,
-            basis: Basis::Ceiling,
+            hbm_gbps: measured.map_or(self.ceiling.hbm_gbps, |m| m.hbm_gbps),
+            h2d,
+            d2h,
+            host_copy_gbps: measured.map(|m| m.host_copy_gbps),
+            g2g,
+            h2d_latency_us: measured.and_then(|m| m.h2d_latency_us),
+            d2h_latency_us: measured.and_then(|m| m.d2h_latency_us),
+            g2g_latency_us: measured.and_then(|m| m.g2g_latency_us),
+            launch_us: measured.map(|m| m.launch_us),
+            basis: measured.map_or(Basis::Datasheet, |_| Basis::NapkinBench),
         }
     }
+
+    /// Compares `NVBandwidth` CE transfers with corresponding napkin-bench rates.
+    #[must_use]
+    pub fn transfer_cross_check(&self) -> Vec<CrossCheck> {
+        let (Some(evidence), Some(measured)) = (&self.nvbandwidth, &self.measured) else {
+            return Vec::new();
+        };
+        let same_link = evidence
+            .pcie_links
+            .first()
+            .zip(measured.pcie_gen.zip(measured.pcie_width))
+            .is_some_and(|(link, (generation, width))| {
+                link.r#gen == generation && link.width == width
+            });
+        let mut checks = Vec::new();
+        let mut add = |metric, nvbandwidth_gbps: Option<f64>, napkin_bench_gbps: Option<f64>| {
+            if let Some((nvbandwidth_gbps, napkin_bench_gbps)) =
+                nvbandwidth_gbps.zip(napkin_bench_gbps)
+            {
+                checks.push(CrossCheck {
+                    metric,
+                    nvbandwidth_gbps,
+                    napkin_bench_gbps,
+                    ratio: nvbandwidth_gbps / napkin_bench_gbps,
+                    same_link: match metric {
+                        TransferMetric::Peer { .. } => true,
+                        TransferMetric::H2d | TransferMetric::D2h => same_link,
+                    },
+                });
+            }
+        };
+        add(
+            TransferMetric::H2d,
+            evidence.h2d(CopyPath::Ce),
+            Some(measured.h2d_gbps),
+        );
+        add(
+            TransferMetric::D2h,
+            evidence.d2h(CopyPath::Ce),
+            Some(measured.d2h_gbps),
+        );
+        add(
+            TransferMetric::Peer { src: 0, dst: 1 },
+            evidence.peer(CopyPath::Ce, 0, 1),
+            measured.g2g_forward_gbps,
+        );
+        add(
+            TransferMetric::Peer { src: 1, dst: 0 },
+            evidence.peer(CopyPath::Ce, 1, 0),
+            measured.g2g_reverse_gbps,
+        );
+        checks
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransferMetric {
+    H2d,
+    D2h,
+    Peer { src: u32, dst: u32 },
+}
+
+impl fmt::Display for TransferMetric {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::H2d => f.write_str("H2D"),
+            Self::D2h => f.write_str("D2H"),
+            Self::Peer { src, dst } => write!(f, "GPU{src}→GPU{dst}"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CrossCheck {
+    pub metric: TransferMetric,
+    pub nvbandwidth_gbps: f64,
+    pub napkin_bench_gbps: f64,
+    pub ratio: f64,
+    pub same_link: bool,
 }
 
 /// Output of `napkin-bench`; all throughputs are decimal
@@ -486,15 +615,17 @@ impl Measured {
 /// Where a rate came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Basis {
-    Measured,
-    Ceiling,
+    NapkinBench,
+    Nvbandwidth,
+    Datasheet,
 }
 
 impl fmt::Display for Basis {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
-            Self::Measured => "measured",
-            Self::Ceiling => "datasheet",
+            Self::NapkinBench => "napkin-bench",
+            Self::Nvbandwidth => "NVBandwidth",
+            Self::Datasheet => "datasheet",
         };
         f.write_str(name)
     }
@@ -507,15 +638,23 @@ pub struct ComputeRate {
     pub basis: Basis,
 }
 
-/// Resolved rates for estimation; measured values win when available.
+/// One transfer throughput and its evidence source.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TransferRate {
+    pub gbps: f64,
+    pub basis: Basis,
+}
+
+/// Resolved rates for estimation. `basis` is the HBM/compute/launch basis;
+/// transfer metrics carry their own provenance in `TransferRate`.
 #[derive(Clone, Debug)]
 pub struct Rates {
     pub compute_tflops: BTreeMap<Dtype, ComputeRate>,
     pub hbm_gbps: f64,
-    pub h2d_gbps: Option<f64>,
-    pub d2h_gbps: Option<f64>,
+    pub h2d: Option<TransferRate>,
+    pub d2h: Option<TransferRate>,
     pub host_copy_gbps: Option<f64>,
-    pub g2g_gbps: f64,
+    pub g2g: TransferRate,
     /// Fixed cost of one synchronous copy (see `Measured::h2d_latency_us`).
     /// `None` means unmeasured, never zero.
     pub h2d_latency_us: Option<f64>,

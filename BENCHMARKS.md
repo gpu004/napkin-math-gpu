@@ -226,6 +226,18 @@ notes. Measured calibrations live in `profiles/<id>.measured.json`, produced by
   [H100 × 8](profiles/nccl-tests/h100x8) (a different Modal host: driver
   610.57.04 and a PCIe Gen 4 host link, versus 580.95.05 and Gen 5 for × 2)
 
+NVBandwidth v0.10.0 evidence is ingested with per-metric provenance from
+`profiles/nvbandwidth/<gpu>x2/`: verbatim `nvbandwidth.json`, `run.json`
+metadata, and `topo.txt` containing the three topology probes. The H100 parser
+fixture mirrors that layout under `crates/napkin/tests/fixtures/nvbandwidth/`.
+H100's `topo.txt` is rendered from the original run metadata's recorded probes
+and has no `topo -p2p n` section.
+A100 Modal hosts are bimodal even though both classes report PCIe Gen4 x16;
+NVBandwidth and napkin-bench agree within each class. The #27 profile reflects
+a slower host (H2D/D2H 12.34/13.13 GB/s), so `profiles/a100.measured.json` now
+uses the full-rate 580.95.05 capture (24.70/26.30 GB/s) with the same Gen4 x16
+link.
+
 The `napkin-profile` types are the shared contract between the estimator
 crate and the `napkin-bench` producer. The measured files must be replaced
 metric-by-metric by the source policy above before being called canonical.

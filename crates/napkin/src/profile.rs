@@ -32,6 +32,10 @@ include!(concat!(env!("OUT_DIR"), "/profiles.rs"));
 mod tests {
     use super::*;
 
+    const H100_RAW: &str = include_str!("../tests/fixtures/nvbandwidth/h100x2/nvbandwidth.json");
+    const H100_RUN: &str = include_str!("../tests/fixtures/nvbandwidth/h100x2/run.json");
+    const H100_TOPO: &str = include_str!("../tests/fixtures/nvbandwidth/h100x2/topo.txt");
+
     #[test]
     fn builtin_profiles_keep_datasheet_order() {
         assert_eq!(
@@ -118,14 +122,170 @@ mod tests {
     }
 
     #[test]
-    fn ceiling_basis_has_no_host_or_launch_rates() {
-        let b200 = find("b200").unwrap();
+    fn ceiling_basis_has_no_host_or_launch_rates() -> Result<(), String> {
+        let Some(b200) = find("b200") else {
+            return Err("built-in b200 profile is missing".to_owned());
+        };
         let rates = b200.rates(true);
-        assert_eq!(rates.basis, Basis::Ceiling);
-        assert!(rates.h2d_gbps.is_none());
+        assert_eq!(rates.basis, Basis::Datasheet);
+        assert!(rates.h2d.is_none());
         assert!(rates.launch_us.is_none());
         assert!(rates.h2d_latency_us.is_none());
         assert!(rates.g2g_latency_us.is_none());
-        assert!((rates.g2g_gbps - b200.ceiling.nvlink_gbps).abs() < f64::EPSILON);
+        assert_eq!(rates.g2g.basis, Basis::Datasheet);
+        assert!((rates.g2g.gbps - b200.ceiling.nvlink_gbps).abs() < f64::EPSILON);
+        Ok(())
+    }
+
+    #[test]
+    fn transfer_metrics_display_and_match_link_semantics() -> Result<(), String> {
+        let Some(mut profile) = find("h100").cloned() else {
+            return Err("built-in h100 profile is missing".to_owned());
+        };
+        let Some(measured) = profile.measured.as_mut() else {
+            return Err("built-in h100 measured profile is missing".to_owned());
+        };
+        measured.pcie_gen = Some(4);
+
+        let checks = profile.transfer_cross_check();
+        assert_eq!(
+            checks.iter().map(|check| check.metric).collect::<Vec<_>>(),
+            vec![
+                TransferMetric::H2d,
+                TransferMetric::D2h,
+                TransferMetric::Peer { src: 0, dst: 1 },
+                TransferMetric::Peer { src: 1, dst: 0 },
+            ]
+        );
+        assert_eq!(
+            checks
+                .iter()
+                .map(|check| check.same_link)
+                .collect::<Vec<_>>(),
+            vec![false, false, true, true]
+        );
+        assert_eq!(TransferMetric::H2d.to_string(), "H2D");
+        assert_eq!(TransferMetric::D2h.to_string(), "D2H");
+        assert_eq!(
+            TransferMetric::Peer { src: 0, dst: 1 }.to_string(),
+            "GPU0→GPU1"
+        );
+        Ok(())
+    }
+
+    fn parsed_fixture() -> Result<Nvbandwidth, String> {
+        Nvbandwidth::parse(H100_RAW, H100_RUN, H100_TOPO)
+    }
+
+    fn parse_error(raw: &str, run: &str) -> String {
+        match Nvbandwidth::parse(raw, run, H100_TOPO) {
+            Ok(_) => "expected NVBandwidth parsing to fail".to_owned(),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn nvbandwidth_fixture_normalizes_directional_metrics_and_provenance() -> Result<(), String> {
+        let evidence = parsed_fixture()?;
+        assert_eq!(evidence.topology, H100_TOPO);
+        assert_eq!(evidence.h2d(CopyPath::Ce), Some(55.5174));
+        assert_eq!(evidence.d2h(CopyPath::Ce), Some(55.492));
+        assert_eq!(evidence.d2h(CopyPath::Sm), Some(40.92));
+        assert_eq!(evidence.peer(CopyPath::Ce, 0, 1), Some(395.085));
+        assert_eq!(evidence.peer(CopyPath::Ce, 1, 0), Some(395.067));
+        assert_eq!(evidence.g2g(CopyPath::Ce), Some(395.067));
+        assert_eq!(evidence.buffer_bytes, 536_870_912);
+        assert_eq!(evidence.samples, 7);
+        assert_eq!(evidence.statistic, Statistic::Median);
+        assert_eq!(evidence.cuda_runtime_version, "12.9");
+        assert_eq!(evidence.cuda_driver_version, "13.0");
+        assert_eq!(evidence.driver_version, "580.95.05");
+        assert_eq!(evidence.gpu_request, "H100!:2");
+        assert_eq!(evidence.version, "v0.10.0");
+        assert!(evidence.verified);
+        assert_eq!(evidence.bandwidths.len(), 16);
+        assert!(evidence.bandwidths.iter().any(|rate| {
+            rate.testcase == "device_to_device_memcpy_read_ce"
+                && rate.src == Endpoint::Gpu(0)
+                && rate.dst == Endpoint::Gpu(1)
+                && rate.initiator == 1
+                && (rate.gbps - 395.085).abs() < 1e-6
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn nvbandwidth_rejects_non_decimal_units() {
+        let raw = H100_RAW.replace("bandwidth (GB/s)", "bandwidth (GiB/s)");
+        let error = parse_error(&raw, H100_RUN);
+        assert!(error.contains("host_to_device_memcpy_ce"), "{error}");
+    }
+
+    #[test]
+    fn nvbandwidth_rejects_failed_testcase() {
+        let raw = H100_RAW.replace(r#""status" : "Passed""#, r#""status" : "Error""#);
+        let error = parse_error(&raw, H100_RUN);
+        assert!(error.contains("status"), "{error}");
+    }
+
+    #[test]
+    fn nvbandwidth_rejects_top_level_error() {
+        let raw = H100_RAW.replace(
+            r#""version" :"#,
+            "\"error\" : \"synthetic failure\",\n\t\t\"version\" :",
+        );
+        let error = parse_error(&raw, H100_RUN);
+        assert!(error.contains("contains error"), "{error}");
+    }
+
+    #[test]
+    fn nvbandwidth_rejects_disabled_verification_and_failed_run() {
+        let raw = H100_RAW;
+        let run = H100_RUN;
+        let skipped = run.replace(
+            r#""--disableAffinity","#,
+            r#""--skipVerification", "--disableAffinity","#,
+        );
+        let error = parse_error(raw, &skipped);
+        assert!(error.contains("disables verification"), "{error}");
+        let failed = run.replace(r#""exit_code": 0,"#, r#""exit_code": 1,"#);
+        let error = parse_error(raw, &failed);
+        assert!(error.contains("exit_code"), "{error}");
+    }
+
+    #[test]
+    fn nvbandwidth_identity_matches_profile_name_count_and_request() -> Result<(), String> {
+        let evidence = parsed_fixture()?;
+        let a100 = find("a100")
+            .and_then(|profile| profile.measured.as_ref())
+            .ok_or_else(|| "built-in a100 measured profile is missing".to_owned())?;
+        assert!(matches!(
+            evidence.check_identity(a100),
+            Err(ref error) if error.contains("device_name")
+        ));
+        let h100 = find("h100")
+            .and_then(|profile| profile.measured.as_ref())
+            .ok_or_else(|| "built-in h100 measured profile is missing".to_owned())?;
+        let mut changed = h100.clone();
+        changed.device_count = 3;
+        assert!(matches!(
+            evidence.check_identity(&changed),
+            Err(ref error) if error.contains("device_count")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn h100_transfer_rates_use_nvbandwidth_and_ceiling_override() -> Result<(), String> {
+        let h100 = find("h100").ok_or_else(|| "built-in h100 profile is missing".to_owned())?;
+        let rates = h100.rates(false);
+        assert_eq!(rates.h2d.map(|rate| rate.basis), Some(Basis::Nvbandwidth));
+        assert_eq!(rates.d2h.map(|rate| rate.basis), Some(Basis::Nvbandwidth));
+        assert_eq!(rates.g2g.basis, Basis::Nvbandwidth);
+        let ceiling = h100.rates(true);
+        assert_eq!(ceiling.h2d, None);
+        assert_eq!(ceiling.d2h, None);
+        assert_eq!(ceiling.g2g.basis, Basis::Datasheet);
+        Ok(())
     }
 }

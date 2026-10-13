@@ -30,9 +30,9 @@ if [ -n "$local_uses" ]; then
   hit "function-local use statements:\n$local_uses" "move imports to file scope; nested modules may keep their imports"
 fi
 
-py_comments=$(grep -n '^\s*#' modal/bench.py || true)
+py_comments=$(grep -n '^\s*#' modal/*.py || true)
 if [ -n "$py_comments" ]; then
-  hit "# comments in modal/bench.py:\n$py_comments" "keep only the module docstring; the launcher stays self-explanatory"
+  hit "# comments in modal/*.py:\n$py_comments" "keep only the module docstring; the launchers stay self-explanatory"
 fi
 
 unsafe_files=$(grep -rln --include='*.rs' -E 'unsafe[ \t({]' crates/ | grep -v 'crates/napkin-bench/src/cuda.rs' || true)

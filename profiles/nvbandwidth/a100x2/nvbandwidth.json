@@ -1,0 +1,173 @@
+{
+	"nvbandwidth" : 
+	{
+		"CUDA Driver API Version" : 13000,
+		"CUDA Runtime Version" : 12090,
+		"Driver Version" : "580.95.05",
+		"GPU Device list" : 
+		[
+			"0: NVIDIA A100-SXM4-80GB (00000000:8c:00): (modal)",
+			"1: NVIDIA A100-SXM4-80GB (00000000:d6:00): (modal)"
+		],
+		"Version Major" : 0,
+		"Version Minor" : 10,
+		"Version Patch" : 0,
+		"bounceBufferConfComputeEnabled" : false,
+		"git_version" : "v0.10",
+		"testcases" : 
+		[
+			{
+				"bandwidth_description" : "memcpy CE CPU(row) -> GPU(column) bandwidth (GB/s)",
+				"bandwidth_matrix" : 
+				[
+					[
+						"26.7149",
+						"24.9221"
+					]
+				],
+				"name" : "host_to_device_memcpy_ce",
+				"status" : "Passed",
+				"sum" : 51.637024129000004
+			},
+			{
+				"bandwidth_description" : "memcpy CE CPU(row) <- GPU(column) bandwidth (GB/s)",
+				"bandwidth_matrix" : 
+				[
+					[
+						"26.2901",
+						"26.3037"
+					]
+				],
+				"name" : "device_to_host_memcpy_ce",
+				"status" : "Passed",
+				"sum" : 52.593801192000001
+			},
+			{
+				"bandwidth_description" : "memcpy SM CPU(row) -> GPU(column) bandwidth (GB/s)",
+				"bandwidth_matrix" : 
+				[
+					[
+						"26.5614",
+						"26.5338"
+					]
+				],
+				"name" : "host_to_device_memcpy_sm",
+				"status" : "Passed",
+				"sum" : 53.095181084000004
+			},
+			{
+				"bandwidth_description" : "memcpy SM CPU(row) <- GPU(column) bandwidth (GB/s)",
+				"bandwidth_matrix" : 
+				[
+					[
+						"26.3216",
+						"26.3357"
+					]
+				],
+				"name" : "device_to_host_memcpy_sm",
+				"status" : "Passed",
+				"sum" : 52.657300763999999
+			},
+			{
+				"bandwidth_description" : "memcpy CE GPU(row) -> GPU(column) bandwidth (GB/s)",
+				"bandwidth_matrix" : 
+				[
+					[
+						"N/A",
+						"276.559"
+					],
+					[
+						"278.84",
+						"N/A"
+					]
+				],
+				"name" : "device_to_device_memcpy_read_ce",
+				"status" : "Passed",
+				"sum" : 555.39904886800002
+			},
+			{
+				"bandwidth_description" : "memcpy CE GPU(row) <- GPU(column) bandwidth (GB/s)",
+				"bandwidth_matrix" : 
+				[
+					[
+						"N/A",
+						"280.222"
+					],
+					[
+						"280.341",
+						"N/A"
+					]
+				],
+				"name" : "device_to_device_memcpy_write_ce",
+				"status" : "Passed",
+				"sum" : 560.56350295300001
+			},
+			{
+				"bandwidth_description" : "memcpy SM GPU(row) -> GPU(column) bandwidth (GB/s)",
+				"bandwidth_matrix" : 
+				[
+					[
+						"N/A",
+						"255.591"
+					],
+					[
+						"255.591",
+						"N/A"
+					]
+				],
+				"name" : "device_to_device_memcpy_read_sm",
+				"status" : "Passed",
+				"sum" : 511.18197157400004
+			},
+			{
+				"bandwidth_description" : "memcpy SM GPU(row) <- GPU(column) bandwidth (GB/s)",
+				"bandwidth_matrix" : 
+				[
+					[
+						"N/A",
+						"230.447"
+					],
+					[
+						"235.005",
+						"N/A"
+					]
+				],
+				"name" : "device_to_device_memcpy_write_sm",
+				"status" : "Passed",
+				"sum" : 465.45263596900003
+			},
+			{
+				"bandwidth_description" : "memory latency SM CPU(row) <-> GPU(column) (ns)",
+				"bandwidth_matrix" : 
+				[
+					[
+						"1660.68",
+						"1630.82"
+					]
+				],
+				"name" : "host_device_latency_sm",
+				"status" : "Passed",
+				"sum" : 3291.5005534887314
+			},
+			{
+				"bandwidth_description" : "Device to Device Latency SM GPU(row) <-> GPU(column) (ns)",
+				"bandwidth_matrix" : 
+				[
+					[
+						"N/A",
+						"826.508"
+					],
+					[
+						"821.54",
+						"N/A"
+					]
+				],
+				"name" : "device_to_device_latency_sm",
+				"status" : "Passed",
+				"sum" : 1648.0481293983757
+			}
+		],
+		"version" : "v0.10.0"
+	}
+}
+
