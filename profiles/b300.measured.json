@@ -857,5 +857,2028 @@
         }
       ]
     }
+  },
+  "gemm_shapes":   {
+    "captured_at": "2026-10-12T23:43:41Z",
+    "gpu_request": "B300:2",
+    "device_name": "NVIDIA B300 SXM6 AC",
+    "driver_version": "580.95.05",
+    "cuda_version": "12.9",
+    "library": "cuBLASLt 120901 (cublasLtGetVersion)",
+    "pcie_gen": 6,
+    "pcie_width": 16,
+    "shapes": [
+      {
+        "name": "square",
+        "m": 8192,
+        "n": 8192,
+        "k": 8192,
+        "dtype": "fp16",
+        "compute_type": "CUBLAS_COMPUTE_32F",
+        "scale_type": "CUDA_R_32F",
+        "trans_a": "T",
+        "trans_b": "N",
+        "lda": 8192,
+        "ldb": 8192,
+        "ldc": 8192,
+        "epilogue": "CUBLASLT_EPILOGUE_DEFAULT",
+        "algorithm": {
+          "id": 66,
+          "tile": 23,
+          "stages": 35,
+          "split_k": 1,
+          "reduction_scheme": 0,
+          "cta_swizzling": 0,
+          "custom_option": 1,
+          "workspace_bytes": 0,
+          "waves": 13.837838172912598
+        },
+        "workspace_limit_bytes": 33554432,
+        "tflops": 1260.579203236214,
+        "check": {
+          "sampled": 256,
+          "max_abs_error": 0.030102309116045944,
+          "rtol": 0.03,
+          "atol": 0.25,
+          "passed": true
+        }
+      },
+      {
+        "name": "square",
+        "m": 8192,
+        "n": 8192,
+        "k": 8192,
+        "dtype": "bf16",
+        "compute_type": "CUBLAS_COMPUTE_32F",
+        "scale_type": "CUDA_R_32F",
+        "trans_a": "T",
+        "trans_b": "N",
+        "lda": 8192,
+        "ldb": 8192,
+        "ldc": 8192,
+        "epilogue": "CUBLASLT_EPILOGUE_DEFAULT",
+        "algorithm": {
+          "id": 66,
+          "tile": 23,
+          "stages": 35,
+          "split_k": 1,
+          "reduction_scheme": 0,
+          "cta_swizzling": 0,
+          "custom_option": 1,
+          "workspace_bytes": 0,
+          "waves": 13.837838172912598
+        },
+        "workspace_limit_bytes": 33554432,
+        "tflops": 1340.7752028886464,
+        "check": {
+          "sampled": 256,
+          "max_abs_error": 0.20705597719643265,
+          "rtol": 0.08,
+          "atol": 1.0,
+          "passed": true
+        }
+      },
+      {
+        "name": "prefill",
+        "m": 4096,
+        "n": 28672,
+        "k": 8192,
+        "dtype": "fp16",
+        "compute_type": "CUBLAS_COMPUTE_32F",
+        "scale_type": "CUDA_R_32F",
+        "trans_a": "T",
+        "trans_b": "N",
+        "lda": 8192,
+        "ldb": 8192,
+        "ldc": 4096,
+        "epilogue": "CUBLASLT_EPILOGUE_DEFAULT",
+        "algorithm": {
+          "id": 66,
+          "tile": 23,
+          "stages": 35,
+          "split_k": 1,
+          "reduction_scheme": 0,
+          "cta_swizzling": 0,
+          "custom_option": 1,
+          "workspace_bytes": 0,
+          "waves": 24.216217041015625
+        },
+        "workspace_limit_bytes": 33554432,
+        "tflops": 1251.0810414938192,
+        "check": {
+          "sampled": 256,
+          "max_abs_error": 0.021753906934463885,
+          "rtol": 0.03,
+          "atol": 0.25,
+          "passed": true
+        }
+      },
+      {
+        "name": "prefill",
+        "m": 4096,
+        "n": 28672,
+        "k": 8192,
+        "dtype": "bf16",
+        "compute_type": "CUBLAS_COMPUTE_32F",
+        "scale_type": "CUDA_R_32F",
+        "trans_a": "T",
+        "trans_b": "N",
+        "lda": 8192,
+        "ldb": 8192,
+        "ldc": 4096,
+        "epilogue": "CUBLASLT_EPILOGUE_DEFAULT",
+        "algorithm": {
+          "id": 66,
+          "tile": 23,
+          "stages": 35,
+          "split_k": 1,
+          "reduction_scheme": 0,
+          "cta_swizzling": 0,
+          "custom_option": 1,
+          "workspace_bytes": 0,
+          "waves": 24.216217041015625
+        },
+        "workspace_limit_bytes": 33554432,
+        "tflops": 1333.802925075517,
+        "check": {
+          "sampled": 256,
+          "max_abs_error": 0.239717919845134,
+          "rtol": 0.08,
+          "atol": 1.0,
+          "passed": true
+        }
+      },
+      {
+        "name": "decode-m8",
+        "m": 8,
+        "n": 8192,
+        "k": 8192,
+        "dtype": "fp16",
+        "compute_type": "CUBLAS_COMPUTE_32F",
+        "scale_type": "CUDA_R_32F",
+        "trans_a": "T",
+        "trans_b": "N",
+        "lda": 8192,
+        "ldb": 8192,
+        "ldc": 8,
+        "epilogue": "CUBLASLT_EPILOGUE_DEFAULT",
+        "algorithm": {
+          "id": 66,
+          "tile": 7,
+          "stages": 35,
+          "split_k": 1,
+          "reduction_scheme": 0,
+          "cta_swizzling": 0,
+          "custom_option": 2,
+          "workspace_bytes": 0,
+          "waves": 0.8648648858070374
+        },
+        "workspace_limit_bytes": 33554432,
+        "tflops": 40.33990345722509,
+        "check": {
+          "sampled": 256,
+          "max_abs_error": 0.030292267855656977,
+          "rtol": 0.03,
+          "atol": 0.25,
+          "passed": true
+        }
+      },
+      {
+        "name": "decode-m8",
+        "m": 8,
+        "n": 8192,
+        "k": 8192,
+        "dtype": "bf16",
+        "compute_type": "CUBLAS_COMPUTE_32F",
+        "scale_type": "CUDA_R_32F",
+        "trans_a": "T",
+        "trans_b": "N",
+        "lda": 8192,
+        "ldb": 8192,
+        "ldc": 8,
+        "epilogue": "CUBLASLT_EPILOGUE_DEFAULT",
+        "algorithm": {
+          "id": 66,
+          "tile": 7,
+          "stages": 35,
+          "split_k": 1,
+          "reduction_scheme": 0,
+          "cta_swizzling": 0,
+          "custom_option": 2,
+          "workspace_bytes": 0,
+          "waves": 0.8648648858070374
+        },
+        "workspace_limit_bytes": 33554432,
+        "tflops": 40.3409520749205,
+        "check": {
+          "sampled": 256,
+          "max_abs_error": 0.24894433794543147,
+          "rtol": 0.08,
+          "atol": 1.0,
+          "passed": true
+        }
+      },
+      {
+        "name": "decode-m64",
+        "m": 64,
+        "n": 8192,
+        "k": 8192,
+        "dtype": "fp16",
+        "compute_type": "CUBLAS_COMPUTE_32F",
+        "scale_type": "CUDA_R_32F",
+        "trans_a": "T",
+        "trans_b": "N",
+        "lda": 8192,
+        "ldb": 8192,
+        "ldc": 64,
+        "epilogue": "CUBLASLT_EPILOGUE_DEFAULT",
+        "algorithm": {
+          "id": 66,
+          "tile": 15,
+          "stages": 35,
+          "split_k": 1,
+          "reduction_scheme": 0,
+          "cta_swizzling": 0,
+          "custom_option": 3,
+          "workspace_bytes": 0,
+          "waves": 0.8648648858070374
+        },
+        "workspace_limit_bytes": 33554432,
+        "tflops": 302.1832704827431,
+        "check": {
+          "sampled": 256,
+          "max_abs_error": 0.02983314079028787,
+          "rtol": 0.03,
+          "atol": 0.25,
+          "passed": true
+        }
+      },
+      {
+        "name": "decode-m64",
+        "m": 64,
+        "n": 8192,
+        "k": 8192,
+        "dtype": "bf16",
+        "compute_type": "CUBLAS_COMPUTE_32F",
+        "scale_type": "CUDA_R_32F",
+        "trans_a": "T",
+        "trans_b": "N",
+        "lda": 8192,
+        "ldb": 8192,
+        "ldc": 64,
+        "epilogue": "CUBLASLT_EPILOGUE_DEFAULT",
+        "algorithm": {
+          "id": 66,
+          "tile": 15,
+          "stages": 35,
+          "split_k": 1,
+          "reduction_scheme": 0,
+          "cta_swizzling": 0,
+          "custom_option": 3,
+          "workspace_bytes": 0,
+          "waves": 0.8648648858070374
+        },
+        "workspace_limit_bytes": 33554432,
+        "tflops": 302.4656403102351,
+        "check": {
+          "sampled": 256,
+          "max_abs_error": 0.23378808982670307,
+          "rtol": 0.08,
+          "atol": 1.0,
+          "passed": true
+        }
+      },
+      {
+        "name": "square-k8191",
+        "m": 8192,
+        "n": 8192,
+        "k": 8191,
+        "dtype": "fp16",
+        "compute_type": "CUBLAS_COMPUTE_32F",
+        "scale_type": "CUDA_R_32F",
+        "trans_a": "T",
+        "trans_b": "N",
+        "lda": 8191,
+        "ldb": 8191,
+        "ldc": 8192,
+        "epilogue": "CUBLASLT_EPILOGUE_DEFAULT",
+        "algorithm": {
+          "id": 24,
+          "tile": 24,
+          "stages": 0,
+          "split_k": 1,
+          "reduction_scheme": 0,
+          "cta_swizzling": 0,
+          "custom_option": 0,
+          "workspace_bytes": 0,
+          "waves": 13.837838172912598
+        },
+        "workspace_limit_bytes": 33554432,
+        "tflops": 172.2224086214368,
+        "check": {
+          "sampled": 256,
+          "max_abs_error": 0.030363578764081467,
+          "rtol": 0.03,
+          "atol": 0.25,
+          "passed": true
+        }
+      },
+      {
+        "name": "square-k8191",
+        "m": 8192,
+        "n": 8192,
+        "k": 8191,
+        "dtype": "bf16",
+        "compute_type": "CUBLAS_COMPUTE_32F",
+        "scale_type": "CUDA_R_32F",
+        "trans_a": "T",
+        "trans_b": "N",
+        "lda": 8191,
+        "ldb": 8191,
+        "ldc": 8192,
+        "epilogue": "CUBLASLT_EPILOGUE_DEFAULT",
+        "algorithm": {
+          "id": 24,
+          "tile": 24,
+          "stages": 0,
+          "split_k": 1,
+          "reduction_scheme": 0,
+          "cta_swizzling": 0,
+          "custom_option": 0,
+          "workspace_bytes": 0,
+          "waves": 13.837838172912598
+        },
+        "workspace_limit_bytes": 33554432,
+        "tflops": 174.6826368454365,
+        "check": {
+          "sampled": 256,
+          "max_abs_error": 0.24836565041914585,
+          "rtol": 0.08,
+          "atol": 1.0,
+          "passed": true
+        }
+      }
+    ],
+    "checks": {
+      "gemm_shape_decode-m64_bf16_check": true,
+      "gemm_shape_decode-m64_fp16_check": true,
+      "gemm_shape_decode-m8_bf16_check": true,
+      "gemm_shape_decode-m8_fp16_check": true,
+      "gemm_shape_prefill_bf16_check": true,
+      "gemm_shape_prefill_fp16_check": true,
+      "gemm_shape_square-k8191_bf16_check": true,
+      "gemm_shape_square-k8191_fp16_check": true,
+      "gemm_shape_square_bf16_check": true,
+      "gemm_shape_square_fp16_check": true
+    },
+    "samples_ms": {
+      "gemm_shape_decode-m64_bf16": [
+        0.028423897062188785,
+        0.02839641872734512,
+        0.028402240219071517,
+        0.02839970379177422,
+        0.028402175411678016,
+        0.02839799868690388,
+        0.028397985278477637
+      ],
+      "gemm_shape_decode-m64_fp16": [
+        0.028428887053257603,
+        0.028430667913973487,
+        0.028416387595316835,
+        0.028429087650835114,
+        0.02842347314752684,
+        0.02842403927846781,
+        0.02842624139409646
+      ],
+      "gemm_shape_decode-m8_bf16": [
+        0.026616117945099296,
+        0.02661667037520249,
+        0.026619532967555412,
+        0.026614433451792204,
+        0.026616262330239903,
+        0.02661779406825331,
+        0.026618202113215896
+      ],
+      "gemm_shape_decode-m8_fp16": [
+        0.02661736226360966,
+        0.026616481549402948,
+        0.026620027254947425,
+        0.02661794594448722,
+        0.026616016266425815,
+        0.02661862932885988,
+        0.026615584217947057
+      ],
+      "gemm_shape_prefill_bf16": [
+        1.4424347362929968,
+        1.4423048719227742,
+        1.436836187788051,
+        1.4453796825820593,
+        1.4432587109023718,
+        1.442600936340771,
+        1.4448280608911308
+      ],
+      "gemm_shape_prefill_fp16": [
+        1.5342930880459873,
+        1.5295946525804924,
+        1.5379861773866597,
+        1.5412240461869673,
+        1.5367947202740293,
+        1.543195666688861,
+        1.5390993754069011
+      ],
+      "gemm_shape_square-k8191_bf16": [
+        6.292661190032959,
+        6.292442798614502,
+        6.294345855712891,
+        6.292157173156738,
+        6.293570041656494,
+        6.295662879943848,
+        6.295028209686279
+      ],
+      "gemm_shape_square-k8191_fp16": [
+        6.383003234863281,
+        6.383488178253174,
+        6.383572101593018,
+        6.382681846618652,
+        6.383872985839844,
+        6.383474826812744,
+        6.381333827972412
+      ],
+      "gemm_shape_square_bf16": [
+        0.817606669353194,
+        0.8245458028402674,
+        0.8200627215894829,
+        0.8194594785391566,
+        0.8213635180369917,
+        0.8200566548420244,
+        0.8136165879337663
+      ],
+      "gemm_shape_square_fp16": [
+        0.8654512347597064,
+        0.8722273261000068,
+        0.8787224839776109,
+        0.8777296718580898,
+        0.8712073652259199,
+        0.8729997775255344,
+        0.8712480553300865
+      ]
+    },
+    "gpu_state": {
+      "source": "NVML 13.580.95.05 via nvml-wrapper 0.13",
+      "poll_interval_ms": 5.0,
+      "max_sm_clock_mhz": 2032,
+      "max_mem_clock_mhz": 3996,
+      "power_limit_w": 1100.0,
+      "warmup_ms": 1000.0,
+      "round_ms": 200.0,
+      "rounds": {
+        "gemm_shape_decode-m64_bf16": [
+          {
+            "polls": 17,
+            "wall_ms": 194.092211,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1119.0021812848022,
+            "temperature_c": {
+              "min": 47.0,
+              "median": 47.0,
+              "max": 47.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 16,
+            "wall_ms": 193.907389,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": null,
+            "temperature_c": {
+              "min": 47.0,
+              "median": 47.0,
+              "max": 47.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 18,
+            "wall_ms": 193.946367,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1119.2124460370662,
+            "temperature_c": {
+              "min": 47.0,
+              "median": 47.0,
+              "max": 47.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 19,
+            "wall_ms": 193.929127,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": null,
+            "temperature_c": {
+              "min": 47.0,
+              "median": 47.0,
+              "max": 47.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 20,
+            "wall_ms": 193.949028,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 999.2868131619468,
+            "temperature_c": {
+              "min": 47.0,
+              "median": 47.0,
+              "max": 47.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 18,
+            "wall_ms": 193.916057,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 990.150820749718,
+            "temperature_c": {
+              "min": 47.0,
+              "median": 47.0,
+              "max": 47.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 16,
+            "wall_ms": 193.916387,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 881.065840157168,
+            "temperature_c": {
+              "min": 47.0,
+              "median": 47.0,
+              "max": 48.0
+            },
+            "clock_limit_reasons": {}
+          }
+        ],
+        "gemm_shape_decode-m64_fp16": [
+          {
+            "polls": 18,
+            "wall_ms": 194.640756,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 945.8674344367404,
+            "temperature_c": {
+              "min": 47.0,
+              "median": 47.0,
+              "max": 47.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 17,
+            "wall_ms": 194.650786,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1197.834876201279,
+            "temperature_c": {
+              "min": 47.0,
+              "median": 47.0,
+              "max": 47.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 17,
+            "wall_ms": 194.552185,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1047.6797445675336,
+            "temperature_c": {
+              "min": 47.0,
+              "median": 47.0,
+              "max": 47.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 15,
+            "wall_ms": 194.641606,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 892.1511145485025,
+            "temperature_c": {
+              "min": 47.0,
+              "median": 47.0,
+              "max": 48.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 18,
+            "wall_ms": 194.603486,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1051.7248600598562,
+            "temperature_c": {
+              "min": 48.0,
+              "median": 48.0,
+              "max": 48.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 19,
+            "wall_ms": 194.604377,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1048.9032406468878,
+            "temperature_c": {
+              "min": 48.0,
+              "median": 48.0,
+              "max": 48.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 19,
+            "wall_ms": 194.619367,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1193.8383357888513,
+            "temperature_c": {
+              "min": 48.0,
+              "median": 48.0,
+              "max": 48.0
+            },
+            "clock_limit_reasons": {}
+          }
+        ],
+        "gemm_shape_decode-m8_bf16": [
+          {
+            "polls": 18,
+            "wall_ms": 194.100571,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 798.9858321011718,
+            "temperature_c": {
+              "min": 42.0,
+              "median": 42.0,
+              "max": 42.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 18,
+            "wall_ms": 194.102591,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 657.6304678702932,
+            "temperature_c": {
+              "min": 42.0,
+              "median": 42.0,
+              "max": 42.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 19,
+            "wall_ms": 194.123981,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 801.7278654858543,
+            "temperature_c": {
+              "min": 42.0,
+              "median": 42.0,
+              "max": 42.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 19,
+            "wall_ms": 194.085551,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 797.9328036036309,
+            "temperature_c": {
+              "min": 42.0,
+              "median": 42.0,
+              "max": 42.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 20,
+            "wall_ms": 194.100211,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 806.0539714853355,
+            "temperature_c": {
+              "min": 42.0,
+              "median": 42.0,
+              "max": 42.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 14,
+            "wall_ms": 194.112521,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 878.742578299048,
+            "temperature_c": {
+              "min": 42.0,
+              "median": 42.0,
+              "max": 42.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 19,
+            "wall_ms": 194.11357,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 905.7615214654268,
+            "temperature_c": {
+              "min": 42.0,
+              "median": 42.0,
+              "max": 42.0
+            },
+            "clock_limit_reasons": {}
+          }
+        ],
+        "gemm_shape_decode-m8_fp16": [
+          {
+            "polls": 19,
+            "wall_ms": 195.546905,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 833.7370465671804,
+            "temperature_c": {
+              "min": 42.0,
+              "median": 42.0,
+              "max": 42.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 20,
+            "wall_ms": 195.539062,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 832.8452802158241,
+            "temperature_c": {
+              "min": 42.0,
+              "median": 42.0,
+              "max": 42.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 19,
+            "wall_ms": 195.569823,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 839.514167879339,
+            "temperature_c": {
+              "min": 42.0,
+              "median": 42.0,
+              "max": 42.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 18,
+            "wall_ms": 195.549262,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": null,
+            "temperature_c": {
+              "min": 42.0,
+              "median": 42.0,
+              "max": 42.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 20,
+            "wall_ms": 195.533592,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": null,
+            "temperature_c": {
+              "min": 42.0,
+              "median": 42.0,
+              "max": 42.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 20,
+            "wall_ms": 195.555012,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": null,
+            "temperature_c": {
+              "min": 42.0,
+              "median": 43.0,
+              "max": 43.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 20,
+            "wall_ms": 195.532393,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": null,
+            "temperature_c": {
+              "min": 43.0,
+              "median": 43.0,
+              "max": 43.0
+            },
+            "clock_limit_reasons": {}
+          }
+        ],
+        "gemm_shape_prefill_bf16": [
+          {
+            "polls": 15,
+            "wall_ms": 200.512721,
+            "sm_clock_mhz": {
+              "min": 1147.0,
+              "median": 1147.0,
+              "max": 1147.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": null,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 15
+            }
+          },
+          {
+            "polls": 17,
+            "wall_ms": 200.491252,
+            "sm_clock_mhz": {
+              "min": 1147.0,
+              "median": 1155.0,
+              "max": 1155.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1255.643495514175,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 17
+            }
+          },
+          {
+            "polls": 16,
+            "wall_ms": 199.731644,
+            "sm_clock_mhz": {
+              "min": 1147.0,
+              "median": 1147.0,
+              "max": 1147.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1169.385957610899,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 52.0,
+              "max": 52.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 16
+            }
+          },
+          {
+            "polls": 15,
+            "wall_ms": 200.918875,
+            "sm_clock_mhz": {
+              "min": 1147.0,
+              "median": 1147.0,
+              "max": 1155.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": null,
+            "temperature_c": {
+              "min": 52.0,
+              "median": 52.0,
+              "max": 52.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 15
+            }
+          },
+          {
+            "polls": 17,
+            "wall_ms": 200.624433,
+            "sm_clock_mhz": {
+              "min": 1147.0,
+              "median": 1147.0,
+              "max": 1155.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1075.502888133335,
+            "temperature_c": {
+              "min": 52.0,
+              "median": 52.0,
+              "max": 52.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 17
+            }
+          },
+          {
+            "polls": 15,
+            "wall_ms": 200.532468,
+            "sm_clock_mhz": {
+              "min": 1147.0,
+              "median": 1155.0,
+              "max": 1155.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": null,
+            "temperature_c": {
+              "min": 52.0,
+              "median": 52.0,
+              "max": 52.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 15
+            }
+          },
+          {
+            "polls": 17,
+            "wall_ms": 200.84231,
+            "sm_clock_mhz": {
+              "min": 1147.0,
+              "median": 1147.0,
+              "max": 1155.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1272.1768643605228,
+            "temperature_c": {
+              "min": 52.0,
+              "median": 52.0,
+              "max": 52.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 17
+            }
+          }
+        ],
+        "gemm_shape_prefill_fp16": [
+          {
+            "polls": 15,
+            "wall_ms": 202.539487,
+            "sm_clock_mhz": {
+              "min": 1080.0,
+              "median": 1087.0,
+              "max": 1095.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1075.9708457112322,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 15
+            }
+          },
+          {
+            "polls": 16,
+            "wall_ms": 201.918413,
+            "sm_clock_mhz": {
+              "min": 1080.0,
+              "median": 1080.0,
+              "max": 1087.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 950.2664612798714,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 16
+            }
+          },
+          {
+            "polls": 15,
+            "wall_ms": 203.025635,
+            "sm_clock_mhz": {
+              "min": 1080.0,
+              "median": 1080.0,
+              "max": 1087.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 955.0417187736102,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 52.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 15
+            }
+          },
+          {
+            "polls": 19,
+            "wall_ms": 203.453028,
+            "sm_clock_mhz": {
+              "min": 1080.0,
+              "median": 1080.0,
+              "max": 1080.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1091.3146230595803,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 52.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 19
+            }
+          },
+          {
+            "polls": 19,
+            "wall_ms": 202.868173,
+            "sm_clock_mhz": {
+              "min": 1080.0,
+              "median": 1087.0,
+              "max": 1087.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1051.9972708146638,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 52.0,
+              "max": 52.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 19
+            }
+          },
+          {
+            "polls": 19,
+            "wall_ms": 203.712721,
+            "sm_clock_mhz": {
+              "min": 1080.0,
+              "median": 1080.0,
+              "max": 1087.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1082.2375436320194,
+            "temperature_c": {
+              "min": 52.0,
+              "median": 52.0,
+              "max": 52.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 19
+            }
+          },
+          {
+            "polls": 19,
+            "wall_ms": 203.171953,
+            "sm_clock_mhz": {
+              "min": 1080.0,
+              "median": 1080.0,
+              "max": 1087.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1280.3228630548033,
+            "temperature_c": {
+              "min": 52.0,
+              "median": 52.0,
+              "max": 52.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 19
+            }
+          }
+        ],
+        "gemm_shape_square-k8191_bf16": [
+          {
+            "polls": 19,
+            "wall_ms": 201.37656,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": null,
+            "temperature_c": {
+              "min": 45.0,
+              "median": 45.0,
+              "max": 45.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 20,
+            "wall_ms": 201.369008,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": null,
+            "temperature_c": {
+              "min": 45.0,
+              "median": 45.0,
+              "max": 45.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 21,
+            "wall_ms": 201.429748,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": null,
+            "temperature_c": {
+              "min": 45.0,
+              "median": 45.0,
+              "max": 45.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 21,
+            "wall_ms": 201.359848,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 802.5037038718058,
+            "temperature_c": {
+              "min": 45.0,
+              "median": 45.0,
+              "max": 45.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 21,
+            "wall_ms": 201.406028,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 721.9181380038235,
+            "temperature_c": {
+              "min": 45.0,
+              "median": 45.0,
+              "max": 45.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 23,
+            "wall_ms": 201.473308,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 660.6508049289392,
+            "temperature_c": {
+              "min": 45.0,
+              "median": 45.0,
+              "max": 45.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 22,
+            "wall_ms": 201.452686,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 674.5337714461843,
+            "temperature_c": {
+              "min": 45.0,
+              "median": 45.0,
+              "max": 45.0
+            },
+            "clock_limit_reasons": {}
+          }
+        ],
+        "gemm_shape_square-k8191_fp16": [
+          {
+            "polls": 12,
+            "wall_ms": 204.269144,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 727.2982073907311,
+            "temperature_c": {
+              "min": 46.0,
+              "median": 46.0,
+              "max": 46.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 22,
+            "wall_ms": 204.283093,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 782.1317219046663,
+            "temperature_c": {
+              "min": 46.0,
+              "median": 46.0,
+              "max": 46.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 23,
+            "wall_ms": 204.285565,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 815.7692069170719,
+            "temperature_c": {
+              "min": 46.0,
+              "median": 46.0,
+              "max": 46.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 19,
+            "wall_ms": 204.257244,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 684.8367301280819,
+            "temperature_c": {
+              "min": 46.0,
+              "median": 46.0,
+              "max": 46.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 19,
+            "wall_ms": 204.295224,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 808.5288066759845,
+            "temperature_c": {
+              "min": 46.0,
+              "median": 46.0,
+              "max": 46.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 22,
+            "wall_ms": 204.282805,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 743.4873836889534,
+            "temperature_c": {
+              "min": 46.0,
+              "median": 46.0,
+              "max": 46.0
+            },
+            "clock_limit_reasons": {}
+          },
+          {
+            "polls": 20,
+            "wall_ms": 204.214232,
+            "sm_clock_mhz": {
+              "min": 2032.0,
+              "median": 2032.0,
+              "max": 2032.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": null,
+            "temperature_c": {
+              "min": 46.0,
+              "median": 46.0,
+              "max": 46.0
+            },
+            "clock_limit_reasons": {}
+          }
+        ],
+        "gemm_shape_square_bf16": [
+          {
+            "polls": 19,
+            "wall_ms": 203.596248,
+            "sm_clock_mhz": {
+              "min": 1140.0,
+              "median": 1140.0,
+              "max": 1155.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1248.2116715173868,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 19
+            }
+          },
+          {
+            "polls": 20,
+            "wall_ms": 205.322955,
+            "sm_clock_mhz": {
+              "min": 1147.0,
+              "median": 1151.0,
+              "max": 1155.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1071.942592281351,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 20
+            }
+          },
+          {
+            "polls": 18,
+            "wall_ms": 204.206714,
+            "sm_clock_mhz": {
+              "min": 1147.0,
+              "median": 1147.0,
+              "max": 1147.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1046.0355821742544,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 18
+            }
+          },
+          {
+            "polls": 19,
+            "wall_ms": 204.056953,
+            "sm_clock_mhz": {
+              "min": 1140.0,
+              "median": 1140.0,
+              "max": 1147.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1061.876293713099,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 19
+            }
+          },
+          {
+            "polls": 21,
+            "wall_ms": 204.531238,
+            "sm_clock_mhz": {
+              "min": 1140.0,
+              "median": 1140.0,
+              "max": 1147.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1108.5833382079966,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 21
+            }
+          },
+          {
+            "polls": 18,
+            "wall_ms": 204.206184,
+            "sm_clock_mhz": {
+              "min": 1140.0,
+              "median": 1147.0,
+              "max": 1147.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1077.355145259624,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 52.0,
+              "max": 52.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 18
+            }
+          },
+          {
+            "polls": 16,
+            "wall_ms": 202.601799,
+            "sm_clock_mhz": {
+              "min": 1147.0,
+              "median": 1162.5,
+              "max": 1170.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1488.7880928090017,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 52.0,
+              "max": 52.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 16
+            }
+          }
+        ],
+        "gemm_shape_square_fp16": [
+          {
+            "polls": 18,
+            "wall_ms": 199.931068,
+            "sm_clock_mhz": {
+              "min": 1095.0,
+              "median": 1095.0,
+              "max": 1095.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1115.7671545409323,
+            "temperature_c": {
+              "min": 50.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 18
+            }
+          },
+          {
+            "polls": 16,
+            "wall_ms": 201.495161,
+            "sm_clock_mhz": {
+              "min": 1095.0,
+              "median": 1095.0,
+              "max": 1095.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1201.8561162312371,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 16
+            }
+          },
+          {
+            "polls": 19,
+            "wall_ms": 202.996256,
+            "sm_clock_mhz": {
+              "min": 1095.0,
+              "median": 1095.0,
+              "max": 1095.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1232.592490294654,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 19
+            }
+          },
+          {
+            "polls": 18,
+            "wall_ms": 202.766653,
+            "sm_clock_mhz": {
+              "min": 1095.0,
+              "median": 1095.0,
+              "max": 1095.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1099.3891123639266,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 18
+            }
+          },
+          {
+            "polls": 16,
+            "wall_ms": 201.260458,
+            "sm_clock_mhz": {
+              "min": 1095.0,
+              "median": 1095.0,
+              "max": 1095.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1095.8967950240346,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 16
+            }
+          },
+          {
+            "polls": 18,
+            "wall_ms": 201.674479,
+            "sm_clock_mhz": {
+              "min": 1095.0,
+              "median": 1095.0,
+              "max": 1095.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1300.6794892092294,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 18
+            }
+          },
+          {
+            "polls": 18,
+            "wall_ms": 201.269196,
+            "sm_clock_mhz": {
+              "min": 1095.0,
+              "median": 1095.0,
+              "max": 1095.0
+            },
+            "mem_clock_mhz": {
+              "min": 3996.0,
+              "median": 3996.0,
+              "max": 3996.0
+            },
+            "power_w": 1084.7942825624436,
+            "temperature_c": {
+              "min": 51.0,
+              "median": 51.0,
+              "max": 51.0
+            },
+            "clock_limit_reasons": {
+              "sw_power_cap": 18
+            }
+          }
+        ]
+      }
+    }
   }
 }
