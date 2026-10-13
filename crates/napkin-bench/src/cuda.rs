@@ -20,7 +20,8 @@ use cudarc::driver::safe::{
 use cudarc::driver::sys as dsys;
 use cudarc::nvrtc::compile_ptx;
 use half::{bf16, f16};
-use napkin_profile::{Dtype, GemmAlgo, GemmCheck, GemmShape, Measured, RoundState, tflops};
+use napkin_profile::{Dtype, GemmAlgo, GemmCheck, GemmShape, GemmShapeSuite};
+use napkin_profile::{Measured, RoundState, tflops};
 
 use crate::gpu_state::{Monitor, Window, round_states};
 
@@ -920,7 +921,6 @@ fn measure_gemm_shape(
     workspace: &mut CudaSlice<u8>,
     shape: &GemmShapeCase,
     spec: &GemmSpec,
-    library: &str,
     cfg: &Config,
 ) -> Result<(GemmShape, Vec<f64>, Vec<RoundState>), BenchError> {
     let mut buffers = GemmShapeBuffers::new(stream, shape, spec)?;
@@ -984,7 +984,6 @@ fn measure_gemm_shape(
         ldb: shape.k,
         ldc: shape.m,
         epilogue: "CUBLASLT_EPILOGUE_DEFAULT".to_owned(),
-        library: library.to_owned(),
         algorithm: selected.metadata,
         workspace_limit_bytes: u64::try_from(GEMM_SHAPE_WORKSPACE_BYTES).unwrap_or(u64::MAX),
         tflops: tflops(
@@ -1590,6 +1589,9 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
     let library_version = unsafe { ltsys::cublasLtGetVersion() };
     let library = format!("cuBLASLt {library_version} (cublasLtGetVersion)");
     let mut gemm_shapes = Vec::new();
+    let mut gemm_shape_samples = BTreeMap::new();
+    let mut gemm_shape_checks = BTreeMap::new();
+    let mut gemm_shape_states = BTreeMap::new();
     for shape in gemm_shape_cases() {
         for spec in gemm_specs()
             .into_iter()
@@ -1603,13 +1605,13 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
                 &mut lt_workspace,
                 &shape,
                 &spec,
-                &library,
                 cfg,
             )?;
             let key = measurement.samples_key();
-            let median_ms = record(&key, &samples);
-            gemm_states.insert(key.clone(), states);
-            checks.insert(format!("{key}_check"), measurement.check.passed);
+            let median_ms = crate::stats::median(&mut samples.clone());
+            gemm_shape_samples.insert(key.clone(), samples);
+            gemm_shape_states.insert(key.clone(), states);
+            gemm_shape_checks.insert(format!("{key}_check"), measurement.check.passed);
             progress(
                 &key,
                 &format!(
@@ -1624,21 +1626,25 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
     let (cc_major, cc_minor) = ctx0.compute_capability()?;
     let sm_count =
         ctx0.attribute(dsys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)?;
-    let all_ok = checks.values().all(|v| *v);
+    let captured_at = crate::iso_now();
+    let gpu_request = if cfg.quick {
+        format!("{gpu_request} --quick")
+    } else {
+        gpu_request.to_owned()
+    };
+    let device_name = ctx0.name()?;
+    let driver_version = driver_version_string();
+    let all_ok = checks.values().all(|v| *v) && gemm_shape_checks.values().all(|v| *v);
 
     Ok(Measured {
-        captured_at: crate::iso_now(),
-        gpu_request: if cfg.quick {
-            format!("{gpu_request} --quick")
-        } else {
-            gpu_request.to_owned()
-        },
-        device_name: ctx0.name()?,
+        captured_at: captured_at.clone(),
+        gpu_request: gpu_request.clone(),
+        device_name: device_name.clone(),
         device_count,
         compute_capability: format!("{cc_major}.{cc_minor}"),
         sm_count: sm_count.cast_unsigned(),
         memory_bytes: ctx0.total_mem()? as u64,
-        driver_version: driver_version_string(),
+        driver_version: driver_version.clone(),
         cuda_version: "12.9".to_owned(),
         rounds: cfg.rounds,
         launch_us,
@@ -1665,7 +1671,24 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
             let n32 = u32::try_from(n).unwrap_or(0);
             [n32, n32, n32]
         },
-        gemm_shapes,
+        gemm_shapes: Some(GemmShapeSuite {
+            captured_at,
+            gpu_request,
+            device_name,
+            driver_version,
+            cuda_version: "12.9".to_owned(),
+            library,
+            pcie_gen: pcie.r#gen,
+            pcie_width: pcie.width,
+            shapes: gemm_shapes,
+            checks: gemm_shape_checks,
+            samples_ms: gemm_shape_samples,
+            gpu_state: Some(
+                monitor
+                    .state(cfg.gemm_warmup, cfg.gemm_round, gemm_shape_states)
+                    .map_err(BenchError)?,
+            ),
+        }),
         checks,
         samples_ms,
         gpu_state: Some(
@@ -1684,6 +1707,13 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
                     .iter()
                     .filter(|(_, v)| !**v)
                     .map(|(k, _)| k)
+                    .chain(
+                        m.gemm_shapes
+                            .iter()
+                            .flat_map(|suite| suite.checks.iter())
+                            .filter(|(_, v)| !**v)
+                            .map(|(k, _)| k)
+                    )
                     .collect::<Vec<_>>()
             );
             println!(

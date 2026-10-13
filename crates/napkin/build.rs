@@ -7,8 +7,8 @@ use std::process::ExitCode;
 
 use napkin_profile::collective::{Collective, CollectiveEvidence, Curve, CurvePoint, Topology};
 use napkin_profile::{
-    Ceiling, Dtype, GemmAlgo, GemmCheck, GemmShape, GpuState, Measured, Profile, RoundState, Span,
-    tflops,
+    Ceiling, Dtype, GemmAlgo, GemmCheck, GemmShape, GemmShapeSuite, GpuState, Measured, Profile,
+    RoundState, Span, tflops,
 };
 use serde::Deserialize;
 
@@ -460,8 +460,44 @@ fn validate_measured(id: &str, measured: &Measured) -> Result<(), String> {
             "measured profile {id:?} has failing check {name:?}"
         ));
     }
+    if let Some(suite) = &measured.gemm_shapes {
+        validate_gemm_shape_suite(id, measured, suite)?;
+    }
+    Ok(())
+}
+
+fn validate_gemm_shape_suite(
+    id: &str,
+    measured: &Measured,
+    suite: &GemmShapeSuite,
+) -> Result<(), String> {
+    for (name, value) in [
+        ("captured_at", suite.captured_at.as_str()),
+        ("gpu_request", suite.gpu_request.as_str()),
+        ("device_name", suite.device_name.as_str()),
+        ("driver_version", suite.driver_version.as_str()),
+        ("cuda_version", suite.cuda_version.as_str()),
+        ("library", suite.library.as_str()),
+    ] {
+        if value.is_empty() {
+            return Err(format!(
+                "measured profile {id:?} GEMM shape suite has an empty {name}"
+            ));
+        }
+    }
+    if suite.device_name != measured.device_name {
+        return Err(format!(
+            "measured profile {id:?} GEMM shape suite names {:?}, profile names {:?}",
+            suite.device_name, measured.device_name
+        ));
+    }
+    if let Some((name, _)) = suite.checks.iter().find(|(_, passed)| !**passed) {
+        return Err(format!(
+            "measured profile {id:?} GEMM shape suite has failing check {name:?}"
+        ));
+    }
     let mut shape_ids = std::collections::BTreeSet::new();
-    for shape in &measured.gemm_shapes {
+    for shape in &suite.shapes {
         if !shape_ids.insert((shape.name.as_str(), shape.dtype)) {
             return Err(format!(
                 "measured profile {id:?} has duplicate GEMM shape ({:?}, {})",
@@ -481,9 +517,16 @@ fn validate_measured(id: &str, measured: &Measured) -> Result<(), String> {
             ));
         }
         let key = shape.samples_key();
-        let samples = measured.samples_ms.get(&key).ok_or_else(|| {
+        let check_key = format!("{key}_check");
+        if suite.checks.get(&check_key) != Some(&shape.check.passed) {
+            return Err(format!(
+                "measured profile {id:?} GEMM shape {:?} {} has a missing or inconsistent suite check {check_key:?}",
+                shape.name, shape.dtype
+            ));
+        }
+        let samples = suite.samples_ms.get(&key).ok_or_else(|| {
             format!(
-                "measured profile {id:?} GEMM shape {:?} {} is missing samples_ms[{key:?}]",
+                "measured profile {id:?} GEMM shape {:?} {} is missing suite.samples_ms[{key:?}]",
                 shape.name, shape.dtype
             )
         })?;
@@ -859,7 +902,10 @@ fn emit_measured(measured: &Measured) -> String {
                 gemm_shape[0], gemm_shape[1], gemm_shape[2]
             ),
         ),
-        ("gemm_shapes", gemm_shapes_literal(gemm_shapes)),
+        (
+            "gemm_shapes",
+            gemm_shape_suite_literal(gemm_shapes.as_ref()),
+        ),
         ("checks", bool_map(checks)),
         ("samples_ms", samples_map(samples_ms)),
         (
@@ -886,6 +932,30 @@ fn gemm_shapes_literal(shapes: &[GemmShape]) -> String {
     format!("vec![{values}]")
 }
 
+fn gemm_shape_suite_literal(suite: Option<&GemmShapeSuite>) -> String {
+    let Some(suite) = suite else {
+        return "None".to_owned();
+    };
+    format!(
+        "Some(GemmShapeSuite {{ captured_at: {}, gpu_request: {}, device_name: {}, driver_version: {}, cuda_version: {}, library: {}, pcie_gen: {}, pcie_width: {}, shapes: {}, checks: {}, samples_ms: {}, gpu_state: {} }})",
+        string_literal(&suite.captured_at),
+        string_literal(&suite.gpu_request),
+        string_literal(&suite.device_name),
+        string_literal(&suite.driver_version),
+        string_literal(&suite.cuda_version),
+        string_literal(&suite.library),
+        option_u8_literal(suite.pcie_gen),
+        option_u8_literal(suite.pcie_width),
+        gemm_shapes_literal(&suite.shapes),
+        bool_map(&suite.checks),
+        samples_map(&suite.samples_ms),
+        suite
+            .gpu_state
+            .as_ref()
+            .map_or_else(|| "None".to_owned(), gpu_state_literal),
+    )
+}
+
 fn gemm_shape_literal(shape: &GemmShape) -> String {
     let GemmShape {
         name,
@@ -901,14 +971,13 @@ fn gemm_shape_literal(shape: &GemmShape) -> String {
         ldb,
         ldc,
         epilogue,
-        library,
         algorithm,
         workspace_limit_bytes,
         tflops,
         check,
     } = shape;
     format!(
-        "GemmShape {{ name: {}, m: {m}_u32, n: {n}_u32, k: {k}_u32, dtype: {}, compute_type: {}, scale_type: {}, trans_a: {}, trans_b: {}, lda: {lda}_u32, ldb: {ldb}_u32, ldc: {ldc}_u32, epilogue: {}, library: {}, algorithm: {}, workspace_limit_bytes: {workspace_limit_bytes}_u64, tflops: {}, check: {} }}",
+        "GemmShape {{ name: {}, m: {m}_u32, n: {n}_u32, k: {k}_u32, dtype: {}, compute_type: {}, scale_type: {}, trans_a: {}, trans_b: {}, lda: {lda}_u32, ldb: {ldb}_u32, ldc: {ldc}_u32, epilogue: {}, algorithm: {}, workspace_limit_bytes: {workspace_limit_bytes}_u64, tflops: {}, check: {} }}",
         string_literal(name),
         dtype_literal(*dtype),
         string_literal(compute_type),
@@ -916,7 +985,6 @@ fn gemm_shape_literal(shape: &GemmShape) -> String {
         string_literal(trans_a),
         string_literal(trans_b),
         string_literal(epilogue),
-        string_literal(library),
         gemm_algo_literal(algorithm),
         float_literal(*tflops),
         gemm_check_literal(check),

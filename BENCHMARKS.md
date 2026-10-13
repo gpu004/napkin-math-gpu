@@ -240,6 +240,21 @@ record the measured evidence. `napkin validate` builds the GPU-free report in
 `VALIDATION.md`; collect or refresh observations with the opt-in
 `modal run modal/validate.py`.
 
+## Merge a GEMM shape suite without replacing scalar calibration
+
+Run a full benchmark and merge only its cuBLASLt shape records into the
+existing measured profile:
+
+```sh
+modal run modal/bench.py --gpu h100 --merge-shapes
+```
+
+The run is preserved at `target/modal/<gpu>.run.json`. `napkin merge-shapes`
+requires successful run and shape checks plus matching device name and memory
+size; it copies only the provenance-bearing `gemm_shapes` suite. The profile's
+generic cuBLAS `GemmEx` rate, scalar samples, checks, and NVML state remain from
+their original capture. Quick runs cannot be merged.
+
 ## Development checks
 
 GPU-free checks run locally and in CI:

@@ -50,7 +50,7 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 
 Dense GEMM rows are the cuBLAS `GemmEx` 8192³ rate, a large-GEMM library ceiling, not the rate of every GEMM.
 
-† Rounds disagree by more than 5%: host RAM copy 13%, host → device 24%, device → host 6.4%, fp16 GEMM 10%, bf16 GEMM 14%, tf32 GEMM 13%. Spread is the slowest of the 7 rounds over the fastest, minus one: the observed range, not a confidence interval. The cell shows the median round.
+† Rounds disagree by more than 5%: host RAM copy 13%, host → device 24%, device → host 6.4%, fp16 GEMM 10%, bf16 GEMM 14%, tf32 GEMM 13%. Spread is the slowest measured round over the fastest, minus one: the observed range, not a confidence interval. The cell shows the median round.
 
 | GEMM rounds | SM clock | Memory clock | Power | Temperature | Clock limits |
 | --- | ---: | ---: | ---: | ---: | --- |

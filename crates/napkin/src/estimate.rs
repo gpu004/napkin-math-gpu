@@ -260,7 +260,7 @@ pub enum ComputeSource {
     /// The generic profile throughput and its measured/datasheet basis.
     Profile(Basis),
     /// An exact measured shape rate.
-    Shape { name: String },
+    Shape { name: String, captured_at: String },
     /// No exact shape was measured; the generic peak was used.
     Unmatched { dims: GemmDims, basis: Basis },
     /// A caller-supplied rate.
@@ -483,12 +483,18 @@ fn compute_throughput(
             ))
         }
         Throughput::Shape(dims) => {
-            if let Some(shape) = profile.measured.as_ref().and_then(|measured| {
-                measured.gemm_shapes.iter().find(|shape| {
-                    shape.dtype == dtype
-                        && shape.m == dims.m
-                        && shape.n == dims.n
-                        && shape.k == dims.k
+            if let Some((suite, shape)) = profile.measured.as_ref().and_then(|measured| {
+                measured.gemm_shapes.as_ref().and_then(|suite| {
+                    suite
+                        .shapes
+                        .iter()
+                        .find(|shape| {
+                            shape.dtype == dtype
+                                && shape.m == dims.m
+                                && shape.n == dims.n
+                                && shape.k == dims.k
+                        })
+                        .map(|shape| (suite, shape))
                 })
             }) {
                 Ok((
@@ -496,6 +502,7 @@ fn compute_throughput(
                     Basis::Measured,
                     ComputeSource::Shape {
                         name: shape.name.clone(),
+                        captured_at: suite.captured_at.clone(),
                     },
                 ))
             } else {
@@ -616,7 +623,7 @@ mod tests {
                 g2g_latency_us: Some(3.0),
                 compute_tflops: compute,
                 gemm_shape: [8192, 8192, 8192],
-                gemm_shapes: Vec::new(),
+                gemm_shapes: None,
                 checks: BTreeMap::from([("hbm_copy".to_owned(), true)]),
                 samples_ms: BTreeMap::new(),
                 gpu_state: None,
@@ -864,7 +871,6 @@ mod tests {
             ldb: 8192,
             ldc: 4096,
             epilogue: "CUBLASLT_EPILOGUE_DEFAULT".to_owned(),
-            library: "cuBLASLt 120901".to_owned(),
             algorithm: napkin_profile::GemmAlgo {
                 id: 7,
                 tile: 3,
@@ -921,12 +927,21 @@ mod tests {
     #[test]
     fn exact_gemm_uses_measured_shape_rate() {
         let mut profile = fixture();
-        profile
-            .measured
-            .as_mut()
-            .unwrap()
-            .gemm_shapes
-            .push(shape_fixture());
+        let measured = profile.measured.as_mut().unwrap();
+        measured.gemm_shapes = Some(napkin_profile::GemmShapeSuite {
+            captured_at: "2026-10-14T00:00:00Z".to_owned(),
+            gpu_request: "H100!:2".to_owned(),
+            device_name: measured.device_name.clone(),
+            driver_version: "580.95.05".to_owned(),
+            cuda_version: "12.9".to_owned(),
+            library: "cuBLASLt 120901".to_owned(),
+            pcie_gen: Some(5),
+            pcie_width: Some(16),
+            shapes: vec![shape_fixture()],
+            checks: BTreeMap::from([("gemm_shape_prefill_bf16_check".to_owned(), true)]),
+            samples_ms: BTreeMap::from([("gemm_shape_prefill_bf16".to_owned(), vec![2.0, 2.0])]),
+            gpu_state: None,
+        });
         let workload = Workload {
             dtype: Dtype::Bf16,
             throughput: Throughput::Shape(GemmDims {
@@ -948,7 +963,8 @@ mod tests {
         assert_eq!(
             estimate.compute_source,
             ComputeSource::Shape {
-                name: "prefill".to_owned()
+                name: "prefill".to_owned(),
+                captured_at: "2026-10-14T00:00:00Z".to_owned()
             }
         );
         assert_eq!(estimate.compute_s, 1e12 / (123.0 * 1e12));

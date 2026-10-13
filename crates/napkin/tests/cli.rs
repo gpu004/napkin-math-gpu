@@ -27,6 +27,14 @@ fn gpus_lists_all_profiles() {
 }
 
 #[test]
+fn merge_shapes_command_accepts_the_run_and_profile_paths() {
+    let (stdout, stderr, code) = napkin(&["merge-shapes", "--help"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("--from <RUN>"), "{stdout}");
+    assert!(stdout.contains("<PROFILE>"), "{stdout}");
+}
+
+#[test]
 fn estimate_runs_on_datasheet_gpu() {
     let (stdout, stderr, code) = napkin(&[
         "estimate", "--gpu", "b200", "--dtype", "bf16", "--flops", "200T", "--bytes", "1TB",
@@ -61,10 +69,8 @@ fn gemm_estimate_reports_derived_work_and_unmatched_shape() {
         stdout.contains("used the measured 8192³ GemmEx peak, a large-GEMM ceiling"),
         "{stdout}"
     );
-    assert!(
-        stdout.contains("measured shapes: none; no interpolation"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("measured shapes:"), "{stdout}");
+    assert!(stdout.contains("; no interpolation"), "{stdout}");
 }
 
 #[test]

@@ -205,6 +205,15 @@ enum Command {
         #[arg(long, value_name = "PATH", conflicts_with = "write")]
         check: Option<PathBuf>,
     },
+    /// Merge a successful benchmark's GEMM shape suite into a measured profile.
+    MergeShapes {
+        /// Run JSON produced by napkin-bench.
+        #[arg(long, value_name = "RUN")]
+        from: PathBuf,
+        /// Measured profile JSON to update.
+        #[arg(value_name = "PROFILE")]
+        profile: PathBuf,
+    },
 }
 
 #[derive(clap::Args, Debug)]
@@ -367,6 +376,8 @@ fn dispatch(command: &Command) -> Result<String, String> {
         Command::Prices => cmd_prices(),
         Command::Readme { check, paths, .. } => cmd_readme(paths, *check),
         Command::Validate { write, check } => cmd_validate(write.as_deref(), check.as_deref()),
+        Command::MergeShapes { from, profile } => napkin::merge_shapes(from, profile)
+            .map(|()| format!("Merged GEMM shape suite into {}.\n", profile.display())),
     }
 }
 
@@ -738,10 +749,10 @@ fn append_compute_source_note(
     }
     match &estimate.compute_source {
         ComputeSource::Profile(_) => {}
-        ComputeSource::Shape { name } => {
+        ComputeSource::Shape { name, captured_at } => {
             let _ = writeln!(
                 out,
-                "(compute: matched measured GEMM shape {name}; achieved rate already includes shape-specific memory traffic)"
+                "(compute: matched measured GEMM shape {name} from suite captured {captured_at}; achieved rate already includes shape-specific memory traffic)"
             );
         }
         ComputeSource::Unmatched { dims, basis } => {
@@ -752,10 +763,17 @@ fn append_compute_source_note(
                 .map(|measured| {
                     measured
                         .gemm_shapes
-                        .iter()
-                        .map(|shape| format!("{} {}x{}x{}", shape.name, shape.m, shape.n, shape.k))
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                        .as_ref()
+                        .map_or_else(String::new, |suite| {
+                            suite
+                                .shapes
+                                .iter()
+                                .map(|shape| {
+                                    format!("{} {}x{}x{}", shape.name, shape.m, shape.n, shape.k)
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
                 })
                 .filter(|shapes| !shapes.is_empty())
                 .unwrap_or_else(|| "none".to_owned());

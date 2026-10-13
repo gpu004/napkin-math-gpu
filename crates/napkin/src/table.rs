@@ -194,10 +194,14 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
     for dtype in [Dtype::Fp16, Dtype::Bf16, Dtype::Tf32, Dtype::Fp32] {
         emit_gemm_row(&mut out, m, dtype, sig, exact);
     }
-    let measured_shapes = if m.gemm_shapes.is_empty() {
-        ""
-    } else {
+    let measured_shapes = if m
+        .gemm_shapes
+        .as_ref()
+        .is_some_and(|suite| !suite.shapes.is_empty())
+    {
         "; measured shapes follow below"
+    } else {
+        ""
     };
     let _ = writeln!(
         out,
@@ -222,34 +226,39 @@ fn spread_footnote(out: &mut String, m: &Measured) {
                 .map(|spread| format!("{name} {}%", fmt_sig(spread * 100.0, 2)))
         })
         .collect();
-    spreads.extend(m.gemm_shapes.iter().filter_map(|shape| {
-        m.round_spread(&shape.samples_key())
-            .filter(|spread| *spread > SPREAD_FLAG)
-            .map(|spread| {
-                format!(
-                    "{} {} GEMM {}%",
-                    shape.name,
-                    shape.dtype,
-                    fmt_sig(spread * 100.0, 2)
-                )
-            })
-    }));
+    if let Some(suite) = &m.gemm_shapes {
+        spreads.extend(suite.shapes.iter().filter_map(|shape| {
+            suite
+                .round_spread(&shape.samples_key())
+                .filter(|spread| *spread > SPREAD_FLAG)
+                .map(|spread| {
+                    format!(
+                        "{} {} GEMM {}%",
+                        shape.name,
+                        shape.dtype,
+                        fmt_sig(spread * 100.0, 2)
+                    )
+                })
+        }));
+    }
     if spreads.is_empty() {
         return;
     }
     let _ = write!(
         out,
-        "\n† Rounds disagree by more than {:.0}%: {}. Spread is the slowest of the {} rounds over \
+        "\n† Rounds disagree by more than {:.0}%: {}. Spread is the slowest measured round over \
          the fastest, minus one: the observed range, not a confidence interval. The cell shows the \
          median round.\n",
         SPREAD_FLAG * 100.0,
         spreads.join(", "),
-        m.rounds,
     );
 }
 
 fn emit_gemm_shape_rows(out: &mut String, m: &Measured, sig: u32, exact: bool) {
-    if m.gemm_shapes.is_empty() {
+    let Some(suite) = &m.gemm_shapes else {
+        return;
+    };
+    if suite.shapes.is_empty() {
         return;
     }
     out.push('\n');
@@ -265,7 +274,7 @@ fn emit_gemm_shape_rows(out: &mut String, m: &Measured, sig: u32, exact: bool) {
         ],
     );
     emit(out, &["---", "---:", "---", "---:", "---:", "---:"]);
-    for shape in &m.gemm_shapes {
+    for shape in &suite.shapes {
         let rate = if exact {
             shape.tflops
         } else {
@@ -278,29 +287,51 @@ fn emit_gemm_shape_rows(out: &mut String, m: &Measured, sig: u32, exact: bool) {
             .get(&shape.dtype)
             .map(|peak| fmt_sig(shape.tflops / peak * 100.0, if exact { 3 } else { SIG }))
             .unwrap_or_default();
+        let throughput = fmt_tflops(shape.tflops, sig);
+        let throughput = if suite
+            .round_spread(&key)
+            .is_some_and(|spread| spread > SPREAD_FLAG)
+        {
+            format!("{throughput} †")
+        } else {
+            throughput
+        };
         emit(
             out,
             &[
                 &shape.name,
                 &dimensions,
                 &shape.dtype.to_string(),
-                &mark(m, &[&key], fmt_tflops(shape.tflops, sig)),
+                &throughput,
                 &peak_percent,
                 &fmt_duration(1.0 / rate, sig),
             ],
         );
     }
-    let mut libraries: Vec<_> = m
-        .gemm_shapes
-        .iter()
-        .map(|shape| shape.library.as_str())
-        .collect();
-    libraries.sort_unstable();
-    libraries.dedup();
+    let pcie = match (suite.pcie_gen, suite.pcie_width) {
+        (Some(generation), Some(width)) => format!(", PCIe Gen{generation} x{width}"),
+        (Some(generation), None) => format!(", PCIe Gen{generation}"),
+        (None, Some(width)) => format!(", PCIe x{width}"),
+        (None, None) => String::new(),
+    };
+    let different_run = if suite.captured_at == m.captured_at {
+        String::new()
+    } else {
+        format!(
+            "; a different run from the generic peak captured {}",
+            m.captured_at
+        )
+    };
     let _ = writeln!(
         out,
-        "\n{}: TN column-major, fp32 accumulation and CUDA_R_32F scaling, 32 MiB heuristic workspace; query once before warm-up and reuse the selected algorithm.",
-        libraries.join(", ")
+        "\nShape suite: {} captured {} from {} on {} (driver {}, CUDA {}{}){different_run}; % of peak uses the preserved profile's generic 8192³ `GemmEx` rate. TN column-major, fp32 accumulation and CUDA_R_32F scaling, 32 MiB heuristic workspace; query once before warm-up and reuse the selected algorithm.",
+        suite.library,
+        suite.captured_at,
+        suite.gpu_request,
+        suite.device_name,
+        suite.driver_version,
+        suite.cuda_version,
+        pcie,
     );
 }
 
@@ -646,6 +677,7 @@ mod tests {
             .map(|(key, rounds)| ((*key).to_owned(), rounds.clone()))
             .collect();
         measured.gpu_state = gpu_state;
+        measured.gemm_shapes = None;
         profile
     }
 
@@ -675,7 +707,7 @@ mod tests {
 
     #[test]
     fn renders_shape_rates_and_names_their_spread() {
-        let mut profile = h100_with(&[("gemm_shape_prefill_bf16", vec![2.0, 2.2])], None);
+        let mut profile = h100_with(&[], None);
         let mut shapes = Vec::new();
         for (name, m, n, k) in [
             ("square", 8192, 8192, 8192),
@@ -694,7 +726,11 @@ mod tests {
                 shapes.push(shape);
             }
         }
-        profile.measured.as_mut().unwrap().gemm_shapes = shapes;
+        let mut suite = shape_suite_fixture(shapes);
+        suite
+            .samples_ms
+            .insert("gemm_shape_prefill_bf16".to_owned(), vec![2.0, 2.2]);
+        profile.measured.as_mut().unwrap().gemm_shapes = Some(suite);
         let table = numbers(&profile, true).unwrap();
         assert!(table.contains("| Dense GEMM, 8192³ |"), "{table}");
         assert!(
@@ -707,9 +743,14 @@ mod tests {
         );
         assert!(table.contains("prefill bf16 GEMM 10%."), "{table}");
         assert!(
-            table.contains("cuBLASLt 120901: TN column-major"),
+            table.contains("Shape suite: cuBLASLt 120901 captured"),
             "{table}"
         );
+        assert!(
+            table.contains("different run from the generic peak"),
+            "{table}"
+        );
+        assert!(table.contains("TN column-major"), "{table}");
         let rows: Vec<_> = table
             .lines()
             .filter(|line| {
@@ -769,7 +810,6 @@ mod tests {
             ldb: k,
             ldc: m,
             epilogue: "CUBLASLT_EPILOGUE_DEFAULT".to_owned(),
-            library: "cuBLASLt 120901".to_owned(),
             algorithm: crate::profile::GemmAlgo {
                 id: 1,
                 tile: 1,
@@ -790,6 +830,25 @@ mod tests {
                 atol: 1.0,
                 passed: true,
             },
+        }
+    }
+
+    fn shape_suite_fixture(
+        shapes: Vec<crate::profile::GemmShape>,
+    ) -> crate::profile::GemmShapeSuite {
+        crate::profile::GemmShapeSuite {
+            captured_at: "2026-10-14T00:00:00Z".to_owned(),
+            gpu_request: "H100!:2".to_owned(),
+            device_name: "NVIDIA H100 SXM 80GB".to_owned(),
+            driver_version: "580.95.05".to_owned(),
+            cuda_version: "12.9".to_owned(),
+            library: "cuBLASLt 120901".to_owned(),
+            pcie_gen: Some(5),
+            pcie_width: Some(16),
+            shapes,
+            checks: std::collections::BTreeMap::new(),
+            samples_ms: std::collections::BTreeMap::new(),
+            gpu_state: None,
         }
     }
 
