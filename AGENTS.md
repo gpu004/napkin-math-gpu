@@ -12,6 +12,7 @@
   profiles, table rendering, or anything a marker embeds, run `cargo run -p napkin -- readme --write README.md PROBLEMS.md`.
 - PROBLEMS.md solutions use rounded teaching constants pinned in `crates/napkin/tests/readme.rs`. When a profile or price update moves one, that test fails: update the problem's arithmetic and the test together.
 - GPU prices live in `prices/*.json`, never in hardware profiles. Every record needs a date and a source URL that you curl-checked; `napkin cost` never falls back to a default price.
+- Agent skills live in `.agents/skills/` (`skills/modal/` predates it). `/create-verification-skill` and `/maintain-verification-skill` run on request only.
 
 ## Development guidelines
 
