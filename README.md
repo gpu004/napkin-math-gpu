@@ -29,24 +29,24 @@ transfers, [NVBandwidth](https://github.com/NVIDIA/nvbandwidth) is the state of
 the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 
 <!-- napkin table --gpu h100 -->
-| Operation | Latency | Throughput | 1 MB | 1 GB |
-| --- | ---: | ---: | ---: | ---: |
-| Kernel launch (back-to-back) | 2 μs |  |  |  |
-| Launch + sync round trip | 7 μs |  |  |  |
-| Pinned host RAM copy |  | 100 GB/s † | 10 μs | 10 ms |
-| Host → device, pinned | 9 μs | 50 GB/s † | 20 μs | 20 ms |
-| Device → host, pinned | 9 μs | 60 GB/s † | 20 μs | 20 ms |
-| HBM random read (pointer chase) | 300 ns |  |  |  |
-| HBM copy (read + write) |  | 3 TB/s | 300 ns | 300 μs |
-| Elementwise add |  | 3 TB/s | 300 ns | 300 μs |
-| GPU ↔ GPU, NVLink one-way | 10 μs | 400 GB/s | 3 μs | 3 ms |
+| Operation | Latency | Throughput | 1 MB | 1 GB | Basis |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Kernel launch (back-to-back) | 2 μs |  |  |  | napkin-bench |
+| Launch + sync round trip | 7 μs |  |  |  | napkin-bench |
+| Pinned host RAM copy |  | 100 GB/s † | 10 μs | 10 ms | napkin-bench |
+| Host → device, pinned | 9 μs | 60 GB/s | 20 μs | 20 ms | NVBandwidth CE; latency napkin-bench |
+| Device → host, pinned | 9 μs | 60 GB/s | 20 μs | 20 ms | NVBandwidth CE; latency napkin-bench |
+| HBM random read (pointer chase) | 300 ns |  |  |  | napkin-bench |
+| HBM copy (read + write) |  | 3 TB/s | 300 ns | 300 μs | napkin-bench |
+| Elementwise add |  | 3 TB/s | 300 ns | 300 μs | napkin-bench |
+| GPU ↔ GPU, NVLink one-way, slower direction | 10 μs | 400 GB/s | 3 μs | 3 ms | NVBandwidth CE; latency napkin-bench |
 
-| Dense GEMM, 8192³ | Throughput | 1 GFLOP | 1 TFLOP | Ridge point |
-| --- | ---: | ---: | ---: | ---: |
-| fp16 | 700 TFLOP/s † | 1 μs | 1 ms | 220 FLOP/B |
-| bf16 | 700 TFLOP/s † | 1 μs | 1 ms | 230 FLOP/B |
-| tf32 | 400 TFLOP/s † | 3 μs | 3 ms | 120 FLOP/B |
-| fp32 | 50 TFLOP/s | 20 μs | 20 ms | 17 FLOP/B |
+| Dense GEMM, 8192³ | Throughput | 1 GFLOP | 1 TFLOP | Ridge point | Basis |
+| --- | ---: | ---: | ---: | ---: | --- |
+| fp16 | 700 TFLOP/s † | 1 μs | 1 ms | 220 FLOP/B | napkin-bench |
+| bf16 | 700 TFLOP/s † | 1 μs | 1 ms | 230 FLOP/B | napkin-bench |
+| tf32 | 400 TFLOP/s † | 3 μs | 3 ms | 120 FLOP/B | napkin-bench |
+| fp32 | 50 TFLOP/s | 20 μs | 20 ms | 17 FLOP/B | napkin-bench |
 
 Dense GEMM rows are the cuBLAS `GemmEx` 8192³ rate, a large-GEMM library ceiling, not the rate of every GEMM; measured shapes follow below.
 
@@ -80,19 +80,38 @@ Read through NVML 13.580.95.05 via nvml-wrapper 0.13 every 5 ms on the GPU that 
 ## Other GPUs
 
 <!-- napkin compare -->
-| GPU | Memory | HBM | Dense BF16 | BF16 ridge | NVLink | Host link | Launch | Basis |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 150 FLOP/B | 600 GB/s | 10 GB/s Gen4 x16 | 3 μs | measured 2026-10-12 |
-| H100 SXM 80GB | 80 GB | 3 TB/s | 700 TFLOP/s | 230 FLOP/B | 900 GB/s | 50 GB/s Gen5 x16 | 2 μs | measured 2026-10-12 |
-| B200 SXM 180GB | 180 GB | 6 TB/s | 1 PFLOP/s | 210 FLOP/B | 2 TB/s | 60 GB/s Gen5 x16 | 3 μs | measured 2026-10-12 |
-| B300 SXM 288GB | 288 GB | 6 TB/s | 1 PFLOP/s | 220 FLOP/B | 2 TB/s | 60 GB/s Gen5 x16 (GPU Gen6) | 4 μs | measured 2026-10-12 |
+| GPU | Memory | HBM | Dense BF16 | BF16 ridge | NVLink | Host link | Launch | Basis | Transfer basis |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| A100 SXM 80GB | 80 GB | 2 TB/s | 300 TFLOP/s | 150 FLOP/B | 600 GB/s | 20 GB/s Gen4 x16 | 3 μs | napkin-bench 2026-10-12 | NVBandwidth 2026-10-12 |
+| H100 SXM 80GB | 80 GB | 3 TB/s | 700 TFLOP/s | 230 FLOP/B | 900 GB/s | 60 GB/s Gen5 x16 | 2 μs | napkin-bench 2026-10-12 | NVBandwidth 2026-10-12 |
+| B200 SXM 180GB | 180 GB | 6 TB/s | 1 PFLOP/s | 210 FLOP/B | 2 TB/s | 60 GB/s Gen5 x16 | 3 μs | napkin-bench 2026-10-12 | NVBandwidth 2026-10-12 |
+| B300 SXM 288GB | 288 GB | 6 TB/s | 1 PFLOP/s | 220 FLOP/B | 2 TB/s | 60 GB/s Gen5 x16 (GPU Gen6) | 4 μs | napkin-bench 2026-10-12 | NVBandwidth 2026-10-12 |
 
 | GPU | HBM measured / ceiling | BF16 measured / ceiling |
 | --- | ---: | ---: |
-| A100 SXM 80GB | 1740 / 2039 GB/s (85%) | 264 / 312 TFLOP/s (85%) |
+| A100 SXM 80GB | 1737 / 2039 GB/s (85%) | 267 / 312 TFLOP/s (86%) |
 | H100 SXM 80GB | 3002 / 3350 GB/s (90%) | 691 / 990 TFLOP/s (70%) |
 | B200 SXM 180GB | 6414 / 8000 GB/s (80%) | 1325 / 2250 TFLOP/s (59%) |
 | B300 SXM 288GB | 6494 / 8000 GB/s (81%) | 1423 / 2250 TFLOP/s (63%) |
+
+| GPU | Transfer | NVBandwidth CE | NVBandwidth SM | napkin-bench | CE / napkin-bench | PCIe (NVBandwidth / napkin-bench) |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| A100 SXM 80GB | H2D | 24.9 GB/s | 26.5 GB/s | 24.7 GB/s | 1.009 | Gen4 x16 / Gen4 x16 |
+| A100 SXM 80GB | D2H | 26.3 GB/s | 26.3 GB/s | 26.3 GB/s | 1.000 | Gen4 x16 / Gen4 x16 |
+| A100 SXM 80GB | GPU0→GPU1 | 279 GB/s | 230 GB/s | 275 GB/s | 1.014 | n/a (NVLink) |
+| A100 SXM 80GB | GPU1→GPU0 | 277 GB/s | 235 GB/s | 279 GB/s | 0.992 | n/a (NVLink) |
+| H100 SXM 80GB | H2D | 55.5 GB/s | 51 GB/s | 53.7 GB/s | 1.035 | Gen5 x16 / Gen5 x16 |
+| H100 SXM 80GB | D2H | 55.5 GB/s | 40.9 GB/s | 55.3 GB/s | 1.004 | Gen5 x16 / Gen5 x16 |
+| H100 SXM 80GB | GPU0→GPU1 | 395 GB/s | 368 GB/s | 395 GB/s | 0.999 | n/a (NVLink) |
+| H100 SXM 80GB | GPU1→GPU0 | 395 GB/s | 369 GB/s | 395 GB/s | 0.999 | n/a (NVLink) |
+| B200 SXM 180GB | H2D | 55.6 GB/s | 51.3 GB/s | 55.6 GB/s | 1.000 | Gen5 x16 / Gen5 x16 |
+| B200 SXM 180GB | D2H | 56.9 GB/s | 52.6 GB/s | 57.1 GB/s | 0.996 | Gen5 x16 / Gen5 x16 |
+| B200 SXM 180GB | GPU0→GPU1 | 766 GB/s | 717 GB/s | 767 GB/s | 0.998 | n/a (NVLink) |
+| B200 SXM 180GB | GPU1→GPU0 | 765 GB/s | 717 GB/s | 766 GB/s | 0.999 | n/a (NVLink) |
+| B300 SXM 288GB | H2D | 55.7 GB/s | 51.6 GB/s | 55.7 GB/s | 1.001 | Gen6 x16 / Gen6 x16 |
+| B300 SXM 288GB | D2H | 57.1 GB/s | 52.5 GB/s | 57.4 GB/s | 0.994 | Gen6 x16 / Gen6 x16 |
+| B300 SXM 288GB | GPU0→GPU1 | 764 GB/s | 717 GB/s | 765 GB/s | 0.998 | n/a (NVLink) |
+| B300 SXM 288GB | GPU1→GPU0 | 764 GB/s | 717 GB/s | 766 GB/s | 0.998 | n/a (NVLink) |
 <!-- /napkin -->
 
 Modal request semantics matter: `H100!` pins an H100 — a plain `H100` request
@@ -182,12 +201,12 @@ launches on an H100:
 <!-- napkin example estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB --h2d 2GB --launches 20 -->
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB --h2d 2GB --launches 20
-H100 SXM 80GB · bf16 · measured 2026-10-12
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
 intensity   200 FLOP/B   ridge 230 FLOP/B   memory-bound
 compute     290 ms
 memory      330 ms
 device      330 ms
-h2d         37 ms   1 sync copy: 1 × 8.8 μs + 2 GB / 54 GB/s
+h2d         36 ms   1 sync copy: 1 × 8.8 μs + 2 GB / 56 GB/s   NVBandwidth CE
 launch      34 μs
 total       370 ms   memory-bound
 ```
@@ -285,7 +304,7 @@ fits        no — needs at least 3 GPUs (weights + extra sharded, per-GPU repli
 <!-- napkin example estimate --gpu h100 --dtype bf16 --flops 2.34P --bytes 188GB -->
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 2.34P --bytes 188GB
-H100 SXM 80GB · bf16 · measured 2026-10-12
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
 intensity   12000 FLOP/B   ridge 230 FLOP/B   compute-bound
 compute     3.4 s
 memory      63 ms
@@ -297,7 +316,7 @@ total       3.4 s   compute-bound
 <!-- napkin example estimate --gpu h100 --dtype bf16 --flops 1.17T --bytes 147GB -->
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 1.17T --bytes 147GB
-H100 SXM 80GB · bf16 · measured 2026-10-12
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
 intensity   8 FLOP/B   ridge 230 FLOP/B   memory-bound
 compute     1.7 ms
 memory      49 ms
@@ -315,7 +334,7 @@ parallelism each GPU reads an eighth of the weights and KV per decode step,
 <!-- napkin example estimate --gpu h100 --dtype bf16 --flops 146G --bytes 18.3GB -->
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 146G --bytes 18.3GB
-H100 SXM 80GB · bf16 · measured 2026-10-12
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
 intensity   8 FLOP/B   ridge 230 FLOP/B   memory-bound
 compute     210 μs
 memory      6.1 ms

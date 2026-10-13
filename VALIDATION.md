@@ -7,7 +7,7 @@ Each case is one real job on Modal. The error ratio is observed time / predicted
 | case | predicted | dominant term | observed | observed / predicted | tolerance | verdict |
 | --- | ---: | --- | ---: | ---: | ---: | --- |
 | [h100-gemm-bf16](#h100-gemm-bf16) | 11 ms | compute-bound | 11 ms | 1.01 | 0.80–1.25 | within |
-| [h100-pcie-roundtrip](#h100-pcie-roundtrip) | 630 ms | h2d-bound | 3.7 s | 5.90 | 0.90–1.10 | outside (slower) |
+| [h100-pcie-roundtrip](#h100-pcie-roundtrip) | 620 ms | d2h-bound | 3.7 s | 6.02 | 0.90–1.10 | outside (slower) |
 | [h100-tiny-kernels](#h100-tiny-kernels) | 17 ms | launch-bound | 62 ms | 3.64 | 0.50–2.00 | outside (slower) |
 
 ## h100-gemm-bf16: Large bf16 GEMM through cuBLAS
@@ -30,7 +30,7 @@ One bf16 GEMM C = A·B with M=16384, N=28672, K=8192 (a Llama-3-70B MLP up-proje
 
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 7696581394432 --bytes 1677721600 --launches 1
-H100 SXM 80GB · bf16 · measured 2026-10-12
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
 intensity   4600 FLOP/B   ridge 230 FLOP/B   compute-bound
 compute     11 ms
 memory      560 μs
@@ -112,14 +112,14 @@ Upload 16 GiB from pinned host memory to GPU 0 as 16 queued 1 GiB copy-engine co
 
 ```text
 $ napkin estimate --gpu h100 --dtype fp32 --flops 0 --bytes 0 --h2d 17179869184 --h2d-copies 16 --d2h 17179869184 --d2h-copies 16 --copy-mode async
-H100 SXM 80GB · fp32 · measured 2026-10-12
-intensity   0 FLOP/B   ridge 17 FLOP/B   h2d-bound
+H100 SXM 80GB · fp32 · napkin-bench 2026-10-12
+intensity   0 FLOP/B   ridge 17 FLOP/B   d2h-bound
 compute     0 s
 memory      0 s
 device      0 s
-h2d         ≥ 320 ms   16 async copies: 1 × 8.8 μs + 17 GB / 54 GB/s; lower bound: per-copy cost of queued async copies is unmeasured
-d2h         ≥ 310 ms   16 async copies: 1 × 9.4 μs + 17 GB / 55 GB/s; lower bound: per-copy cost of queued async copies is unmeasured
-total       ≥ 630 ms   h2d-bound
+h2d         ≥ 310 ms   16 async copies: 1 × 8.8 μs + 17 GB / 56 GB/s; lower bound: per-copy cost of queued async copies is unmeasured   NVBandwidth CE
+d2h         ≥ 310 ms   16 async copies: 1 × 9.4 μs + 17 GB / 55 GB/s; lower bound: per-copy cost of queued async copies is unmeasured   NVBandwidth CE
+total       ≥ 620 ms   d2h-bound
 ```
 
 ### Tolerance, declared before the run
@@ -155,7 +155,7 @@ total       ≥ 630 ms   h2d-bound
 
 ### Result
 
-5.90 observed / predicted — **outside (slower)**.
+6.02 observed / predicted — **outside (slower)**.
 
 ### Excluded from the estimate
 
@@ -214,7 +214,7 @@ A Python loop of 10,000 in-place adds on a one-element fp32 CUDA tensor (x.add_(
 
 ```text
 $ napkin estimate --gpu h100 --dtype fp32 --flops 10000 --bytes 80000 --launches 10000
-H100 SXM 80GB · fp32 · measured 2026-10-12
+H100 SXM 80GB · fp32 · napkin-bench 2026-10-12
 intensity   0.13 FLOP/B   ridge 17 FLOP/B   launch-bound
 compute     0.19 ns
 memory      27 ns

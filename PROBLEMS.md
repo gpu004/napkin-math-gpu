@@ -62,7 +62,7 @@ accepts `GiB` directly:
 <!-- napkin example estimate --gpu h100 --dtype fp32 --flops 0 --bytes 2GiB -->
 ```text
 $ napkin estimate --gpu h100 --dtype fp32 --flops 0 --bytes 2GiB
-H100 SXM 80GB · fp32 · measured 2026-10-12
+H100 SXM 80GB · fp32 · napkin-bench 2026-10-12
 intensity   0 FLOP/B   ridge 17 FLOP/B   memory-bound
 compute     0 s
 memory      720 μs
@@ -74,7 +74,7 @@ total       720 μs   memory-bound
 <!-- napkin example estimate --gpu h100 --dtype fp32 --flops 268M --bytes 3GiB -->
 ```text
 $ napkin estimate --gpu h100 --dtype fp32 --flops 268M --bytes 3GiB
-H100 SXM 80GB · fp32 · measured 2026-10-12
+H100 SXM 80GB · fp32 · napkin-bench 2026-10-12
 intensity   0.083 FLOP/B   ridge 17 FLOP/B   memory-bound
 compute     5.2 μs
 memory      1.1 ms
@@ -117,12 +117,12 @@ crossover, so it is all fixed cost.
 <!-- napkin example estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 40MB --h2d-copies 10000 -->
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 40MB --h2d-copies 10000
-H100 SXM 80GB · bf16 · measured 2026-10-12
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
 intensity   0 FLOP/B   ridge 230 FLOP/B   h2d-bound
 compute     0 s
 memory      0 s
 device      0 s
-h2d         89 ms   10000 sync copies: 10000 × 8.8 μs + 40 MB / 54 GB/s
+h2d         89 ms   10000 sync copies: 10000 × 8.8 μs + 40 MB / 56 GB/s   NVBandwidth CE
 total       89 ms   h2d-bound
 ```
 <!-- /napkin -->
@@ -130,13 +130,13 @@ total       89 ms   h2d-bound
 <!-- napkin example estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 40MB -->
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 40MB
-H100 SXM 80GB · bf16 · measured 2026-10-12
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
 intensity   0 FLOP/B   ridge 230 FLOP/B   h2d-bound
 compute     0 s
 memory      0 s
 device      0 s
-h2d         750 μs   1 sync copy: 1 × 8.8 μs + 40 MB / 54 GB/s
-total       750 μs   h2d-bound
+h2d         730 μs   1 sync copy: 1 × 8.8 μs + 40 MB / 56 GB/s   NVBandwidth CE
+total       730 μs   h2d-bound
 ```
 <!-- /napkin -->
 
@@ -178,7 +178,7 @@ N = 512 is `2 × 512³ = 268M` FLOPs over `6 × 512² = 1.57 MB`; N = 1024 is
 <!-- napkin example estimate --gpu h100 --dtype bf16 --flops 268M --bytes 1.57MB -->
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 268M --bytes 1.57MB
-H100 SXM 80GB · bf16 · measured 2026-10-12
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
 intensity   170 FLOP/B   ridge 230 FLOP/B   memory-bound
 compute     390 ns
 memory      520 ns
@@ -190,7 +190,7 @@ total       520 ns   memory-bound
 <!-- napkin example estimate --gpu h100 --dtype bf16 --flops 2.15G --bytes 6.29MB -->
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 2.15G --bytes 6.29MB
-H100 SXM 80GB · bf16 · measured 2026-10-12
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
 intensity   340 FLOP/B   ridge 230 FLOP/B   compute-bound
 compute     3.1 μs
 memory      2.1 μs
@@ -343,7 +343,7 @@ them is.
 <!-- napkin example estimate --gpu h100 --dtype fp16 --flops 1.5G --bytes 6GB --launches 3 -->
 ```text
 $ napkin estimate --gpu h100 --dtype fp16 --flops 1.5G --bytes 6GB --launches 3
-H100 SXM 80GB · fp16 · measured 2026-10-12
+H100 SXM 80GB · fp16 · napkin-bench 2026-10-12
 intensity   0.25 FLOP/B   ridge 220 FLOP/B   memory-bound
 compute     2.3 μs
 memory      2 ms
@@ -356,7 +356,7 @@ total       2 ms   memory-bound
 <!-- napkin example estimate --gpu h100 --dtype fp16 --flops 500M --bytes 2GB --launches 1 -->
 ```text
 $ napkin estimate --gpu h100 --dtype fp16 --flops 500M --bytes 2GB --launches 1
-H100 SXM 80GB · fp16 · measured 2026-10-12
+H100 SXM 80GB · fp16 · napkin-bench 2026-10-12
 intensity   0.25 FLOP/B   ridge 220 FLOP/B   memory-bound
 compute     770 ns
 memory      670 μs
@@ -405,7 +405,7 @@ of an 8.2 ms step: decode stays memory-bound.
 <!-- napkin example estimate --gpu h100 --dtype bf16 --flops 16G --bytes 16.3GB -->
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 16G --bytes 16.3GB
-H100 SXM 80GB · bf16 · measured 2026-10-12
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
 intensity   0.98 FLOP/B   ridge 230 FLOP/B   memory-bound
 compute     23 μs
 memory      5.4 ms
@@ -417,7 +417,7 @@ total       5.4 ms   memory-bound
 <!-- napkin example estimate --gpu h100 --dtype bf16 --flops 512G --bytes 24.6GB -->
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 512G --bytes 24.6GB
-H100 SXM 80GB · bf16 · measured 2026-10-12
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
 intensity   21 FLOP/B   ridge 230 FLOP/B   memory-bound
 compute     740 μs
 memory      8.2 ms
