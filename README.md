@@ -155,28 +155,28 @@ prints `≥`, and says why.
 
 ### Why a 4-byte copy is not in the bandwidth row
 
-The H100 bandwidth row moves 512 MiB in about 9.7 ms, timed with CUDA events
-on the GPU. The ~10 μs fixed cost of a copy is 0.1% of that, so it vanishes
-into the throughput. Divide 4 bytes by the same 55 GB/s and you get 0.07 ns;
-the measured 4-byte synchronous copy takes 9.8 μs, about 140,000 times longer.
+The H100 bandwidth row moves 512 MiB in about 9.6 ms, timed with CUDA events
+on the GPU. The ~9 μs fixed cost of a copy is 0.1% of that, so it vanishes
+into the throughput. Divide 4 bytes by the same 56 GB/s and you get 0.07 ns;
+the measured 4-byte synchronous copy takes 8.8 μs, about 120,000 times longer.
 Small copies are all fixed cost: driver call, DMA setup, and the wait for
 completion, none of which scale with bytes. The size where the two terms are
-equal is `L_copy × P = 9.8 μs × 55 GB/s ≈ 500 KB`; below it a copy is
+equal is `L_copy × P = 8.8 μs × 56 GB/s ≈ 490 KB`; below it a copy is
 latency-bound, above it bandwidth-bound. So moving 1 GB as 100,000 small
 copies is about 50 times slower than one large copy:
 
 ```text
 $ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 4B
-h2d         9.8 μs   1 sync copy: 1 × 9.8 μs + 4 B / 55 GB/s
+h2d         8.8 μs   1 sync copy: 1 × 8.8 μs + 4 B / 56 GB/s   NVBandwidth CE
 
 $ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB
-h2d         18 ms   1 sync copy: 1 × 9.8 μs + 1 GB / 55 GB/s
+h2d         18 ms   1 sync copy: 1 × 8.8 μs + 1 GB / 56 GB/s   NVBandwidth CE
 
 $ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000
-h2d         1 s   100000 sync copies: 100000 × 9.8 μs + 1 GB / 55 GB/s
+h2d         900 ms   100000 sync copies: 100000 × 8.8 μs + 1 GB / 56 GB/s   NVBandwidth CE
 
 $ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000 --copy-mode async
-h2d         ≥ 18 ms   100000 async copies: 1 × 9.8 μs + 1 GB / 55 GB/s; lower bound: per-copy cost of queued async copies is unmeasured
+h2d         ≥ 18 ms   100000 async copies: 1 × 8.8 μs + 1 GB / 56 GB/s; lower bound: per-copy cost of queued async copies is unmeasured   NVBandwidth CE
 ```
 
 This latency-plus-bandwidth line is a straight-line fit through two measured
