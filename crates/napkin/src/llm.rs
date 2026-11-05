@@ -221,7 +221,56 @@ pub fn recipe(model: &Model, workload: &Workload) -> Result<Recipe, LlmError> {
 
 #[cfg(test)]
 mod tests {
+    use hegel::TestCase;
+    use hegel::generators as gs;
+
     use super::*;
+
+    fn near(actual: f64, expected: f64) {
+        let difference = (actual - expected).abs();
+        let scale = actual.abs().max(expected.abs()).max(1e-12);
+        assert!(
+            difference <= 1e-9 * scale,
+            "{actual} differs from {expected} by {difference}"
+        );
+    }
+
+    fn count(value: u64) -> NonZeroU64 {
+        NonZeroU64::new(value).unwrap()
+    }
+
+    // Every dimension is a small integer, at most a few hundred, and `params`
+    // is at most `1e5`. Products such as `2 × L × H × dh × B × S²` then stay
+    // under `2^53`, so the f64 formulas are exact integer arithmetic.
+    fn draw_model(tc: &TestCase) -> (Model, Workload) {
+        let layers = tc.draw(gs::integers::<u64>().min_value(1).max_value(32));
+        let kv_heads = tc.draw(gs::integers::<u64>().min_value(1).max_value(8));
+        let groups = tc.draw(gs::integers::<u64>().min_value(1).max_value(4));
+        let model = Model {
+            layers: count(layers),
+            hidden: count(tc.draw(gs::integers::<u64>().min_value(1).max_value(256))),
+            heads: count(kv_heads * groups),
+            kv_heads: count(kv_heads),
+            head_dim: count(tc.draw(gs::integers::<u64>().min_value(1).max_value(64))),
+            params: f64::from(tc.draw(gs::integers::<u32>().min_value(1).max_value(100_000))),
+            weight_bits: tc.draw(gs::sampled_from(&[4.0, 8.0, 16.0, 32.0])),
+            kv_bits: tc.draw(gs::sampled_from(&[4.0, 8.0, 16.0, 32.0])),
+        };
+        let workload = Workload {
+            batch: count(tc.draw(gs::integers::<u64>().min_value(1).max_value(32))),
+            prompt_tokens: count(tc.draw(gs::integers::<u64>().min_value(1).max_value(64))),
+            generated_tokens: count(tc.draw(gs::integers::<u64>().min_value(1).max_value(64))),
+            activation: tc.draw(gs::sampled_from(&[
+                Dtype::Fp4,
+                Dtype::Fp8,
+                Dtype::Fp16,
+                Dtype::Bf16,
+                Dtype::Tf32,
+                Dtype::Fp32,
+            ])),
+        };
+        (model, workload)
+    }
 
     fn fixture() -> (Model, Workload) {
         (
@@ -342,5 +391,100 @@ mod tests {
         model.weight_bits = 8.0;
         model.kv_bits = 0.0;
         assert!(recipe(&model, &workload).is_err());
+    }
+
+    #[hegel::test]
+    fn recipe_matches_the_parameter_and_attention_counts(tc: TestCase) {
+        let (model, workload) = draw_model(&tc);
+        let derived = recipe(&model, &workload).unwrap();
+        let layers = dim(model.layers);
+        let hidden = dim(model.hidden);
+        let heads = dim(model.heads);
+        let kv_heads = dim(model.kv_heads);
+        let head_dim = dim(model.head_dim);
+        let batch = dim(workload.batch);
+        let prompt = dim(workload.prompt_tokens);
+        let generated = dim(workload.generated_tokens);
+        let activation = element_bytes(workload.activation);
+        let decode_context = prompt + generated;
+
+        near(derived.weight_bytes, model.params * model.weight_bits / 8.0);
+        near(
+            derived.kv_bytes_per_token,
+            2.0 * layers * kv_heads * head_dim * model.kv_bits / 8.0,
+        );
+        near(derived.live_tokens, batch * decode_context);
+        near(
+            derived.kv_cache_bytes,
+            derived.kv_bytes_per_token * derived.live_tokens,
+        );
+        near(derived.decode_context, decode_context);
+
+        near(derived.prefill.tokens, batch * prompt);
+        near(
+            derived.prefill.linear_flops,
+            2.0 * model.params * batch * prompt,
+        );
+        near(
+            derived.prefill.attention_flops,
+            2.0 * layers * heads * head_dim * batch * prompt * prompt,
+        );
+        near(derived.prefill.weight_bytes, derived.weight_bytes);
+        near(
+            derived.prefill.kv_bytes,
+            derived.kv_bytes_per_token * derived.prefill.tokens,
+        );
+        near(
+            derived.prefill.activation_bytes,
+            2.0 * layers * batch * prompt * hidden * activation,
+        );
+        near(
+            derived.prefill.flops(),
+            derived.prefill.linear_flops + derived.prefill.attention_flops,
+        );
+        near(
+            derived.prefill.hbm_bytes(),
+            derived.prefill.weight_bytes
+                + derived.prefill.kv_bytes
+                + derived.prefill.activation_bytes,
+        );
+
+        near(derived.decode.tokens, batch);
+        near(derived.decode.linear_flops, 2.0 * model.params * batch);
+        near(
+            derived.decode.attention_flops,
+            4.0 * layers * heads * head_dim * batch * decode_context,
+        );
+        near(
+            derived.decode.activation_bytes,
+            2.0 * layers * batch * hidden * activation,
+        );
+        near(
+            derived.decode.hbm_bytes(),
+            derived.decode.weight_bytes + derived.decode.kv_bytes + derived.decode.activation_bytes,
+        );
+    }
+
+    // `heads = groups × kv_heads + remainder`, with `remainder` in
+    // `1..kv_heads`, so the GQA group count is never an integer.
+    #[hegel::test]
+    fn non_integral_gqa_groups_are_rejected(tc: TestCase) {
+        let (mut model, workload) = draw_model(&tc);
+        let kv_heads = tc.draw(gs::integers::<u64>().min_value(2).max_value(16));
+        let groups = tc.draw(gs::integers::<u64>().min_value(0).max_value(8));
+        let remainder = tc.draw(gs::integers::<u64>().min_value(1).max_value(kv_heads - 1));
+        model.kv_heads = count(kv_heads);
+        model.heads = count(groups * kv_heads + remainder);
+        let error = recipe(&model, &workload).unwrap_err();
+        assert!(error.to_string().contains("divisible by KV heads"));
+    }
+
+    fn dim(value: NonZeroU64) -> f64 {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "drawn dimensions are at most a few hundred"
+        )]
+        let converted = value.get() as f64;
+        converted
     }
 }
