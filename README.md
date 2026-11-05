@@ -551,7 +551,10 @@ napkin readme --write README.md PROBLEMS.md  # refreshes the tables
   that cross the link.
 - `h2d_latency_us` / `d2h_latency_us`: 4-byte synchronous copies, wall clock;
   each sample includes the stream synchronize, so it is a per-copy fixed cost,
-  not a bandwidth.
+  not a bandwidth. The 2026-10-12 profiles predate
+  [#32](https://github.com/gpu004/napkin-math-gpu/issues/32): their H2D copies
+  also allocated and freed the 4-byte destination, which on `H100!:2` read
+  8.9 μs against 6.0 μs for the copy alone.
 - `hbm_gbps`: 512 MiB device-to-device memcpy; read + write counted (2x).
 - `elementwise_gbps`: NVRTC `c[i] = a[i] + b[i]` fp32; two reads + one write (3x).
 - `hbm_latency_ns`: single-thread pointer chase over a random cycle in a
