@@ -1,6 +1,6 @@
 use napkin::profile::{Basis, Dtype};
 use napkin::units::round_sig;
-use napkin::{price, profile};
+use napkin::{price, profile, variation};
 use std::process::Command;
 
 #[test]
@@ -15,6 +15,7 @@ fn readme_napkin_blocks_match_renderers() {
             napkin::table::summary(h100, profile::collectives())
                 .expect("h100 must have a measured profile"),
         ),
+        ("<!-- napkin variation -->", napkin::table::variation(all)),
         (
             "<!-- napkin unit-costs -->",
             napkin::table::unit_costs(all, price::builtin()),
@@ -78,6 +79,65 @@ fn readme_unit_cost_ratio_matches_profiles() -> Result<(), Box<dyn std::error::E
         (round_sig(rates.hbm_gbps / host, 1) - 50.0).abs() < 1e-9,
         "HBM is now {}x the host link; update the README cost sentence",
         rates.hbm_gbps / host
+    );
+    Ok(())
+}
+
+#[test]
+fn readme_between_machines_claims_match_repeats() -> Result<(), Box<dyn std::error::Error>> {
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))?;
+    for text in [
+        "dense BF16 GEMM stay within 10% on every machine",
+        "Kernel launch and the pinned host RAM copy move more than\n15% on every GPU",
+        "the 4-byte copy latencies do on most",
+    ] {
+        assert!(readme.contains(text), "README no longer says {text:?}");
+    }
+    let spread = |profile: &profile::Profile, metric: &variation::Metric| {
+        variation::spread(profile, metric)
+            .map(|spread| spread.fraction())
+            .ok_or_else(|| format!("{} has no repeats for {}", profile.id, metric.name))
+    };
+    let mut latencies_over = 0;
+    let mut latencies = 0;
+    for profile in profile::builtin() {
+        for metric in [
+            variation::HBM_COPY,
+            variation::HBM_LATENCY,
+            variation::G2G,
+            variation::BF16_GEMM,
+        ] {
+            let fraction = spread(profile, &metric)?;
+            assert!(
+                fraction < 0.10,
+                "{} {}: {fraction}",
+                profile.id,
+                metric.name
+            );
+        }
+        for metric in [variation::KERNEL_LAUNCH, variation::HOST_COPY] {
+            let fraction = spread(profile, &metric)?;
+            assert!(
+                fraction > variation::MACHINE_FLAG,
+                "{} {}: {fraction}",
+                profile.id,
+                metric.name
+            );
+        }
+        for metric in [
+            variation::H2D_LATENCY,
+            variation::D2H_LATENCY,
+            variation::G2G_LATENCY,
+        ] {
+            latencies += 1;
+            if spread(profile, &metric)? > variation::MACHINE_FLAG {
+                latencies_over += 1;
+            }
+        }
+    }
+    assert!(
+        2 * latencies_over > latencies,
+        "{latencies_over} of {latencies} copy latencies vary by machine; update \"on most\""
     );
     Ok(())
 }

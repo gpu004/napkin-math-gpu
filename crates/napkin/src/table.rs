@@ -14,6 +14,7 @@ use crate::profile::{
 use crate::units::{
     fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_money_sig, fmt_sig, fmt_tflops, round_sig,
 };
+use crate::variation::{self, Metric, Unit};
 
 const SIG: u32 = 1;
 
@@ -221,10 +222,14 @@ pub fn summary(profile: &Profile, collectives: &[CollectiveEvidence]) -> Option<
     let mut out = String::new();
     emit(&mut out, &["Operation", "Latency", "Throughput"]);
     emit(&mut out, &["---", "---:", "---:"]);
-    for (name, latency, throughput) in summary_rows(m, &rates, all_reduce) {
+    let mut varies_by_machine = false;
+    for (name, latency, throughput) in summary_rows(profile, m, &rates, all_reduce) {
         if latency.is_none() && throughput.is_none() {
             continue;
         }
+        varies_by_machine |= [&latency, &throughput]
+            .iter()
+            .any(|cell| cell.as_deref().is_some_and(|cell| cell.ends_with('‡')));
         emit(
             &mut out,
             &[
@@ -253,12 +258,30 @@ pub fn summary(profile: &Profile, collectives: &[CollectiveEvidence]) -> Option<
         profile.name,
         transfer_basis(&[rates.h2d, rates.d2h, Some(rates.g2g)], profile),
     );
+    if varies_by_machine {
+        let _ = writeln!(
+            out,
+            "\n‡ napkin-bench's number for this cell differs by more than {:.0}% between runs \
+             on different machines; `napkin variation` has the range.",
+            variation::MACHINE_FLAG * 100.0
+        );
+    }
     Some(out)
+}
+
+/// Appends a ‡ to a non-empty `cell` when any metric behind it varies by
+/// machine, as `mark` appends a † when its rounds disagree.
+fn machine_mark(profile: &Profile, metrics: &[Metric], cell: Option<String>) -> Option<String> {
+    let varies = metrics.iter().any(|metric| {
+        variation::spread(profile, metric).is_some_and(|spread| spread.varies_by_machine())
+    });
+    cell.map(|cell| if varies { format!("{cell} ‡") } else { cell })
 }
 
 /// The summary's rows as (operation, latency, throughput); rows whose
 /// evidence is missing come back with both cells `None`.
 fn summary_rows(
+    profile: &Profile,
     m: &Measured,
     rates: &Rates,
     all_reduce: Option<AllReduceSummary<'_>>,
@@ -275,37 +298,51 @@ fn summary_rows(
             .iter()
             .find(|shape| shape.name == "decode-m8" && shape.dtype == Dtype::Bf16)
     });
+    let machine = |metrics: &[Metric], cell: Option<String>| machine_mark(profile, metrics, cell);
     vec![
-        ("Kernel launch".to_owned(), latency(Some(m.launch_us)), None),
+        (
+            "Kernel launch".to_owned(),
+            machine(&[variation::KERNEL_LAUNCH], latency(Some(m.launch_us))),
+            None,
+        ),
         (
             "Launch + sync round trip".to_owned(),
-            latency(m.sync_us),
+            machine(&[variation::LAUNCH_SYNC], latency(m.sync_us)),
             None,
         ),
         (
             "HBM random read".to_owned(),
-            m.hbm_latency_ns
-                .map(|ns| format!("{} ns", fmt_sig(ns, SIG))),
+            machine(
+                &[variation::HBM_LATENCY],
+                m.hbm_latency_ns
+                    .map(|ns| format!("{} ns", fmt_sig(ns, SIG))),
+            ),
             None,
         ),
         (
             "HBM copy, read + write counted".to_owned(),
             None,
-            throughput(Some(m.hbm_gbps)),
+            machine(&[variation::HBM_COPY], throughput(Some(m.hbm_gbps))),
         ),
         (
             "Host ↔ device, pinned".to_owned(),
-            latency(slower(m.h2d_latency_us, m.d2h_latency_us, f64::max)),
-            throughput(slower(
-                rates.h2d.map(|rate| rate.gbps),
-                rates.d2h.map(|rate| rate.gbps),
-                f64::min,
-            )),
+            machine(
+                &[variation::H2D_LATENCY, variation::D2H_LATENCY],
+                latency(slower(m.h2d_latency_us, m.d2h_latency_us, f64::max)),
+            ),
+            machine(
+                &[variation::H2D, variation::D2H],
+                throughput(slower(
+                    rates.h2d.map(|rate| rate.gbps),
+                    rates.d2h.map(|rate| rate.gbps),
+                    f64::min,
+                )),
+            ),
         ),
         (
             "GPU ↔ GPU, NVLink one-way".to_owned(),
-            latency(m.g2g_latency_us),
-            throughput(Some(rates.g2g.gbps)),
+            machine(&[variation::G2G_LATENCY], latency(m.g2g_latency_us)),
+            machine(&[variation::G2G], throughput(Some(rates.g2g.gbps))),
         ),
         (
             all_reduce.map_or_else(String::new, |all_reduce| {
@@ -320,9 +357,12 @@ fn summary_rows(
         (
             "Dense BF16 GEMM, 8192³".to_owned(),
             None,
-            m.compute_tflops
-                .get(&Dtype::Bf16)
-                .map(|tflops| fmt_tflops(*tflops, SIG)),
+            machine(
+                &[variation::BF16_GEMM],
+                m.compute_tflops
+                    .get(&Dtype::Bf16)
+                    .map(|tflops| fmt_tflops(*tflops, SIG)),
+            ),
         ),
         (
             decode.map_or_else(String::new, |shape| {
@@ -378,6 +418,144 @@ fn largest_nvlink_all_reduce<'a>(
             })
         })
         .max_by_key(|all_reduce| all_reduce.evidence.gpu_count)
+}
+
+fn unit_label(unit: Unit) -> &'static str {
+    match unit {
+        Unit::Nanoseconds => "ns",
+        Unit::Microseconds => "μs",
+        Unit::Gbps => "GB/s",
+        Unit::Tflops => "TFLOP/s",
+    }
+}
+
+/// Renders how far each headline napkin-bench number moves between the
+/// canonical run and its repeats on other machines, then which machine each
+/// run used. Only GPUs with at least one repeat get a column.
+#[must_use]
+pub fn variation(profiles: &[Profile]) -> String {
+    let repeated: Vec<&Profile> = profiles
+        .iter()
+        .filter(|profile| profile.measured.is_some() && !profile.repeats.is_empty())
+        .collect();
+    if repeated.is_empty() {
+        return "No repeated runs yet: `modal run modal/bench.py --gpu h100 --repeat 3` records \
+                some.\n"
+            .to_owned();
+    }
+    let mut out = String::new();
+    let mut header = vec!["napkin-bench number".to_owned()];
+    header.extend(repeated.iter().map(|profile| {
+        format!(
+            "{} ({} runs)",
+            profile.id.to_uppercase(),
+            variation::runs(profile).count()
+        )
+    }));
+    emit_owned(&mut out, &header);
+    let mut align = vec!["---".to_owned()];
+    align.extend(repeated.iter().map(|_| "---:".to_owned()));
+    emit_owned(&mut out, &align);
+    for metric in &variation::METRICS {
+        let mut cells = vec![format!("{}, {}", metric.name, unit_label(metric.unit))];
+        cells.extend(repeated.iter().map(|profile| {
+            variation::spread(profile, metric).map_or_else(
+                || "—".to_owned(),
+                |spread| {
+                    format!(
+                        "{}–{} ({}%){}",
+                        fmt_sig(spread.low, 3),
+                        fmt_sig(spread.high, 3),
+                        fmt_sig(spread.fraction() * 100.0, 2),
+                        if spread.varies_by_machine() {
+                            " ‡"
+                        } else {
+                            ""
+                        }
+                    )
+                },
+            )
+        }));
+        emit_owned(&mut out, &cells);
+    }
+    let _ = writeln!(
+        out,
+        "\nEach cell is the lowest–highest median round over the runs, then the spread: highest \
+         over lowest, minus one. ‡ marks more than {:.0}%, the most sirupsen/napkin-math lets a \
+         number move between machines. Transfers here are napkin-bench's own copies, not \
+         NVBandwidth.\n",
+        variation::MACHINE_FLAG * 100.0
+    );
+    append_variation_hosts(&mut out, &repeated);
+    out.push_str(
+        "\nGPU UUIDs are unique per physical GPU, shown by their first 8 hex digits, so runs with \
+         different UUIDs used different GPUs. Modal shows no machine ID inside a container: two \
+         2-GPU runs in the same provider and region may still share one 8-GPU node.\n",
+    );
+    out
+}
+
+/// One row per run behind `variation`: when it ran, on which driver, and on
+/// which machine, as far as Modal lets a container tell.
+fn append_variation_hosts(out: &mut String, repeated: &[&Profile]) {
+    emit(
+        out,
+        &[
+            "GPU",
+            "Run captured (UTC)",
+            "Driver",
+            "Provider",
+            "Region",
+            "GPU UUIDs",
+        ],
+    );
+    emit(out, &["---", "---", "---", "---", "---", "---"]);
+    for profile in repeated {
+        let gpu = profile.id.to_uppercase();
+        if let Some(canonical) = &profile.measured {
+            emit(
+                out,
+                &[
+                    &gpu,
+                    &format!("{} (canonical)", canonical.captured_at),
+                    &canonical.driver_version,
+                    "not recorded",
+                    "not recorded",
+                    "not recorded",
+                ],
+            );
+        }
+        for repeat in &profile.repeats {
+            let uuids = repeat
+                .host
+                .gpu_uuids
+                .iter()
+                .map(|uuid| {
+                    uuid.strip_prefix("GPU-")
+                        .unwrap_or(uuid)
+                        .chars()
+                        .take(8)
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            emit(
+                out,
+                &[
+                    &gpu,
+                    &repeat.measured.captured_at,
+                    &repeat.measured.driver_version,
+                    repeat
+                        .host
+                        .cloud_provider
+                        .strip_prefix("CLOUD_PROVIDER_")
+                        .unwrap_or(&repeat.host.cloud_provider),
+                    &repeat.host.region,
+                    &uuids,
+                ],
+            );
+        }
+    }
 }
 
 /// One row of the unit-cost table: what is moved or computed, how many GPUs
@@ -1154,7 +1332,7 @@ fn pcie_label(link: Option<(u8, u8)>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::find;
+    use crate::profile::{Host, Repeat, find};
 
     fn h100_with(samples: &[(&str, Vec<f64>)], gpu_state: Option<GpuState>) -> Profile {
         let mut profile = find("h100").cloned().unwrap();
@@ -1165,7 +1343,23 @@ mod tests {
             .collect();
         measured.gpu_state = gpu_state;
         measured.gemm_shapes = None;
+        profile.repeats.clear();
         profile
+    }
+
+    fn repeat_with_hbm(profile: &Profile, hbm_gbps: f64, uuids: [&str; 2]) -> Repeat {
+        let mut measured = profile.measured.clone().unwrap();
+        measured.hbm_gbps = hbm_gbps;
+        measured.captured_at = "2026-11-05T23:50:00Z".to_owned();
+        Repeat {
+            host: Host {
+                cloud_provider: "CLOUD_PROVIDER_OCI".to_owned(),
+                region: "us-central".to_owned(),
+                task_id: "ta-test".to_owned(),
+                gpu_uuids: uuids.iter().map(|uuid| (*uuid).to_owned()).collect(),
+            },
+            measured,
+        }
     }
 
     #[test]
@@ -1447,8 +1641,9 @@ mod tests {
 
     #[test]
     fn summary_has_one_latency_and_one_throughput_per_row() {
-        let h100 = find("h100").unwrap();
-        let table = summary(h100, crate::profile::collectives()).unwrap();
+        let mut h100 = find("h100").cloned().unwrap();
+        h100.repeats.clear();
+        let table = summary(&h100, crate::profile::collectives()).unwrap();
         let rows = table_rows(&table);
         assert_eq!(rows[0], ["Operation", "Latency", "Throughput"]);
         assert!(rows.iter().all(|row| row.len() == 3), "{table}");
@@ -1496,6 +1691,64 @@ mod tests {
         let table = summary(&profile, &[]).unwrap();
         assert!(
             table.contains("| Host ↔ device, pinned | 20 μs | 30 GB/s |"),
+            "{table}"
+        );
+    }
+
+    #[test]
+    fn summary_marks_cells_that_vary_by_machine() {
+        let mut profile = h100_with(&[], None);
+        let table = summary(&profile, &[]).unwrap();
+        assert!(!table.contains('‡'), "{table}");
+
+        let hbm = profile.measured.as_ref().unwrap().hbm_gbps;
+        profile.repeats = vec![repeat_with_hbm(
+            &profile,
+            hbm * 0.8,
+            ["GPU-aaaaaaaa-1", "GPU-bbbbbbbb-2"],
+        )];
+        let table = summary(&profile, &[]).unwrap();
+        assert!(
+            table.contains("| HBM copy, read + write counted |  | 3 TB/s ‡ |"),
+            "{table}"
+        );
+        assert!(table.contains("| Kernel launch | 2 μs |  |"), "{table}");
+        assert!(table.contains("more than 15% between runs"), "{table}");
+    }
+
+    #[test]
+    fn variation_without_repeats_says_how_to_record_them() {
+        let table = variation(&[h100_with(&[], None)]);
+        assert!(table.contains("--repeat 3"), "{table}");
+    }
+
+    #[test]
+    fn variation_renders_spread_and_the_machine_of_each_run() {
+        let mut profile = h100_with(&[], None);
+        let hbm = profile.measured.as_ref().unwrap().hbm_gbps;
+        profile.repeats = vec![
+            repeat_with_hbm(&profile, 2000.0, ["GPU-aaaaaaaa-1", "GPU-bbbbbbbb-2"]),
+            repeat_with_hbm(&profile, hbm, ["GPU-cccccccc-3", "GPU-dddddddd-4"]),
+        ];
+        let table = variation(&[profile]);
+        let rows = table_rows(&table);
+        assert_eq!(rows[0], ["napkin-bench number", "H100 (3 runs)"]);
+        assert!(
+            table.contains(&format!(
+                "| HBM copy, GB/s | 2000–{} ({}%) ‡ |",
+                fmt_sig(hbm, 3),
+                fmt_sig((hbm / 2000.0 - 1.0) * 100.0, 2)
+            )),
+            "{table}"
+        );
+        assert!(table.contains("| Kernel launch, μs | "), "{table}");
+        assert!(
+            table.contains("| H100 | 2026-11-05T23:50:00Z | 580.95.05 | OCI | us-central | aaaaaaaa, bbbbbbbb |"),
+            "{table}"
+        );
+        assert!(
+            table
+                .contains("(canonical) | 580.95.05 | not recorded | not recorded | not recorded |"),
             "{table}"
         );
     }

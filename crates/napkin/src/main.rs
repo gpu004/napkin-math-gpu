@@ -49,6 +49,8 @@ enum Command {
     },
     /// Print the markdown cost of moving 1 TB or doing 1 EFLOP on each priced GPU.
     UnitCosts,
+    /// Print the markdown spread of each napkin-bench number across repeated runs.
+    Variation,
     /// Print the markdown cross-GPU comparison table.
     Compare {
         /// Print unrounded values.
@@ -296,6 +298,7 @@ fn dispatch(command: &Command) -> Result<String, String> {
         Command::Table { gpu, exact } => cmd_table(gpu, *exact),
         Command::Summary { gpu } => cmd_summary(gpu),
         Command::UnitCosts => Ok(cmd_unit_costs()),
+        Command::Variation => Ok(napkin::table::variation(profile::builtin())),
         Command::Compare { exact } => Ok(cmd_compare(*exact)),
         Command::Estimate {
             gpu,
@@ -1427,6 +1430,7 @@ fn render_marker(command: &str) -> Result<String, String> {
         ["table", "--gpu", gpu] => cmd_table(gpu, false),
         ["summary", "--gpu", gpu] => cmd_summary(gpu),
         ["unit-costs"] => Ok(cmd_unit_costs()),
+        ["variation"] => Ok(napkin::table::variation(profile::builtin())),
         ["compare"] => Ok(cmd_compare(false)),
         ["prices"] => Ok(napkin::table::prices(price::builtin())),
         ["example", args @ ..] => {

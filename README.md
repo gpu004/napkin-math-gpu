@@ -16,17 +16,19 @@ spread between rounds, and its time for 1 MB and 1 GB.
 <!-- napkin summary --gpu h100 -->
 | Operation | Latency | Throughput |
 | --- | ---: | ---: |
-| Kernel launch | 2 μs |  |
-| Launch + sync round trip | 7 μs |  |
+| Kernel launch | 2 μs ‡ |  |
+| Launch + sync round trip | 7 μs ‡ |  |
 | HBM random read | 300 ns |  |
 | HBM copy, read + write counted |  | 3 TB/s |
-| Host ↔ device, pinned | 9 μs | 60 GB/s |
-| GPU ↔ GPU, NVLink one-way | 10 μs | 400 GB/s |
+| Host ↔ device, pinned | 9 μs ‡ | 60 GB/s ‡ |
+| GPU ↔ GPU, NVLink one-way | 10 μs ‡ | 400 GB/s |
 | AllReduce, 8 GPUs on NVLink, bus bandwidth | 40 μs | 500 GB/s |
 | Dense BF16 GEMM, 8192³ |  | 700 TFLOP/s |
 | BF16 GEMM, 8×8192×8192 (decode, 8 tokens) |  | 20 TFLOP/s |
 
 H100 SXM 80GB, one significant digit. Host ↔ device is the slower direction. Host and NVLink throughput come from NVBandwidth 2026-10-12, the rest from napkin-bench's median round. The AllReduce row is the fastest call and the highest bus bandwidth on the NCCL Tests curve (H100!:8, 2026-10-12).
+
+‡ napkin-bench's number for this cell differs by more than 15% between runs on different machines; `napkin variation` has the range.
 <!-- /napkin -->
 
 Units are decimal: GB is 10⁹ bytes and TB/s is 10¹² bytes per second.
@@ -35,16 +37,13 @@ by 7% at GiB (2³⁰ / 10⁹ = 1.074) and 10% at TiB (2⁴⁰ / 10¹² = 1.10). 
 7 TiB/s B200 memory row is 7.7 TB/s, NVIDIA's 8 TB/s datasheet figure;
 napkin-bench's HBM copy measured 6.4 TB/s.
 
-Every number comes from one Modal host per GPU model, measured on one day. The
-† marks below are spread between rounds on that host, not between machines.
-Simon averages three machine types and requires each latency to hold within
-15% on every machine he measured. No canonical run here has been repeated on
-another host or day yet, so a number may belong to one machine rather than to
-the GPU model.
+Every number comes from one canonical run per GPU model, on one Modal machine.
+Repeats on other machines ([Between machines](#between-machines)) show which
+numbers belong to the machine rather than to the GPU model; ‡ marks them.
 
 All four GPUs were measured on Modal on 2026-10-12 by `napkin-bench` (Rust +
-cudarc, CUDA-event timing, CUDA 12.9, driver 580.95.05 on H100 and
-610.57.04 on A100/B200/B300): `H100!:2`, `A100-80GB:2`, `B200:2`, and `B300:2`.
+cudarc, CUDA-event timing, CUDA 12.9, driver 580.95.05 on A100/H100 and
+610.57.04 on B200/B300): `H100!:2`, `A100-80GB:2`, `B200:2`, and `B300:2`.
 Each request returned two GPUs; the GPU↔GPU row is a `cuMemcpyPeerAsync` copy
 between them with peer access enabled — NVLink where the hardware has it.
 Host copies ran on A100 at PCIe Gen4 x16, and H100 and B200 at Gen5 x16. B300's
@@ -108,6 +107,65 @@ Shape suite: cuBLASLt 120901 (cublasLtGetVersion) captured 2026-10-12T23:51:29Z 
 
 Read through NVML 13.580.95.05 via nvml-wrapper 0.13 every 5 ms on the GPU that ran the GEMMs, during the timed rounds only. Board limits: 700 W, SM clock 1980 MHz, memory clock 2619 MHz. Power is the median round's energy-counter change between its first and last counter update; the counter updates only a few times per round, so a single round in `gpu_state` can read above the board limit. Clock limits give the share of polls that reported each NVML clock-limit reason.
 <!-- /napkin -->
+
+### Between machines
+
+The † marks above are spread between rounds within one run on one machine.
+`modal run modal/bench.py --gpu h100 --repeat 3` repeats the full run in
+fresh containers on whatever machines Modal assigns, and records each
+machine's provider, region, and GPU UUIDs. Two B200 runs below predate the
+one-run-per-container rule and share a machine. Simon averages three machine types
+and keeps a latency only if it holds within 15% on every machine he measured;
+this table applies the same rule to every GPU here.
+
+<!-- napkin variation -->
+| napkin-bench number | A100 (4 runs) | H100 (4 runs) | B200 (4 runs) | B300 (4 runs) |
+| --- | ---: | ---: | ---: | ---: |
+| Kernel launch, μs | 2.21–3.22 (46%) ‡ | 1.69–2.06 (22%) ‡ | 2.66–3.74 (41%) ‡ | 1.5–3.81 (150%) ‡ |
+| Launch + sync round trip, μs | 8.97–10.6 (18%) ‡ | 6.9–7.94 (15%) ‡ | 9.23–9.95 (7.8%) | 7.01–11.5 (63%) ‡ |
+| HBM random read, ns | 384–386 (0.48%) | 346–350 (1.1%) | 347–353 (1.8%) | 346–358 (3.4%) |
+| HBM copy, GB/s | 1740–1740 (0.083%) | 2980–3000 (0.64%) | 6410–6420 (0.12%) | 6400–6490 (1.5%) |
+| Pinned host RAM copy, GB/s | 21.7–95.4 (340%) ‡ | 99.6–117 (18%) ‡ | 67.6–79.1 (17%) ‡ | 42.8–243 (470%) ‡ |
+| Host → device latency, μs | 13.3–14.5 (8.5%) | 8.8–11.5 (31%) ‡ | 10.6–10.9 (3.3%) | 9.39–13.3 (42%) ‡ |
+| Host → device, GB/s | 24.7–26.8 (8.5%) | 53.7–55.5 (3.5%) | 55.5–55.6 (0.11%) | 55.7–57.7 (3.7%) |
+| Device → host latency, μs | 11.4–13.2 (15%) ‡ | 9.02–11.5 (28%) ‡ | 13.3–13.7 (3.3%) | 11.9–14.9 (25%) ‡ |
+| Device → host, GB/s | 26–26.3 (1.3%) | 47.6–55.5 (16%) ‡ | 57.1–57.1 (0.047%) | 57–57.4 (0.62%) |
+| GPU ↔ GPU latency, μs | 13–15.6 (21%) ‡ | 9.61–12.4 (29%) ‡ | 12.7–13.1 (3.4%) | 11–18.3 (66%) ‡ |
+| GPU ↔ GPU, slower direction, GB/s | 274–276 (0.38%) | 395–395 (0.058%) | 765–766 (0.089%) | 765–769 (0.5%) |
+| Dense BF16 GEMM, 8192³, TFLOP/s | 262–284 (8.6%) | 679–697 (2.8%) | 1330–1380 (3.8%) | 1400–1460 (4%) |
+
+Each cell is the lowest–highest median round over the runs, then the spread: highest over lowest, minus one. ‡ marks more than 15%, the most sirupsen/napkin-math lets a number move between machines. Transfers here are napkin-bench's own copies, not NVBandwidth.
+
+| GPU | Run captured (UTC) | Driver | Provider | Region | GPU UUIDs |
+| --- | --- | --- | --- | --- | --- |
+| A100 | 2026-10-12T23:01:23Z (canonical) | 580.95.05 | not recorded | not recorded | not recorded |
+| A100 | 2026-11-05T23:50:17Z | 610.57.04 | AZURE | eu-south | d5d6f0af, fed028f8 |
+| A100 | 2026-11-05T23:50:18Z | 610.57.04 | UNSPECIFIED | eu | aae01d9b, ac95cbed |
+| A100 | 2026-11-05T23:50:21Z | 610.57.04 | OCI | ap | 5484281b, b2a9b951 |
+| H100 | 2026-10-12T22:23:05Z (canonical) | 580.95.05 | not recorded | not recorded | not recorded |
+| H100 | 2026-11-05T23:42:53Z | 610.57.04 | OCI | us-central | 77ac2056, b623b800 |
+| H100 | 2026-11-05T23:42:57Z | 610.57.04 | OCI | us-central | 6f73cd39, ad83bdbc |
+| H100 | 2026-11-05T23:43:24Z | 610.57.04 | UNSPECIFIED | ca | 02e51b08, b1081b44 |
+| B200 | 2026-10-12T22:33:57Z (canonical) | 610.57.04 | not recorded | not recorded | not recorded |
+| B200 | 2026-11-05T23:43:07Z | 610.57.04 | AWS | us-west | a699ba9c, b01b92dc |
+| B200 | 2026-11-05T23:46:00Z | 610.57.04 | AWS | us-west | a699ba9c, b01b92dc |
+| B200 | 2026-11-05T23:46:55Z | 610.57.04 | AWS | eu-north | 15ff6185, 33a5ab6d |
+| B300 | 2026-10-12T22:50:21Z (canonical) | 610.57.04 | not recorded | not recorded | not recorded |
+| B300 | 2026-11-05T23:44:00Z | 610.57.04 | AWS | us-east | 0c9b9f4a, ad6f25ac |
+| B300 | 2026-11-05T23:46:50Z | 610.57.04 | UNSPECIFIED | us-central | 44504982, 9001452d |
+| B300 | 2026-11-05T23:46:52Z | 610.57.04 | UNSPECIFIED | us-central | 60d37169, 67008a4f |
+
+GPU UUIDs are unique per physical GPU, shown by their first 8 hex digits, so runs with different UUIDs used different GPUs. Modal shows no machine ID inside a container: two 2-GPU runs in the same provider and region may still share one 8-GPU node.
+<!-- /napkin -->
+
+The repeats split the numbers in two. HBM bandwidth and latency, NVLink
+bandwidth, and dense BF16 GEMM stay within 10% on every machine: they belong
+to the GPU model. Kernel launch and the pinned host RAM copy move more than
+15% on every GPU, and the 4-byte copy latencies do on most. They run through
+the host CPU, its memory, and the driver, so they belong to the machine: read
+them as orders of magnitude. The repeats ran on 2026-11-05, three weeks after
+the canonical runs, and the A100 and H100 machines had moved from driver
+580.95.05 to 610.57.04 in between, so this spread mixes machine and software.
 
 ## Other GPUs
 
@@ -562,6 +620,7 @@ napkin gpus                                       # profiles and their basis
 napkin summary --gpu h100                         # the memorization table
 napkin table --gpu h100                           # the detailed tables
 napkin unit-costs                                 # cost of 1 TB or 1 EFLOP per GPU
+napkin variation                                  # spread across repeated runs
 napkin compare                                    # every GPU side by side
 napkin estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB [--h2d 2GB]
 napkin estimate --gpu h100 --dtype bf16 --gemm 4096x4096x4096
@@ -596,6 +655,7 @@ The numbers come from `napkin-bench` (Rust + cudarc), run on Modal:
 
 ```sh
 modal run modal/bench.py --gpu h100     # writes profiles/h100.measured.json
+modal run modal/bench.py --gpu h100 --repeat 3  # adds profiles/repeats/h100/*.json
 napkin readme --write README.md PROBLEMS.md  # refreshes the tables
 ```
 
