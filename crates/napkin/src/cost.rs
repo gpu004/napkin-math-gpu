@@ -153,8 +153,37 @@ pub fn cost(job: &Job, price_per_gpu_hour: f64) -> Result<Cost, CostError> {
 
 #[cfg(test)]
 mod tests {
+    use hegel::TestCase;
+    use hegel::generators as gs;
+
     use super::*;
     use crate::units::fmt_money;
+
+    fn near(actual: f64, expected: f64) {
+        let difference = (actual - expected).abs();
+        let scale = actual.abs().max(expected.abs()).max(1e-12);
+        assert!(
+            difference <= 1e-9 * scale,
+            "{actual} differs from {expected} by {difference}"
+        );
+    }
+
+    // Times stay inside `[0, 1e5]` seconds, utilization inside `[0.05, 1]`,
+    // and the price inside `[0.01, 100]` USD per GPU-hour, so every product
+    // is finite and the `1e-9` relative comparison is not an ulp comparison.
+    fn draw_job(tc: &TestCase) -> (Job, f64) {
+        let job = Job {
+            gpus: tc.draw(gs::integers::<u32>().min_value(1).max_value(64)),
+            busy_s: tc.draw(gs::floats::<f64>().min_value(1e-3).max_value(1e5)),
+            utilization: tc.draw(gs::floats::<f64>().min_value(0.05).max_value(1.0)),
+            startup_s: tc.draw(gs::floats::<f64>().min_value(0.0).max_value(1e5)),
+            idle_s: tc.draw(gs::floats::<f64>().min_value(0.0).max_value(1e5)),
+            granularity_s: None,
+            work: None,
+        };
+        let price = tc.draw(gs::floats::<f64>().min_value(0.01).max_value(100.0));
+        (job, price)
+    }
 
     fn job() -> Job {
         Job {
@@ -270,5 +299,72 @@ mod tests {
         assert!(cost(&input, 3.0).is_err());
         input.work = Some(Work::Rate(f64::INFINITY));
         assert!(cost(&input, 3.0).is_err());
+    }
+
+    #[hegel::test]
+    fn billed_cost_follows_from_busy_time_utilization_and_price(tc: TestCase) {
+        let (job, price) = draw_job(&tc);
+        let result = cost(&job, price).expect("bounded job");
+        let running_s = job.busy_s / job.utilization;
+        let wall_s = job.startup_s + running_s + job.idle_s;
+        near(result.running_s, running_s);
+        near(result.wall_s, wall_s);
+        near(result.billed_s, wall_s);
+        near(
+            result.gpu_hours,
+            f64::from(job.gpus) * result.billed_s / 3_600.0,
+        );
+        near(result.cost, result.gpu_hours * price);
+        near(result.useful, job.busy_s / result.billed_s);
+        assert!(result.useful > 0.0 && result.useful <= 1.0 + 1e-9);
+        assert!(result.work.is_none());
+
+        let mut more_gpus = job;
+        more_gpus.gpus = job.gpus.saturating_mul(2);
+        let scaled = cost(&more_gpus, price).expect("doubled GPU count");
+        near(
+            scaled.cost,
+            result.cost * f64::from(more_gpus.gpus) / f64::from(job.gpus),
+        );
+        near(
+            cost(&job, price * 2.0).expect("doubled price").cost,
+            result.cost * 2.0,
+        );
+    }
+
+    // Granularity is a whole number of seconds in `[1, 3600]`. The bill is
+    // the wall clock rounded up to that quantum, and an exact multiple is
+    // left alone.
+    #[hegel::test]
+    fn billing_quantum_rounds_the_wall_clock_up(tc: TestCase) {
+        let (mut job, price) = draw_job(&tc);
+        let granularity = tc.draw(gs::floats::<f64>().min_value(1.0).max_value(3_600.0));
+        job.granularity_s = Some(granularity);
+        let result = cost(&job, price).expect("job with a billing quantum");
+        assert!(result.billed_s + 1e-9 >= result.wall_s);
+        assert!(result.billed_s - result.wall_s < granularity + 1e-6);
+        near(
+            result.billed_s / granularity,
+            (result.billed_s / granularity).round(),
+        );
+        near(result.useful, job.busy_s / result.billed_s);
+    }
+
+    #[hegel::test]
+    fn work_per_dollar_is_completed_work_over_the_bill(tc: TestCase) {
+        let (mut job, price) = draw_job(&tc);
+        let rate = tc.draw(gs::floats::<f64>().min_value(0.0).max_value(1e9));
+        job.work = Some(Work::Rate(rate));
+        let rated = cost(&job, price).expect("rated work");
+        let rated_total = rated.work.expect("rate produces a work total");
+        near(rated_total.units, rate * job.busy_s);
+        near(rated_total.per_dollar, rated_total.units / rated.cost);
+
+        let count = tc.draw(gs::floats::<f64>().min_value(0.0).max_value(1e12));
+        job.work = Some(Work::Count(count));
+        let counted = cost(&job, price).expect("counted work");
+        let counted_total = counted.work.expect("count produces a work total");
+        near(counted_total.units, count);
+        near(counted_total.per_dollar, count / counted.cost);
     }
 }

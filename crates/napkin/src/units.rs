@@ -287,7 +287,21 @@ pub fn fmt_intensity(flops_per_byte: f64, sig: u32) -> String {
 
 #[cfg(test)]
 mod tests {
+    use hegel::TestCase;
+    use hegel::generators as gs;
+
     use super::*;
+
+    // `1e-9` is many orders above an f64 ulp at the magnitudes these tests
+    // draw, and far below a one-digit change.
+    fn near(actual: f64, expected: f64) {
+        let difference = (actual - expected).abs();
+        let scale = actual.abs().max(expected.abs()).max(1e-12);
+        assert!(
+            difference <= 1e-9 * scale,
+            "{actual} differs from {expected} by {difference}"
+        );
+    }
 
     #[test]
     fn parses_plain_and_scaled_numbers() {
@@ -380,5 +394,107 @@ mod tests {
             assert_eq!(formatted, expected);
             assert!((parse_number(&formatted).unwrap() / value - 1.0).abs() < 0.01);
         }
+    }
+
+    // Magnitudes stay in `[1e-6, 1e12]` and significance in `1..=6`. One
+    // significant digit may move a value by up to half a power of ten, which
+    // is a relative error of `0.5 × 10^(1 − sig)`.
+    #[hegel::test]
+    fn round_sig_stays_within_half_an_ulp_and_is_idempotent(tc: TestCase) {
+        let magnitude = tc.draw(gs::floats::<f64>().min_value(1e-6).max_value(1e12));
+        let value = if tc.draw(gs::booleans()) {
+            -magnitude
+        } else {
+            magnitude
+        };
+        let sig = tc.draw(gs::integers::<u32>().min_value(1).max_value(6));
+        let rounded = round_sig(value, sig);
+        assert!(rounded.is_sign_negative() == value.is_sign_negative() || rounded == 0.0);
+        assert!(rounded.is_finite());
+        near(round_sig(rounded, sig), rounded);
+        let tolerance = 0.5 * 10_f64.powi(1 - i32::try_from(sig).unwrap_or(1));
+        let relative = (rounded - value).abs() / value.abs();
+        assert!(
+            relative <= tolerance * (1.0 + 1e-6),
+            "round_sig({value}, {sig}) = {rounded}, relative error {relative}, half-ulp {tolerance}"
+        );
+    }
+
+    // The printed SI form uses the same decimal prefixes `parse_number` reads,
+    // so parsing it recovers `round_sig`, not the unrounded input.
+    #[hegel::test]
+    fn printed_si_quantities_parse_back_to_their_rounded_value(tc: TestCase) {
+        let magnitude = tc.draw(gs::floats::<f64>().min_value(1.0).max_value(1e12));
+        let value = if tc.draw(gs::booleans()) {
+            -magnitude
+        } else {
+            magnitude
+        };
+        let sig = tc.draw(gs::integers::<u32>().min_value(1).max_value(6));
+        let formatted = fmt_si(value, sig);
+        let parsed = parse_number(&formatted).unwrap();
+        near(parsed, round_sig(value, sig));
+    }
+
+    // A coefficient times a named scale. `B` means 10^9 only for counts;
+    // binary prefixes are exact powers of 1024.
+    #[hegel::test]
+    fn unit_suffix_multiplies_the_coefficient(tc: TestCase) {
+        let coefficient = tc.draw(gs::integers::<u32>().min_value(0).max_value(10_000));
+        let (suffix, scale) = tc.draw(gs::sampled_from(&[
+            ("", 1.0),
+            ("K", 1e3),
+            ("M", 1e6),
+            ("G", 1e9),
+            ("T", 1e12),
+            ("P", 1e15),
+        ]));
+        let text = format!("{coefficient}{suffix}");
+        near(parse_number(&text).unwrap(), f64::from(coefficient) * scale);
+
+        let (byte_suffix, byte_scale) = tc.draw(gs::sampled_from(&[
+            ("B", 1.0),
+            ("KB", 1e3),
+            ("MB", 1e6),
+            ("GB", 1e9),
+            ("TB", 1e12),
+            ("KiB", 1_024.0),
+            ("MiB", 1_024.0_f64.powi(2)),
+            ("GiB", 1_024.0_f64.powi(3)),
+            ("TiB", 1_024.0_f64.powi(4)),
+        ]));
+        let bytes = format!("{coefficient}{byte_suffix}");
+        near(
+            parse_bytes(&bytes).unwrap(),
+            f64::from(coefficient) * byte_scale,
+        );
+
+        let (count_suffix, count_scale) = tc.draw(gs::sampled_from(&[
+            ("", 1.0),
+            ("K", 1e3),
+            ("M", 1e6),
+            ("B", 1e9),
+            ("T", 1e12),
+        ]));
+        let count = format!("{coefficient}{count_suffix}");
+        near(
+            parse_count(&count).unwrap(),
+            f64::from(coefficient) * count_scale,
+        );
+
+        let (time_suffix, seconds) = tc.draw(gs::sampled_from(&[
+            ("ns", 1e-9),
+            ("us", 1e-6),
+            ("μs", 1e-6),
+            ("ms", 1e-3),
+            ("s", 1.0),
+            ("min", 60.0),
+            ("h", 3_600.0),
+        ]));
+        let duration = format!("{coefficient}{time_suffix}");
+        near(
+            parse_duration(&duration).unwrap(),
+            f64::from(coefficient) * seconds,
+        );
     }
 }
