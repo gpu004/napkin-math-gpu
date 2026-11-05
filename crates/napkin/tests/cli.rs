@@ -236,6 +236,87 @@ fn compare_prints_table() {
 }
 
 #[test]
+fn collective_across_machines_refuses_and_names_the_datasheet_link() {
+    let (stdout, stderr, code) = napkin(&[
+        "collective",
+        "--gpu",
+        "h100",
+        "--count",
+        "16",
+        "--topology",
+        "nvlink",
+        "--op",
+        "all-reduce",
+        "--bytes",
+        "4GiB",
+    ]);
+    assert_eq!(code, 2, "{stdout}");
+    assert!(
+        stderr.contains("no NCCL Tests evidence for h100 × 16"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("datasheet RDMA link: 400 Gbit/s = 50 GB/s per GPU each way, 5 μs one-way, 8 GPUs per machine"),
+        "{stderr}"
+    );
+
+    let (_, stderr, code) = napkin(&[
+        "collective",
+        "--gpu",
+        "b200",
+        "--count",
+        "16",
+        "--topology",
+        "nvlink",
+        "--op",
+        "all-reduce",
+        "--bytes",
+        "4GiB",
+    ]);
+    assert_eq!(code, 2);
+    assert!(!stderr.contains("RDMA"), "{stderr}");
+
+    let (_, stderr, code) = napkin(&[
+        "collective",
+        "--gpu",
+        "h100",
+        "--count",
+        "8",
+        "--topology",
+        "nvlink",
+        "--op",
+        "all-reduce",
+        "--bytes",
+        "8GiB",
+    ]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("does not extrapolate"), "{stderr}");
+    assert!(!stderr.contains("RDMA"), "{stderr}");
+}
+
+#[test]
+fn one_machine_collective_lists_the_unused_network_link() {
+    let (stdout, stderr, code) = napkin(&[
+        "collective",
+        "--gpu",
+        "h100",
+        "--count",
+        "8",
+        "--topology",
+        "nvlink",
+        "--op",
+        "all-reduce",
+        "--bytes",
+        "128KiB",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("network     50 GB/s per-GPU RDMA datasheet line rate, one direction, across machines (not used here)"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn cost_requires_exactly_one_price_source() {
     let (_, _, code) = napkin(&["cost", "--gpus", "2", "--time", "10s"]);
     assert_eq!(code, 2);

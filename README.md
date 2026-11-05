@@ -40,6 +40,9 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 | HBM copy (read + write) |  | 3 TB/s | 300 ns | 300 μs | napkin-bench |
 | Elementwise add |  | 3 TB/s | 300 ns | 300 μs | napkin-bench |
 | GPU ↔ GPU, NVLink one-way, slower direction | 10 μs | 400 GB/s | 3 μs | 3 ms | NVBandwidth CE; latency napkin-bench |
+| GPU ↔ GPU across machines, RDMA one-way (400 Gbit/s NIC per GPU) | 5 μs | 50 GB/s | 20 μs | 20 ms | datasheet line rate |
+
+The RDMA row is not measured: no NCCL Tests curve here spans two machines. It is the DGX H100, ConnectX-7 InfiniBand line rate, 400 Gbit/s / 8 = 50 GB/s per GPU in each direction, with 8 GPUs per machine and one NIC each. Source: https://docs.nvidia.com/dgx/dgxh100-user-guide/introduction-to-dgxh100.html (checked 2026-11-05) — eight H100s and eight single-port ConnectX-7 cards, InfiniBand up to 400 Gbps each. NVIDIA publishes no end-to-end latency; 5 μs is the GPU ↔ GPU RDMA row of https://github.com/sirupsen/napkin-math (checked 2026-11-05), which also rounds the rate to 40 GiB/s.
 
 | Dense GEMM, 8192³ | Throughput | 1 GFLOP | 1 TFLOP | Ridge point | Basis |
 | --- | ---: | ---: | ---: | ---: | --- |
@@ -359,6 +362,7 @@ collective  algbw 3.37 GB/s · busbw 5.89 GB/s (busbw = algbw × 2(n-1)/n)
 curve       128 KiB 38.9 μs · floor 36.8 μs · peak busbw 479 GB/s at 4 GiB
 peer copy   395 GB/s measured (napkin-bench cuMemcpyPeer, one GPU pair; not used here)
 nvlink      900 GB/s per-GPU datasheet aggregate, both directions (not used here)
+network     50 GB/s per-GPU RDMA datasheet line rate, one direction, across machines (not used here)
 evidence    NCCL 2.27.3 · nccl-tests v2.21.1 (afd59ab) · H100!:8 · 2026-10-12 · profiles/nccl-tests/h100x8
 ```
 <!-- /napkin -->

@@ -46,11 +46,19 @@ pub struct CollectiveEstimate<'a> {
     pub regime: Regime,
 }
 
-fn matches_query(evidence: &CollectiveEvidence, query: &Query<'_>) -> bool {
-    evidence.gpu == query.gpu
-        && evidence.gpu_count == query.gpu_count
-        && evidence.topology == query.topology
-        && evidence.dtype == query.dtype
+/// Returns the NCCL Tests run measured on exactly the queried GPU, count,
+/// topology and dtype, if there is one.
+#[must_use]
+pub fn find_evidence<'a>(
+    evidence: &'a [CollectiveEvidence],
+    query: &Query<'_>,
+) -> Option<&'a CollectiveEvidence> {
+    evidence.iter().find(|candidate| {
+        candidate.gpu == query.gpu
+            && candidate.gpu_count == query.gpu_count
+            && candidate.topology == query.topology
+            && candidate.dtype == query.dtype
+    })
 }
 
 fn measured_combinations(evidence: &[CollectiveEvidence]) -> String {
@@ -91,10 +99,7 @@ pub fn estimate_with<'a>(
     if !query.bytes.is_finite() || query.bytes <= 0.0 {
         return Err("collective bytes must be finite and greater than zero".to_owned());
     }
-    let item = evidence
-        .iter()
-        .find(|candidate| matches_query(candidate, query))
-        .ok_or_else(|| {
+    let item = find_evidence(evidence, query).ok_or_else(|| {
             format!(
                 "no NCCL Tests evidence for {} × {} over {} in {} (measured: {}); napkin does not scale collective curves across GPU counts or topologies",
                 query.gpu,

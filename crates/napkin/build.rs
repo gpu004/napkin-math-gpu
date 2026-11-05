@@ -8,8 +8,8 @@ use std::process::ExitCode;
 use napkin_profile::collective::{Collective, CollectiveEvidence, Curve, CurvePoint, Topology};
 use napkin_profile::{
     Access, Bandwidth, Ceiling, CopyPath, Dtype, Endpoint, GemmAlgo, GemmCheck, GemmShape,
-    GemmShapeSuite, GpuState, Latency, Measured, Nvbandwidth, Profile, RoundState, Span, Statistic,
-    tflops,
+    GemmShapeSuite, GpuState, Latency, Measured, Network, Nvbandwidth, Profile, RoundState, Span,
+    Statistic, tflops,
 };
 use serde::Deserialize;
 
@@ -597,6 +597,33 @@ fn validate_ceiling(id: &str, ceiling: &Ceiling) -> Result<(), String> {
     if ceiling.source.is_empty() {
         return Err(format!("profile {id:?} has an empty ceiling.source"));
     }
+    if let Some(network) = &ceiling.network {
+        validate_network(id, network)?;
+    }
+    Ok(())
+}
+
+fn validate_network(id: &str, network: &Network) -> Result<(), String> {
+    if !(network.nic_gbit_per_gpu.is_finite() && network.nic_gbit_per_gpu > 0.0) {
+        return Err(format!(
+            "profile {id:?} has nonpositive ceiling.network.nic_gbit_per_gpu"
+        ));
+    }
+    if !(network.latency_us.is_finite() && network.latency_us > 0.0) {
+        return Err(format!(
+            "profile {id:?} has nonpositive ceiling.network.latency_us"
+        ));
+    }
+    if network.gpus_per_node == 0 {
+        return Err(format!(
+            "profile {id:?} has zero ceiling.network.gpus_per_node"
+        ));
+    }
+    if network.system.is_empty() || !network.source.contains("https://") {
+        return Err(format!(
+            "profile {id:?} ceiling.network needs a system and an https:// source"
+        ));
+    }
     Ok(())
 }
 
@@ -916,6 +943,7 @@ fn emit_profile(profile: &Profile, generated: &mut String) {
         nvlink_gbps,
         compute_tflops,
         source,
+        network,
     } = ceiling;
     if measured.is_some() {
         generated.push_str(
@@ -965,6 +993,10 @@ fn emit_profile(profile: &Profile, generated: &mut String) {
         &dtype_map(compute_tflops),
     );
     emit_field(generated, "            ", "source", &string_literal(source));
+    let network = network
+        .as_ref()
+        .map_or_else(|| "None".to_owned(), emit_network);
+    emit_field(generated, "            ", "network", &network);
     generated.push_str("        },\n");
     let measured = measured
         .as_ref()
@@ -975,6 +1007,23 @@ fn emit_profile(profile: &Profile, generated: &mut String) {
         .map_or_else(|| "None".to_owned(), emit_nvbandwidth);
     emit_field(generated, "        ", "nvbandwidth", &nvbandwidth);
     generated.push_str("    }\n}\n");
+}
+
+fn emit_network(network: &Network) -> String {
+    let Network {
+        system,
+        nic_gbit_per_gpu,
+        gpus_per_node,
+        latency_us,
+        source,
+    } = network;
+    format!(
+        "Some(Network {{ system: {}, nic_gbit_per_gpu: {}, gpus_per_node: {gpus_per_node}_u32, latency_us: {}, source: {} }})",
+        string_literal(system),
+        float_literal(*nic_gbit_per_gpu),
+        float_literal(*latency_us),
+        string_literal(source),
+    )
 }
 
 fn emit_nvbandwidth(evidence: &Nvbandwidth) -> String {

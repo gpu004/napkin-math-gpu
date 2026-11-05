@@ -6,8 +6,8 @@ use std::fmt::Write as _;
 
 use crate::price::PriceRecord;
 use crate::profile::{
-    Basis, CopyPath, CrossCheck, Dtype, GpuState, Measured, Profile, Rates, RoundState, Span,
-    TransferMetric, TransferRate,
+    Basis, CopyPath, CrossCheck, Dtype, GpuState, Measured, Network, Profile, Rates, RoundState,
+    Span, TransferMetric, TransferRate,
 };
 use crate::units::{
     fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_sig, fmt_tflops, round_sig,
@@ -182,8 +182,12 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
     let m = profile.measured.as_ref()?;
     let rates = profile.rates(false);
     let sig = if exact { 3 } else { SIG };
+    let network = profile.ceiling.network.as_ref();
     let mut out = String::new();
-    append_operation_table(&mut out, m, &rates, exact);
+    append_operation_table(&mut out, m, &rates, network, exact);
+    if let Some(network) = network {
+        network_note(&mut out, network);
+    }
     out.push('\n');
     append_gemm_table(&mut out, m, exact);
     let measured_shapes = if m
@@ -207,7 +211,13 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
     Some(out)
 }
 
-fn append_operation_table(out: &mut String, m: &Measured, rates: &Rates, exact: bool) {
+fn append_operation_table(
+    out: &mut String,
+    m: &Measured,
+    rates: &Rates,
+    network: Option<&Network>,
+    exact: bool,
+) {
     emit(
         out,
         &[
@@ -220,7 +230,11 @@ fn append_operation_table(out: &mut String, m: &Measured, rates: &Rates, exact: 
         ],
     );
     emit(out, &["---", "---:", "---:", "---:", "---:", "---"]);
-    for cells in operation_rows(m, rates, exact) {
+    let mut rows = operation_rows(m, rates, exact);
+    if let Some(network) = network {
+        rows.push(network_row(network, exact));
+    }
+    for cells in rows {
         if cells[1..5].iter().all(String::is_empty) {
             continue;
         }
@@ -268,6 +282,38 @@ fn operation_rows(m: &Measured, rates: &Rates, exact: bool) -> Vec<[String; 6]> 
         exact,
     ));
     rows
+}
+
+fn network_row(network: &Network, exact: bool) -> [String; 6] {
+    let sig = if exact { 3 } else { SIG };
+    let gbps = network.gbps();
+    [
+        format!(
+            "GPU ↔ GPU across machines, RDMA one-way ({} Gbit/s NIC per GPU)",
+            fmt_sig(network.nic_gbit_per_gpu, 3)
+        ),
+        fmt_duration(network.latency_us / 1e6, sig),
+        fmt_gbps(gbps, sig),
+        cell_time(1e6, gbps, exact),
+        cell_time(1e9, gbps, exact),
+        "datasheet line rate".to_owned(),
+    ]
+}
+
+/// Says under the table that the RDMA row is a vendor ceiling and where each
+/// of its numbers comes from, because every other transfer row is measured.
+fn network_note(out: &mut String, network: &Network) {
+    let _ = writeln!(
+        out,
+        "\nThe RDMA row is not measured: no NCCL Tests curve here spans two machines. It is the {} \
+         line rate, {} Gbit/s / 8 = {} per GPU in each direction, with {} GPUs per machine \
+         and one NIC each. Source: {}",
+        network.system,
+        fmt_sig(network.nic_gbit_per_gpu, 3),
+        fmt_gbps(network.gbps(), 3),
+        network.gpus_per_node,
+        network.source,
+    );
 }
 
 fn non_transfer_rows(
@@ -1145,6 +1191,29 @@ mod tests {
             "{table}"
         );
         assert!(table.contains("Board limits: 700 W"), "{table}");
+    }
+
+    #[test]
+    fn network_row_is_labelled_datasheet_and_explained() {
+        let table = numbers(&h100_with(&[], None), false).unwrap();
+        assert!(
+            table.contains(
+                "| GPU ↔ GPU across machines, RDMA one-way (400 Gbit/s NIC per GPU) | 5 μs | 50 GB/s | 20 μs | 20 ms | datasheet line rate |"
+            ),
+            "{table}"
+        );
+        assert!(table.contains("The RDMA row is not measured"), "{table}");
+        assert!(
+            table.contains(
+                "400 Gbit/s / 8 = 50 GB/s per GPU in each direction, with 8 GPUs per machine"
+            ),
+            "{table}"
+        );
+
+        let mut without = h100_with(&[], None);
+        without.ceiling.network = None;
+        let table = numbers(&without, false).unwrap();
+        assert!(!table.contains("RDMA"), "{table}");
     }
 
     #[test]

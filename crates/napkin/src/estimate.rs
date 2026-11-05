@@ -596,6 +596,7 @@ mod tests {
                 nvlink_gbps: 300.0,
                 compute_tflops: compute.clone(),
                 source: "fixture".to_owned(),
+                network: None,
             },
             nvbandwidth: None,
             measured: Some(Measured {

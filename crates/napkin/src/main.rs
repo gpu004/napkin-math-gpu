@@ -398,7 +398,8 @@ fn cmd_collective(
         dtype,
         bytes: units::parse_bytes(bytes).map_err(|error| error.to_string())?,
     };
-    let estimate = collective::estimate(&query)?;
+    let estimate = collective::estimate(&query)
+        .map_err(|error| with_network_hint(error, gpu_profile, &query))?;
     let evidence = estimate.evidence;
     let redop = if op == Collective::AllGather {
         String::new()
@@ -456,6 +457,26 @@ fn cmd_collective(
         fmt_gbps(estimate.peak.busbw_gbps, 3),
         fmt_curve_bytes(estimate.peak.bytes)
     );
+    append_unused_links(&mut out, gpu_profile);
+    let captured_date = evidence
+        .captured_at
+        .get(..10)
+        .map_or(evidence.captured_at.as_str(), |captured| captured);
+    let _ = writeln!(
+        out,
+        "evidence    NCCL {} · nccl-tests {} · {} · {} · {}",
+        evidence.nccl_version,
+        evidence.nccl_tests,
+        evidence.modal_request,
+        captured_date,
+        evidence.raw_dir
+    );
+    Ok(out)
+}
+
+/// Lists the other link rates the profile knows, so a reader can see they
+/// were deliberately left out of the curve-based answer.
+fn append_unused_links(out: &mut String, gpu_profile: &Profile) {
     let peer_copy = gpu_profile
         .measured
         .as_ref()
@@ -475,20 +496,31 @@ fn cmd_collective(
         "nvlink      {} per-GPU datasheet aggregate, both directions (not used here)",
         fmt_gbps(gpu_profile.ceiling.nvlink_gbps, 3)
     );
-    let captured_date = evidence
-        .captured_at
-        .get(..10)
-        .map_or(evidence.captured_at.as_str(), |captured| captured);
-    let _ = writeln!(
-        out,
-        "evidence    NCCL {} · nccl-tests {} · {} · {} · {}",
-        evidence.nccl_version,
-        evidence.nccl_tests,
-        evidence.modal_request,
-        captured_date,
-        evidence.raw_dir
-    );
-    Ok(out)
+    if let Some(network) = &gpu_profile.ceiling.network {
+        let _ = writeln!(
+            out,
+            "network     {} per-GPU RDMA datasheet line rate, one direction, across machines (not used here)",
+            fmt_gbps(network.gbps(), 3)
+        );
+    }
+}
+
+/// When no curve matches, for example `--count 16` on two 8-GPU machines,
+/// points at the datasheet link instead of leaving the user with a bare refusal.
+fn with_network_hint(error: String, gpu_profile: &Profile, query: &Query<'_>) -> String {
+    match &gpu_profile.ceiling.network {
+        Some(network) if collective::find_evidence(profile::collectives(), query).is_none() => {
+            format!(
+                "{error}\nevery NCCL Tests curve is one machine; across machines {} has only a datasheet RDMA link: {} Gbit/s = {} per GPU each way, {} one-way, {} GPUs per machine. Combine it with the one-machine curves by hand (README.md, \"Across machines\")",
+                gpu_profile.name,
+                fmt_sig(network.nic_gbit_per_gpu, 3),
+                fmt_gbps(network.gbps(), 3),
+                fmt_duration(network.latency_us / 1e6, 3),
+                network.gpus_per_node,
+            )
+        }
+        _ => error,
+    }
 }
 
 fn fmt_curve_bytes(bytes: u64) -> String {

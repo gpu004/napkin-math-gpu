@@ -14,6 +14,13 @@
       "tf32": 494.5,
       "fp32": 67
     },
-    "source": "https://www.nvidia.com/en-us/data-center/h100/ — NVIDIA publishes sparse tensor figures; dense shown at half. FP32 is the non-tensor rate."
+    "source": "https://www.nvidia.com/en-us/data-center/h100/ — NVIDIA publishes sparse tensor figures; dense shown at half. FP32 is the non-tensor rate.",
+    "network": {
+      "system": "DGX H100, ConnectX-7 InfiniBand",
+      "nic_gbit_per_gpu": 400,
+      "gpus_per_node": 8,
+      "latency_us": 5,
+      "source": "https://docs.nvidia.com/dgx/dgxh100-user-guide/introduction-to-dgxh100.html (checked 2026-11-05) — eight H100s and eight single-port ConnectX-7 cards, InfiniBand up to 400 Gbps each. NVIDIA publishes no end-to-end latency; 5 μs is the GPU ↔ GPU RDMA row of https://github.com/sirupsen/napkin-math (checked 2026-11-05), which also rounds the rate to 40 GiB/s."
+    }
   }
 }
