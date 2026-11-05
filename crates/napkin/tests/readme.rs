@@ -41,6 +41,28 @@ fn readme_napkin_blocks_match_renderers() {
 }
 
 #[test]
+fn readme_copy_sizes_match_h100_profile() -> Result<(), Box<dyn std::error::Error>> {
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))?;
+    let rates = profile::find("h100")
+        .ok_or("missing h100 profile")?
+        .rates(false);
+    let latency_us = rates.h2d_latency_us.ok_or("h100 has no h2d latency")?;
+    let gbps = rates.h2d.ok_or("h100 has no h2d rate")?.gbps;
+    // μs × GB/s = 10⁻⁶ s × 10⁹ B/s = 10³ B, so the product is in KB.
+    let break_even_kb = latency_us * gbps;
+    let text = format!(
+        "about {} KB and {} KB",
+        round_sig(napkin::table::SPREAD_FLAG * break_even_kb, 1),
+        round_sig(break_even_kb, 1)
+    );
+    assert!(
+        readme.contains(&text),
+        "README's copy-latency prose should say {text:?}; update it with the profile"
+    );
+    Ok(())
+}
+
+#[test]
 fn validation_report_matches_cli_output() {
     let expected =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../VALIDATION.md"))
@@ -438,6 +460,12 @@ fn problem_answers_follow_from_teaching_constants() -> Result<(), Box<dyn std::e
             0.7,
         ),
         ("9 μs × 56 GB/s ≈ 500 KB", L_COPY * P / 1e3, 2, 500.0),
+        (
+            "under the 25 KB latency size",
+            napkin::table::SPREAD_FLAG * L_COPY * P / 1e3,
+            2,
+            25.0,
+        ),
         (
             "F / M = 690 × 10¹² / 3 × 10¹² ≈ 230  FLOP/B",
             ridge,
