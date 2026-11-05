@@ -331,11 +331,11 @@ fn utilization_reverses_peak_per_dollar_ranking() {
                 "--price",
                 "6.25",
                 "--time",
-                "630s",
+                "750s",
                 "--granularity",
                 "1s",
             ],
-            "cost        $1.09 per job",
+            "cost        $1.3 per job",
         ),
         (
             &[
@@ -361,13 +361,13 @@ fn utilization_reverses_peak_per_dollar_ranking() {
                 "--price",
                 "6.25",
                 "--time",
-                "630s",
+                "750s",
                 "--utilization",
                 "0.3",
                 "--granularity",
                 "1s",
             ],
-            "cost        $3.65 per job",
+            "cost        $4.34 per job",
         ),
     ] {
         let (stdout, stderr, code) = napkin(args);
