@@ -608,20 +608,52 @@ communication included, says so.
 ### Price records
 
 Dated list prices live in `prices/*.json`, apart from the hardware profiles.
-Each record names the provider, SKU, currency, date, source URL, and
-on-demand versus spot terms. `napkin prices` prints each record's age and
-flags any older than 90 days as stale; re-check the source before relying on
-one.
+Each record names the provider, SKU, currency, date, source URL, the number
+of GPUs the listed price buys, and its terms: on-demand, spot, or a 1- or
+3-year commitment. `napkin prices` prints each record's age and flags any
+older than 90 days as stale; re-check the source before relying on one.
+
+Two things keep these per-GPU-hour prices from being like for like. The
+clouds rent 8-GPU instances whose price includes host CPUs, memory, local
+SSD, and networking, divided here by 8; Modal's price is for the GPU alone,
+with CPU and memory billed on top. And a commitment bills every hour of its
+term, busy or not: its per-GPU-hour price holds only if you keep the GPUs
+busy all term, so divide it by the fraction of the term you use.
+`napkin cost --offer` prints both caveats when they apply.
 
 <!-- napkin prices -->
 | Record | Provider | SKU | GPU | Price | Per GPU-hour | Terms | Dated | Source |
 | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |
-| `modal-a100` | Modal | Nvidia A100, 80 GB | a100 | $0.000694/s | $2.5 | on-demand, preemptible | 2026-10-12 | [modal.com/pricing](https://modal.com/pricing) |
-| `modal-h100` | Modal | Nvidia H100 SXM5 | h100 | $0.001097/s | $3.95 | on-demand, preemptible | 2026-10-12 | [modal.com/pricing](https://modal.com/pricing) |
-| `modal-b200` | Modal | Nvidia B200 | b200 | $0.001736/s | $6.25 | on-demand, preemptible | 2026-10-12 | [modal.com/pricing](https://modal.com/pricing) |
-| `modal-b300` | Modal | Nvidia B300 | b300 | $0.001972/s | $7.1 | on-demand, preemptible | 2026-10-12 | [modal.com/pricing](https://modal.com/pricing) |
+| `aws-h100` | AWS | p5.48xlarge, 8x H100 SXM, us-east-1 | h100 | $55.04/h for 8 GPUs | $6.88 | on-demand | 2026-11-05 | [b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/ec2/USD/current/ec2-ondemand-without-sec-sel/US%20East%20%28N.%20Virginia%29/Linux/index.json](https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/ec2/USD/current/ec2-ondemand-without-sec-sel/US%20East%20%28N.%20Virginia%29/Linux/index.json) |
+| `aws-h100-1y` | AWS | p5.48xlarge, 8x H100 SXM, us-east-1 | h100 | $43.344/h for 8 GPUs | $5.42 | 1-year commitment | 2026-11-05 | [pricing.us-east-1.amazonaws.com/savingsPlan/v1.0/aws/AWSComputeSavingsPlan/20261104210253/us-east-1/index.json](https://pricing.us-east-1.amazonaws.com/savingsPlan/v1.0/aws/AWSComputeSavingsPlan/20261104210253/us-east-1/index.json) |
+| `aws-h100-3y` | AWS | p5.48xlarge, 8x H100 SXM, us-east-1 | h100 | $40.42138/h for 8 GPUs | $5.05 | 3-year commitment | 2026-11-05 | [pricing.us-east-1.amazonaws.com/savingsPlan/v1.0/aws/AWSComputeSavingsPlan/20261104210253/us-east-1/index.json](https://pricing.us-east-1.amazonaws.com/savingsPlan/v1.0/aws/AWSComputeSavingsPlan/20261104210253/us-east-1/index.json) |
+| `aws-b200` | AWS | p6-b200.48xlarge, 8x B200, us-east-1 | b200 | $113.9328/h for 8 GPUs | $14.2 | on-demand | 2026-11-05 | [b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/ec2/USD/current/ec2-ondemand-without-sec-sel/US%20East%20%28N.%20Virginia%29/Linux/index.json](https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/ec2/USD/current/ec2-ondemand-without-sec-sel/US%20East%20%28N.%20Virginia%29/Linux/index.json) |
+| `aws-b200-1y` | AWS | p6-b200.48xlarge, 8x B200, us-east-1 | b200 | $89.72208/h for 8 GPUs | $11.2 | 1-year commitment | 2026-11-05 | [pricing.us-east-1.amazonaws.com/savingsPlan/v1.0/aws/AWSComputeSavingsPlan/20261104210253/us-east-1/index.json](https://pricing.us-east-1.amazonaws.com/savingsPlan/v1.0/aws/AWSComputeSavingsPlan/20261104210253/us-east-1/index.json) |
+| `aws-b200-3y` | AWS | p6-b200.48xlarge, 8x B200, us-east-1 | b200 | $83.67225/h for 8 GPUs | $10.5 | 3-year commitment | 2026-11-05 | [pricing.us-east-1.amazonaws.com/savingsPlan/v1.0/aws/AWSComputeSavingsPlan/20261104210253/us-east-1/index.json](https://pricing.us-east-1.amazonaws.com/savingsPlan/v1.0/aws/AWSComputeSavingsPlan/20261104210253/us-east-1/index.json) |
+| `azure-h100` | Azure | Standard_ND96isr_H100_v5, 8x H100 SXM, eastus | h100 | $98.32/h for 8 GPUs | $12.3 | on-demand | 2026-11-05 | [prices.azure.com/api/retail/prices](https://prices.azure.com/api/retail/prices?$filter=armRegionName%20eq%20%27eastus%27%20and%20armSkuName%20eq%20%27Standard_ND96isr_H100_v5%27) |
+| `azure-h100-spot` | Azure | Standard_ND96isr_H100_v5, 8x H100 SXM, eastus | h100 | $18.169536/h for 8 GPUs | $2.27 | spot, preemptible | 2026-11-05 | [prices.azure.com/api/retail/prices](https://prices.azure.com/api/retail/prices?$filter=armRegionName%20eq%20%27eastus%27%20and%20armSkuName%20eq%20%27Standard_ND96isr_H100_v5%27) |
+| `azure-h100-1y` | Azure | Standard_ND96isr_H100_v5, 8x H100 SXM, eastus | h100 | $551221/year for 8 GPUs | $7.87 | 1-year commitment | 2026-11-05 | [prices.azure.com/api/retail/prices](https://prices.azure.com/api/retail/prices?$filter=armRegionName%20eq%20%27eastus%27%20and%20armSkuName%20eq%20%27Standard_ND96isr_H100_v5%27) |
+| `gcp-h100` | GCP | a3-highgpu-8g, 8x H100 SXM, us-central1 | h100 | $88.490000119/h for 8 GPUs | $11.1 | on-demand | 2026-11-05 | [cloud.google.com/products/compute/pricing/accelerator-optimized](https://cloud.google.com/products/compute/pricing/accelerator-optimized) |
+| `gcp-h100-spot` | GCP | a3-highgpu-8g, 8x H100 SXM, us-central1 | h100 | $52.700460712/h for 8 GPUs | $6.59 | spot, preemptible | 2026-11-05 | [cloud.google.com/products/compute/pricing/accelerator-optimized](https://cloud.google.com/products/compute/pricing/accelerator-optimized) |
+| `gcp-h100-1y` | GCP | a3-highgpu-8g, 8x H100 SXM, us-central1 | h100 | $61.383674231/h for 8 GPUs | $7.67 | 1-year commitment | 2026-11-05 | [cloud.google.com/products/compute/pricing/accelerator-optimized](https://cloud.google.com/products/compute/pricing/accelerator-optimized) |
+| `gcp-h100-3y` | GCP | a3-highgpu-8g, 8x H100 SXM, us-central1 | h100 | $38.864383195/h for 8 GPUs | $4.86 | 3-year commitment | 2026-11-05 | [cloud.google.com/products/compute/pricing/accelerator-optimized](https://cloud.google.com/products/compute/pricing/accelerator-optimized) |
+| `gcp-b200-spot` | GCP | a4-highgpu-8g, 8x B200, us-central1 | b200 | $39.6336/h for 8 GPUs | $4.95 | spot, preemptible | 2026-11-05 | [cloud.google.com/products/compute/pricing/accelerator-optimized](https://cloud.google.com/products/compute/pricing/accelerator-optimized) |
+| `gcp-b200-1y` | GCP | a4-highgpu-8g, 8x B200, us-central1 | b200 | $88.9272/h for 8 GPUs | $11.1 | 1-year commitment | 2026-11-05 | [cloud.google.com/products/compute/pricing/accelerator-optimized](https://cloud.google.com/products/compute/pricing/accelerator-optimized) |
+| `gcp-b200-3y` | GCP | a4-highgpu-8g, 8x B200, us-central1 | b200 | $56.7072/h for 8 GPUs | $7.09 | 3-year commitment | 2026-11-05 | [cloud.google.com/products/compute/pricing/accelerator-optimized](https://cloud.google.com/products/compute/pricing/accelerator-optimized) |
+| `modal-a100` | Modal | Nvidia A100, 80 GB | a100 | $0.000694/s | $2.5 | on-demand, preemptible | 2026-11-05 | [modal.com/pricing](https://modal.com/pricing) |
+| `modal-h100` | Modal | Nvidia H100 SXM5 | h100 | $0.001097/s | $3.95 | on-demand, preemptible | 2026-11-05 | [modal.com/pricing](https://modal.com/pricing) |
+| `modal-b200` | Modal | Nvidia B200 | b200 | $0.001736/s | $6.25 | on-demand, preemptible | 2026-11-05 | [modal.com/pricing](https://modal.com/pricing) |
+| `modal-b300` | Modal | Nvidia B300 | b300 | $0.001972/s | $7.1 | on-demand, preemptible | 2026-11-05 | [modal.com/pricing](https://modal.com/pricing) |
 
-- `modal-a100`, `modal-h100`, `modal-b200`, `modal-b300`: Serverless base price, billed per second. Region selection adds 1.15-1.75x (https://modal.com/docs/guide/region-selection); GPU functions can be preempted (https://modal.com/docs/guide/preemption).
+- `aws-h100`, `aws-b200`: Linux on-demand instance price from the JSON behind https://aws.amazon.com/ec2/pricing/on-demand/. AWS rents whole instances, so the hourly price includes the host CPUs, memory, NVMe, and EFA networking.
+- `aws-h100-1y`, `aws-h100-3y`, `aws-b200-1y`, `aws-b200-3y`: Compute Savings Plan, No Upfront: you commit to the hourly spend for every hour of the term. EC2 Instance Savings Plans are cheaper (p5.48xlarge 1-year $34.6752/h, 3-year $23.77728/h) but lock in the instance family and list no 1-year plan for p6-b200.
+- `azure-h100`: Linux pay-as-you-go VM price from the Azure Retail Prices API. The VM price includes the host CPUs, memory, and InfiniBand. Azure lists no B200 VM; ND GB200 v6 uses Grace-Blackwell GB200, not the B200 profile.
+- `azure-h100-spot`: Spot price from the Azure Retail Prices API; Azure moves spot prices with spare capacity and can evict spot VMs at any time.
+- `azure-h100-1y`: Reserved VM instance: the API lists one total for the whole 1-year term, billed whether or not the VM runs.
+- `gcp-h100`: Machine-type price in the page's default region, Iowa (us-central1); it includes the host vCPUs, memory, and local SSD. GCP lists no on-demand price for the B200 a4-highgpu-8g, only DWS, spot, and committed-use prices.
+- `gcp-h100-spot`, `gcp-b200-spot`: "Current Spot pricing" column in the page's default region, Iowa (us-central1). GCP can change spot prices up to once a day (https://cloud.google.com/compute/docs/instances/spot) and can preempt spot VMs at any time.
+- `gcp-h100-1y`, `gcp-h100-3y`, `gcp-b200-1y`, `gcp-b200-3y`: "Compute Resource CUDs" column in the page's default region, Iowa (us-central1): a committed-use discount billed for every hour of the term.
+- `modal-a100`, `modal-h100`, `modal-b200`, `modal-b300`: Serverless base GPU price, billed per second; CPU cores and memory are billed separately on the same page. Region selection adds 1.15-1.75x (https://modal.com/docs/guide/region-selection); GPU functions can be preempted (https://modal.com/docs/guide/preemption).
 <!-- /napkin -->
 
 ### Utilization can reverse a price-performance ranking
@@ -653,6 +685,39 @@ utilizations the H100 is. With measured rates, the B200 wins only while its
 utilization stays above `(691 / 3.95) / (1325 / 6.25) ≈ 0.83` of the H100's;
 here it is `0.3 / 0.5 = 0.6`.
 
+That break-even ratio needs only each GPU's rate and price, so it can be
+recomputed for every provider that prices both GPUs on the same terms.
+`napkin breakeven` pairs the records above and divides the H100's work per
+dollar by the B200's:
+
+<!-- napkin breakeven --gpu h100 --vs b200 --dtype bf16 -->
+| Provider | Terms | H100 per GPU-hour | B200 per GPU-hour | H100 bf16 per dollar | B200 bf16 per dollar | B200 cheaper per job above |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| AWS | on-demand | $6.88 | $14.2 | 360 PFLOP | 330 PFLOP | 1.1× H100's utilization |
+| AWS | 1-year commitment | $5.42 | $11.2 | 460 PFLOP | 430 PFLOP | 1.1× H100's utilization |
+| AWS | 3-year commitment | $5.05 | $10.5 | 490 PFLOP | 460 PFLOP | 1.1× H100's utilization |
+| GCP | spot, preemptible | $6.59 | $4.95 | 380 PFLOP | 960 PFLOP | 0.39× H100's utilization |
+| GCP | 1-year commitment | $7.67 | $11.1 | 320 PFLOP | 430 PFLOP | 0.76× H100's utilization |
+| GCP | 3-year commitment | $4.86 | $7.09 | 510 PFLOP | 670 PFLOP | 0.76× H100's utilization |
+| Modal | on-demand, preemptible | $3.95 | $6.25 | 630 PFLOP | 760 PFLOP | 0.83× H100's utilization |
+
+Rates: H100 691 TFLOP/s bf16 (napkin-bench), B200 1.33 PFLOP/s bf16 (napkin-bench). Work per dollar is rate × 3600 s ÷ price per GPU-hour.
+<!-- /napkin -->
+
+The ranking does not survive every price list. On-demand, AWS charges $14.2
+per B200 GPU-hour against $6.88 for an H100, 2.07 times as much, but the B200
+does only 1.92 times the H100's measured BF16 work. At AWS prices the B200
+costs more per job even at equal utilization, and the job above costs $5.35
+on the H100 against $9.89 on the B200. GCP's spot prices point the other way:
+a B200 GPU-hour costs less than an H100's, so the B200 stays cheaper per job
+down to 0.39 of the H100's utilization. GCP lists no on-demand B200, and
+Azure lists no B200 at all, so neither appears in the on-demand comparison.
+
+As a cross-check, Simon Eskildsen's [napkin-math cost
+table](https://github.com/sirupsen/napkin-math#cost-numbers) rounds AWS B200
+prices to $10,000 per month on-demand and $8,000 with a 1-year plan. At 730
+hours per month, `aws-b200` and `aws-b200-1y` give $10,400 and $8,190.
+
 ## Practice problems
 
 [PROBLEMS.md](PROBLEMS.md) has seven problems with worked solutions hidden
@@ -682,6 +747,7 @@ napkin cost --gpus 2 --time 10s --price 3       # or --offer modal-h100
             [--utilization 0.5] [--startup 30s] [--idle 60s] [--granularity 1s]
             [--work 25K | --throughput 2.5K] [--unit tokens]
 napkin prices                                     # dated price records and their age
+napkin breakeven --gpu h100 --vs b200 --dtype bf16  # work per dollar at paired prices
 napkin collective --gpu h100 --count 2 --topology nvlink --op all-reduce
                    --bytes 16KiB [--dtype bf16]       # NCCL Tests curves only
 napkin readme --write README.md PROBLEMS.md       # regenerate the marker blocks
@@ -794,6 +860,7 @@ See [BENCHMARKS.md](BENCHMARKS.md#nccl-tests) for what is recorded and how
 * [NVIDIA Matrix Multiplication Background User's Guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html). Tile and wave quantization, and why GEMM shapes matter.
 * [CUDA C++ Best Practices Guide](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/). Memory coalescing, transfers, occupancy, and measurement.
 * [Modal pricing](https://modal.com/pricing). Per-second GPU list prices behind the dated records in `prices/modal.json`.
+* [AWS price list files](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/using-ppslong.html), [Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices), and [GCP accelerator-optimized pricing](https://cloud.google.com/products/compute/pricing/accelerator-optimized). Machine-readable sources behind `prices/aws.json`, `prices/azure.json`, and `prices/gcp.json`.
 * [Modal GPU Glossary](https://modal.com/gpu-glossary). Fast definitions for SMs, warps, HBM, Tensor Cores, and the rest of the vocabulary.
 * [Dissecting the NVIDIA Volta GPU Architecture via Microbenchmarking](https://arxiv.org/abs/1804.06826). The template for measuring latencies and cache hierarchies yourself.
 * [Benchmarking and Dissecting the Nvidia Hopper GPU Architecture](https://arxiv.org/abs/2402.13499). Microbenchmarked Hopper latencies, Tensor Cores, and memory.

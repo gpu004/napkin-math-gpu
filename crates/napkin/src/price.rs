@@ -12,6 +12,9 @@ pub enum Per {
     Second,
     Minute,
     Hour,
+    /// 365 days (8,760 hours). Azure quotes a 1-year reservation as one
+    /// total for the term, e.g. $551,221 for an 8-GPU H100 VM.
+    Year,
 }
 
 impl Per {
@@ -21,6 +24,7 @@ impl Per {
             Self::Second => 1.0,
             Self::Minute => 60.0,
             Self::Hour => 3600.0,
+            Self::Year => 365.0 * 86_400.0,
         }
     }
 }
@@ -31,6 +35,7 @@ impl fmt::Display for Per {
             Self::Second => "s",
             Self::Minute => "min",
             Self::Hour => "h",
+            Self::Year => "year",
         })
     }
 }
@@ -40,14 +45,20 @@ impl fmt::Display for Per {
 pub enum Terms {
     OnDemand,
     Spot,
+    /// A reservation, savings plan, or committed-use discount that bills
+    /// every hour of the term whether or not a job is running.
+    Commitment {
+        years: u8,
+    },
 }
 
 impl fmt::Display for Terms {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::OnDemand => "on-demand",
-            Self::Spot => "spot",
-        })
+        match self {
+            Self::OnDemand => f.write_str("on-demand"),
+            Self::Spot => f.write_str("spot"),
+            Self::Commitment { years } => write!(f, "{years}-year commitment"),
+        }
     }
 }
 
@@ -116,6 +127,9 @@ pub struct PriceRecord {
     pub provider: &'static str,
     pub sku: &'static str,
     pub gpu: &'static str,
+    /// GPUs the listed amount pays for: 1 for Modal's per-GPU price, 8 for
+    /// an AWS `p5.48xlarge` instance.
+    pub gpus: u32,
     pub currency: &'static str,
     pub amount: f64,
     pub per: Per,
@@ -127,13 +141,18 @@ pub struct PriceRecord {
 }
 
 impl PriceRecord {
-    /// Price formatted with its currency and billing unit.
+    /// Price formatted with its currency, billing unit, and the GPUs it buys.
     #[must_use]
     pub fn listed_price(&self) -> String {
-        if self.currency == "USD" {
+        let price = if self.currency == "USD" {
             format!("${}/{per}", self.amount, per = self.per)
         } else {
             format!("{} {}/{per}", self.amount, self.currency, per = self.per)
+        };
+        if self.gpus == 1 {
+            price
+        } else {
+            format!("{price} for {} GPUs", self.gpus)
         }
     }
 
@@ -150,7 +169,7 @@ impl PriceRecord {
     /// Price normalized to one GPU-hour.
     #[must_use]
     pub fn per_gpu_hour(&self) -> f64 {
-        self.amount * 3600.0 / self.per.seconds()
+        self.amount * 3600.0 / self.per.seconds() / f64::from(self.gpus)
     }
 
     /// Signed age in days relative to `today`.
@@ -178,6 +197,34 @@ pub fn find(id: &str) -> Option<&'static PriceRecord> {
     builtin().iter().find(|record| record.id == id)
 }
 
+/// Pairs each `gpu_a` record with the `gpu_b` record from the same provider,
+/// terms, and currency, in record order. AWS on-demand `p5.48xlarge` (H100)
+/// pairs with AWS on-demand `p6-b200.48xlarge` (B200); GCP's spot H100 has no
+/// partner if GCP lists no spot B200. `build.rs` allows one record per
+/// provider, GPU, and terms, so each record has at most one partner.
+#[must_use]
+pub fn pairs<'a>(
+    records: &'a [PriceRecord],
+    gpu_a: &str,
+    gpu_b: &str,
+) -> Vec<(&'a PriceRecord, &'a PriceRecord)> {
+    records
+        .iter()
+        .filter(|a| a.gpu == gpu_a)
+        .filter_map(|a| {
+            records
+                .iter()
+                .find(|b| {
+                    b.gpu == gpu_b
+                        && b.provider == a.provider
+                        && b.terms == a.terms
+                        && b.currency == a.currency
+                })
+                .map(|b| (a, b))
+        })
+        .collect()
+}
+
 include!(concat!(env!("OUT_DIR"), "/prices.rs"));
 
 #[cfg(test)]
@@ -202,19 +249,58 @@ mod tests {
     }
 
     #[test]
-    fn listed_price_includes_currency_and_billing_unit() {
+    fn instance_price_is_divided_across_its_gpus() {
+        let record = find("aws-h100").unwrap();
+        assert_eq!(record.gpus, 8);
+        assert!((record.per_gpu_hour() - 55.04 / 8.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn yearly_reservation_is_spread_over_8760_hours() {
+        let record = find("azure-h100-1y").unwrap();
+        assert_eq!(record.per, Per::Year);
+        assert!((record.per_gpu_hour() - 551_221.0 / 8760.0 / 8.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn listed_price_includes_currency_billing_unit_and_gpus() {
         let mut record = *find("modal-h100").unwrap();
         assert_eq!(record.listed_price(), "$0.001097/s");
         record.currency = "EUR";
         assert_eq!(record.listed_price(), "0.001097 EUR/s");
+        assert_eq!(
+            find("azure-h100-1y").unwrap().listed_price(),
+            "$551221/year for 8 GPUs"
+        );
     }
 
     #[test]
-    fn terms_label_includes_preemptibility() {
+    fn terms_label_includes_preemptibility_and_commitment_length() {
         let mut record = *find("modal-h100").unwrap();
         assert_eq!(record.terms_label(), "on-demand, preemptible");
         record.preemptible = false;
         assert_eq!(record.terms_label(), "on-demand");
+        assert_eq!(
+            find("gcp-b200-3y").unwrap().terms_label(),
+            "3-year commitment"
+        );
+    }
+
+    #[test]
+    fn pairs_match_provider_and_terms() {
+        let ids: Vec<(&str, &str)> = pairs(builtin(), "h100", "b200")
+            .into_iter()
+            .map(|(a, b)| (a.id, b.id))
+            .collect();
+        for pair in [
+            ("aws-h100", "aws-b200"),
+            ("gcp-h100-spot", "gcp-b200-spot"),
+            ("modal-h100", "modal-b200"),
+        ] {
+            assert!(ids.contains(&pair), "{ids:?}");
+        }
+        assert!(!ids.iter().any(|(a, _)| *a == "gcp-h100"), "{ids:?}");
+        assert!(!ids.iter().any(|(a, _)| a.starts_with("azure")), "{ids:?}");
     }
 
     #[test]
@@ -224,6 +310,7 @@ mod tests {
             provider: "Provider",
             sku: "SKU",
             gpu: "h100",
+            gpus: 1,
             currency: "USD",
             amount: 1.0,
             per: Per::Hour,
@@ -277,8 +364,8 @@ mod tests {
             today
                 >= Date {
                     year: 2026,
-                    month: 10,
-                    day: 12,
+                    month: 11,
+                    day: 5,
                 }
         }));
     }

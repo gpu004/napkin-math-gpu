@@ -22,6 +22,7 @@ struct PriceRecordInput {
     provider: String,
     sku: String,
     gpu: String,
+    gpus: u32,
     currency: String,
     amount: f64,
     per: PricePerInput,
@@ -38,13 +39,18 @@ enum PricePerInput {
     Second,
     Minute,
     Hour,
+    Year,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum PriceTermsInput {
     OnDemand,
     Spot,
+    #[serde(rename = "1-year")]
+    OneYear,
+    #[serde(rename = "3-year")]
+    ThreeYear,
 }
 
 #[derive(Debug)]
@@ -237,6 +243,9 @@ fn load_prices(prices_dir: &Path) -> Result<Vec<PriceRecordInput>, String> {
     paths.sort();
     let mut records = Vec::new();
     let mut ids = std::collections::BTreeSet::new();
+    // `napkin breakeven` pairs one provider's H100 and B200 prices under the
+    // same terms, so each provider may list one price per GPU and terms.
+    let mut offers = std::collections::BTreeSet::new();
     for path in paths {
         if !path.is_file()
             || path.extension().and_then(|extension| extension.to_str()) != Some("json")
@@ -251,6 +260,12 @@ fn load_prices(prices_dir: &Path) -> Result<Vec<PriceRecordInput>, String> {
             validate_price(&record, &path)?;
             if !ids.insert(record.id.clone()) {
                 return Err(format!("duplicate price record id {:?}", record.id));
+            }
+            if !offers.insert((record.provider.clone(), record.gpu.clone(), record.terms)) {
+                return Err(format!(
+                    "price record {:?} repeats another {} {} record with the same terms",
+                    record.id, record.provider, record.gpu
+                ));
             }
             records.push(record);
         }
@@ -285,6 +300,9 @@ fn validate_price(record: &PriceRecordInput, path: &Path) -> Result<(), String> 
             "price record {:?} has unknown gpu {:?}",
             record.id, record.gpu
         ));
+    }
+    if record.gpus == 0 {
+        return Err(format!("price record {:?} covers zero GPUs", record.id));
     }
     if record.currency.len() != 3
         || !record
@@ -360,18 +378,22 @@ fn emit_prices(prices: &[PriceRecordInput]) -> Result<String, String> {
             PricePerInput::Second => "Per::Second",
             PricePerInput::Minute => "Per::Minute",
             PricePerInput::Hour => "Per::Hour",
+            PricePerInput::Year => "Per::Year",
         };
         let terms = match record.terms {
             PriceTermsInput::OnDemand => "Terms::OnDemand",
             PriceTermsInput::Spot => "Terms::Spot",
+            PriceTermsInput::OneYear => "Terms::Commitment { years: 1 }",
+            PriceTermsInput::ThreeYear => "Terms::Commitment { years: 3 }",
         };
         let _ = writeln!(
             generated,
-            "    PriceRecord {{ id: {:?}, provider: {:?}, sku: {:?}, gpu: {:?}, currency: {:?}, amount: {:?}_f64, per: {per}, terms: {terms}, preemptible: {}, date: Date {{ year: {year}, month: {month}, day: {day} }}, source: {:?}, note: {:?} }},",
+            "    PriceRecord {{ id: {:?}, provider: {:?}, sku: {:?}, gpu: {:?}, gpus: {}, currency: {:?}, amount: {:?}_f64, per: {per}, terms: {terms}, preemptible: {}, date: Date {{ year: {year}, month: {month}, day: {day} }}, source: {:?}, note: {:?} }},",
             record.id,
             record.provider,
             record.sku,
             record.gpu,
+            record.gpus,
             record.currency,
             record.amount,
             record.preemptible,
