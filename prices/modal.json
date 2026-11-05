@@ -4,55 +4,59 @@
     "provider": "Modal",
     "sku": "Nvidia A100, 80 GB",
     "gpu": "a100",
+    "gpus": 1,
     "currency": "USD",
     "amount": 0.000694,
     "per": "second",
     "terms": "on-demand",
     "preemptible": true,
-    "date": "2026-10-12",
+    "date": "2026-11-05",
     "source": "https://modal.com/pricing",
-    "note": "Serverless base price, billed per second. Region selection adds 1.15-1.75x (https://modal.com/docs/guide/region-selection); GPU functions can be preempted (https://modal.com/docs/guide/preemption)."
+    "note": "Serverless base GPU price, billed per second; CPU cores and memory are billed separately on the same page. Region selection adds 1.15-1.75x (https://modal.com/docs/guide/region-selection); GPU functions can be preempted (https://modal.com/docs/guide/preemption)."
   },
   {
     "id": "modal-h100",
     "provider": "Modal",
     "sku": "Nvidia H100 SXM5",
     "gpu": "h100",
+    "gpus": 1,
     "currency": "USD",
     "amount": 0.001097,
     "per": "second",
     "terms": "on-demand",
     "preemptible": true,
-    "date": "2026-10-12",
+    "date": "2026-11-05",
     "source": "https://modal.com/pricing",
-    "note": "Serverless base price, billed per second. Region selection adds 1.15-1.75x (https://modal.com/docs/guide/region-selection); GPU functions can be preempted (https://modal.com/docs/guide/preemption)."
+    "note": "Serverless base GPU price, billed per second; CPU cores and memory are billed separately on the same page. Region selection adds 1.15-1.75x (https://modal.com/docs/guide/region-selection); GPU functions can be preempted (https://modal.com/docs/guide/preemption)."
   },
   {
     "id": "modal-b200",
     "provider": "Modal",
     "sku": "Nvidia B200",
     "gpu": "b200",
+    "gpus": 1,
     "currency": "USD",
     "amount": 0.001736,
     "per": "second",
     "terms": "on-demand",
     "preemptible": true,
-    "date": "2026-10-12",
+    "date": "2026-11-05",
     "source": "https://modal.com/pricing",
-    "note": "Serverless base price, billed per second. Region selection adds 1.15-1.75x (https://modal.com/docs/guide/region-selection); GPU functions can be preempted (https://modal.com/docs/guide/preemption)."
+    "note": "Serverless base GPU price, billed per second; CPU cores and memory are billed separately on the same page. Region selection adds 1.15-1.75x (https://modal.com/docs/guide/region-selection); GPU functions can be preempted (https://modal.com/docs/guide/preemption)."
   },
   {
     "id": "modal-b300",
     "provider": "Modal",
     "sku": "Nvidia B300",
     "gpu": "b300",
+    "gpus": 1,
     "currency": "USD",
     "amount": 0.001972,
     "per": "second",
     "terms": "on-demand",
     "preemptible": true,
-    "date": "2026-10-12",
+    "date": "2026-11-05",
     "source": "https://modal.com/pricing",
-    "note": "Serverless base price, billed per second. Region selection adds 1.15-1.75x (https://modal.com/docs/guide/region-selection); GPU functions can be preempted (https://modal.com/docs/guide/preemption)."
+    "note": "Serverless base GPU price, billed per second; CPU cores and memory are billed separately on the same page. Region selection adds 1.15-1.75x (https://modal.com/docs/guide/region-selection); GPU functions can be preempted (https://modal.com/docs/guide/preemption)."
   }
 ]

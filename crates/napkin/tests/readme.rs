@@ -22,6 +22,16 @@ fn readme_napkin_blocks_match_renderers() {
             "<!-- napkin prices -->",
             napkin::table::prices(price::builtin()),
         ),
+        (
+            "<!-- napkin breakeven --gpu h100 --vs b200 --dtype bf16 -->",
+            napkin::table::breakeven(
+                price::builtin(),
+                h100,
+                profile::find("b200").unwrap(),
+                Dtype::Bf16,
+            )
+            .expect("h100 and b200 must have bf16 rates"),
+        ),
     ];
     for (marker, body) in expected_blocks {
         let start = readme
@@ -38,6 +48,80 @@ fn readme_napkin_blocks_match_renderers() {
             "README marker {marker} is stale; run `napkin readme --write README.md`"
         );
     }
+}
+
+/// The prose under the `napkin breakeven` table quotes rounded prices, rate
+/// ratios, and job costs. This fails when a price record or measured rate
+/// moves one of them; update the README sentence and this test together.
+#[test]
+fn readme_price_comparison_follows_from_records() -> Result<(), Box<dyn std::error::Error>> {
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))?;
+    let record = |id: &str| price::find(id).ok_or(format!("missing price record {id}"));
+    let bf16_tflops = |gpu: &str| -> Result<f64, String> {
+        profile::find(gpu)
+            .and_then(|profile| {
+                profile
+                    .rates(false)
+                    .compute_tflops
+                    .get(&Dtype::Bf16)
+                    .copied()
+            })
+            .map(|rate| rate.tflops)
+            .ok_or(format!("{gpu} has no bf16 rate"))
+    };
+    let h100_aws = record("aws-h100")?.per_gpu_hour();
+    let b200_aws = record("aws-b200")?.per_gpu_hour();
+    let h100_gcp_spot = record("gcp-h100-spot")?.per_gpu_hour();
+    let b200_gcp_spot = record("gcp-b200-spot")?.per_gpu_hour();
+    let (h100, b200) = (bf16_tflops("h100")?, bf16_tflops("b200")?);
+    // The utilization example's 1400 s at 50% on the H100 and 750 s at 30%
+    // on the B200, billed at AWS on-demand prices.
+    let job_cost = |busy_s: f64, utilization: f64, per_gpu_hour: f64| {
+        busy_s / utilization * per_gpu_hour / 3600.0
+    };
+    // (text in README.md, value from the records, significant digits shown,
+    // value shown)
+    for (text, value, sig, shown) in [
+        ("AWS charges $14.2", b200_aws, 3, 14.2),
+        ("against $6.88 for an H100", h100_aws, 3, 6.88),
+        ("2.07 times as much", b200_aws / h100_aws, 3, 2.07),
+        ("only 1.92 times the H100's", b200 / h100, 3, 1.92),
+        ("costs $5.35", job_cost(1400.0, 0.5, h100_aws), 3, 5.35),
+        (
+            "against $9.89 on the B200",
+            job_cost(750.0, 0.3, b200_aws),
+            3,
+            9.89,
+        ),
+        (
+            "down to 0.39 of the H100's utilization",
+            (h100 / h100_gcp_spot) / (b200 / b200_gcp_spot),
+            2,
+            0.39,
+        ),
+        ("give $10,400", b200_aws * 730.0 / 1e3, 3, 10.4),
+        (
+            "and $8,190",
+            record("aws-b200-1y")?.per_gpu_hour() * 730.0 / 1e3,
+            3,
+            8.19,
+        ),
+    ] {
+        assert!(readme.contains(text), "README.md no longer says {text:?}");
+        assert!(
+            (round_sig(value, sig) - shown).abs() < 1e-9,
+            "README.md says {text:?} but the records give {value}"
+        );
+    }
+    assert!(
+        b200_aws / h100_aws > b200 / h100,
+        "README.md says the B200 loses at AWS on-demand prices even at equal utilization"
+    );
+    assert!(
+        b200_gcp_spot < h100_gcp_spot,
+        "README.md says a GCP spot B200 GPU-hour costs less than an H100's"
+    );
+    Ok(())
 }
 
 #[test]

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use crate::price::PriceRecord;
+use crate::price::{PriceRecord, pairs};
 use crate::profile::{
     Basis, CopyPath, CrossCheck, Dtype, GpuState, Measured, Profile, Rates, RoundState, Span,
     TransferMetric, TransferRate,
@@ -141,6 +141,11 @@ pub fn prices(records: &[PriceRecord]) -> String {
             .source
             .strip_prefix("https://")
             .unwrap_or(record.source);
+        // The Azure API query string is longer than the rest of the row; the
+        // link keeps it.
+        let source_text = source_text
+            .split_once('?')
+            .map_or(source_text, |(path, _)| path);
         let source = format!("[{source_text}]({})", record.source);
         let id = format!("`{}`", record.id);
         emit(
@@ -173,6 +178,70 @@ pub fn prices(records: &[PriceRecord]) -> String {
         let _ = writeln!(out, "- {ids}: {note}");
     }
     out
+}
+
+/// Renders, for each provider and terms that price both GPUs, the work per
+/// dollar of each and the utilization ratio at which `b` stops being cheaper
+/// per job. At Modal's on-demand prices, H100 at $3.95/h and 691 TFLOP/s bf16
+/// does 630 PFLOP per dollar and B200 at $6.25/h and 1325 TFLOP/s does 760, so
+/// the B200 is cheaper per job while its utilization stays above
+/// 630 / 760 ≈ 0.83 of the H100's. Above 1, the B200 costs more per job even
+/// at equal utilization. Returns `None` when either GPU has no `dtype` rate.
+#[must_use]
+pub fn breakeven(
+    records: &[PriceRecord],
+    a: &Profile,
+    b: &Profile,
+    dtype: Dtype,
+) -> Option<String> {
+    let rate_a = *a.rates(false).compute_tflops.get(&dtype)?;
+    let rate_b = *b.rates(false).compute_tflops.get(&dtype)?;
+    let name_a = a.id.to_uppercase();
+    let name_b = b.id.to_uppercase();
+    let mut out = String::new();
+    emit(
+        &mut out,
+        &[
+            "Provider",
+            "Terms",
+            &format!("{name_a} per GPU-hour"),
+            &format!("{name_b} per GPU-hour"),
+            &format!("{name_a} {dtype} per dollar"),
+            &format!("{name_b} {dtype} per dollar"),
+            &format!("{name_b} cheaper per job above"),
+        ],
+    );
+    emit(
+        &mut out,
+        &["---", "---", "---:", "---:", "---:", "---:", "---:"],
+    );
+    for (price_a, price_b) in pairs(records, &a.id, &b.id) {
+        let pflop_per_dollar =
+            |tflops: f64, record: &PriceRecord| tflops * 3600.0 / record.per_gpu_hour() / 1e3;
+        let work_a = pflop_per_dollar(rate_a.tflops, price_a);
+        let work_b = pflop_per_dollar(rate_b.tflops, price_b);
+        emit(
+            &mut out,
+            &[
+                price_a.provider,
+                &price_a.terms_label(),
+                &fmt_money(price_a.per_gpu_hour(), price_a.currency),
+                &fmt_money(price_b.per_gpu_hour(), price_b.currency),
+                &format!("{} PFLOP", fmt_sig(work_a, 2)),
+                &format!("{} PFLOP", fmt_sig(work_b, 2)),
+                &format!("{}× {name_a}'s utilization", fmt_sig(work_a / work_b, 2)),
+            ],
+        );
+    }
+    let _ = writeln!(
+        out,
+        "\nRates: {name_a} {} {dtype} ({}), {name_b} {} {dtype} ({}). Work per dollar is rate × 3600 s ÷ price per GPU-hour.",
+        fmt_tflops(rate_a.tflops, 3),
+        rate_a.basis,
+        fmt_tflops(rate_b.tflops, 3),
+        rate_b.basis,
+    );
+    Some(out)
 }
 
 /// Renders the two "Numbers" tables (data movement + dense GEMM) for a
