@@ -11,6 +11,15 @@ fn readme_napkin_blocks_match_renderers() {
     let all = profile::builtin();
     let expected_blocks: Vec<(&str, String)> = vec![
         (
+            "<!-- napkin summary --gpu h100 -->",
+            napkin::table::summary(h100, profile::collectives())
+                .expect("h100 must have a measured profile"),
+        ),
+        (
+            "<!-- napkin unit-costs -->",
+            napkin::table::unit_costs(all, price::builtin()),
+        ),
+        (
             "<!-- napkin table --gpu h100 -->",
             napkin::table::numbers(h100, false).expect("h100 must have a measured profile"),
         ),
@@ -38,6 +47,39 @@ fn readme_napkin_blocks_match_renderers() {
             "README marker {marker} is stale; run `napkin readme --write README.md`"
         );
     }
+}
+
+#[test]
+fn readme_summary_comes_before_the_detailed_tables() {
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))
+        .expect("README.md must exist at the repo root");
+    let summary = readme.find("<!-- napkin summary --gpu h100 -->");
+    let detailed = readme.find("<!-- napkin table --gpu h100 -->");
+    assert!(
+        summary.zip(detailed).is_some_and(|(s, d)| s < d),
+        "the memorization table must open the Numbers section"
+    );
+}
+
+#[test]
+fn readme_unit_cost_ratio_matches_profiles() -> Result<(), Box<dyn std::error::Error>> {
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))?;
+    let rates = profile::find("h100")
+        .ok_or("missing h100 profile")?
+        .rates(false);
+    let host = rates
+        .h2d
+        .zip(rates.d2h)
+        .map(|(h2d, d2h)| h2d.gbps.min(d2h.gbps))
+        .ok_or("h100 has no host link rates")?;
+    let text = "bytes that cross PCIe cost about 50\ntimes as much per terabyte";
+    assert!(readme.contains(text), "README no longer says {text:?}");
+    assert!(
+        (round_sig(rates.hbm_gbps / host, 1) - 50.0).abs() < 1e-9,
+        "HBM is now {}x the host link; update the README cost sentence",
+        rates.hbm_gbps / host
+    );
+    Ok(())
 }
 
 #[test]

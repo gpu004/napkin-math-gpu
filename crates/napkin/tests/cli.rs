@@ -236,6 +236,31 @@ fn compare_prints_table() {
 }
 
 #[test]
+fn summary_prints_memorization_table() {
+    let (stdout, _, code) = napkin(&["summary", "--gpu", "h100"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.starts_with("| Operation | Latency | Throughput |"),
+        "{stdout}"
+    );
+    let (_, stderr, code) = napkin(&["summary", "--gpu", "t4"]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("unknown GPU"), "{stderr}");
+}
+
+#[test]
+fn unit_costs_prints_one_column_per_price_record() {
+    let (stdout, _, code) = napkin(&["unit-costs"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.starts_with(
+            "| Work | A100 `modal-a100` | H100 `modal-h100` | B200 `modal-b200` | B300 `modal-b300` |"
+        ),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn cost_requires_exactly_one_price_source() {
     let (_, _, code) = napkin(&["cost", "--gpus", "2", "--time", "10s"]);
     assert_eq!(code, 2);

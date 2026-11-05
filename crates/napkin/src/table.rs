@@ -4,13 +4,15 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+use napkin_profile::collective::{Collective, CollectiveEvidence, Topology};
+
 use crate::price::PriceRecord;
 use crate::profile::{
     Basis, CopyPath, CrossCheck, Dtype, GpuState, Measured, Profile, Rates, RoundState, Span,
     TransferMetric, TransferRate,
 };
 use crate::units::{
-    fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_sig, fmt_tflops, round_sig,
+    fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_money_sig, fmt_sig, fmt_tflops, round_sig,
 };
 
 const SIG: u32 = 1;
@@ -205,6 +207,289 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
         gpu_state_table(&mut out, state);
     }
     Some(out)
+}
+
+/// Renders the memorization table that opens the README: one latency and one
+/// throughput per row at one significant digit, like the table in
+/// sirupsen/napkin-math. The detailed `numbers` tables carry the per-row basis,
+/// round spread, and per-size times. Returns `None` without a measurement.
+#[must_use]
+pub fn summary(profile: &Profile, collectives: &[CollectiveEvidence]) -> Option<String> {
+    let m = profile.measured.as_ref()?;
+    let rates = profile.rates(false);
+    let all_reduce = largest_nvlink_all_reduce(profile, collectives);
+    let mut out = String::new();
+    emit(&mut out, &["Operation", "Latency", "Throughput"]);
+    emit(&mut out, &["---", "---:", "---:"]);
+    for (name, latency, throughput) in summary_rows(m, &rates, all_reduce) {
+        if latency.is_none() && throughput.is_none() {
+            continue;
+        }
+        emit(
+            &mut out,
+            &[
+                &name,
+                latency.as_deref().unwrap_or_default(),
+                throughput.as_deref().unwrap_or_default(),
+            ],
+        );
+    }
+    let collective_basis = all_reduce.map_or_else(String::new, |all_reduce| {
+        format!(
+            " The AllReduce row is the fastest call and the highest bus bandwidth on the NCCL \
+             Tests curve ({}, {}).",
+            all_reduce.evidence.modal_request,
+            all_reduce
+                .evidence
+                .captured_at
+                .get(..10)
+                .unwrap_or(&all_reduce.evidence.captured_at),
+        )
+    });
+    let _ = writeln!(
+        out,
+        "\n{}, one significant digit. Host ↔ device is the slower direction. Host and NVLink \
+         throughput come from {}, the rest from napkin-bench's median round.{collective_basis}",
+        profile.name,
+        transfer_basis(&[rates.h2d, rates.d2h, Some(rates.g2g)], profile),
+    );
+    Some(out)
+}
+
+/// The summary's rows as (operation, latency, throughput); rows whose
+/// evidence is missing come back with both cells `None`.
+fn summary_rows(
+    m: &Measured,
+    rates: &Rates,
+    all_reduce: Option<AllReduceSummary<'_>>,
+) -> Vec<(String, Option<String>, Option<String>)> {
+    let latency = |us: Option<f64>| us.map(|value| fmt_duration(value / 1e6, SIG));
+    let throughput = |gbps: Option<f64>| gbps.map(|value| fmt_gbps(value, SIG));
+    let slower = |a: Option<f64>, b: Option<f64>, pick: fn(f64, f64) -> f64| match (a, b) {
+        (Some(a), Some(b)) => Some(pick(a, b)),
+        (a, b) => a.or(b),
+    };
+    let decode = m.gemm_shapes.as_ref().and_then(|suite| {
+        suite
+            .shapes
+            .iter()
+            .find(|shape| shape.name == "decode-m8" && shape.dtype == Dtype::Bf16)
+    });
+    vec![
+        ("Kernel launch".to_owned(), latency(Some(m.launch_us)), None),
+        (
+            "Launch + sync round trip".to_owned(),
+            latency(m.sync_us),
+            None,
+        ),
+        (
+            "HBM random read".to_owned(),
+            m.hbm_latency_ns
+                .map(|ns| format!("{} ns", fmt_sig(ns, SIG))),
+            None,
+        ),
+        (
+            "HBM copy, read + write counted".to_owned(),
+            None,
+            throughput(Some(m.hbm_gbps)),
+        ),
+        (
+            "Host ↔ device, pinned".to_owned(),
+            latency(slower(m.h2d_latency_us, m.d2h_latency_us, f64::max)),
+            throughput(slower(
+                rates.h2d.map(|rate| rate.gbps),
+                rates.d2h.map(|rate| rate.gbps),
+                f64::min,
+            )),
+        ),
+        (
+            "GPU ↔ GPU, NVLink one-way".to_owned(),
+            latency(m.g2g_latency_us),
+            throughput(Some(rates.g2g.gbps)),
+        ),
+        (
+            all_reduce.map_or_else(String::new, |all_reduce| {
+                format!(
+                    "AllReduce, {} GPUs on NVLink, bus bandwidth",
+                    all_reduce.evidence.gpu_count
+                )
+            }),
+            latency(all_reduce.map(|all_reduce| all_reduce.floor_us)),
+            throughput(all_reduce.map(|all_reduce| all_reduce.peak_busbw_gbps)),
+        ),
+        (
+            "Dense BF16 GEMM, 8192³".to_owned(),
+            None,
+            m.compute_tflops
+                .get(&Dtype::Bf16)
+                .map(|tflops| fmt_tflops(*tflops, SIG)),
+        ),
+        (
+            decode.map_or_else(String::new, |shape| {
+                format!(
+                    "BF16 GEMM, {}×{}×{} (decode, {} tokens)",
+                    shape.m, shape.n, shape.k, shape.m
+                )
+            }),
+            None,
+            decode.map(|shape| fmt_tflops(shape.tflops, SIG)),
+        ),
+    ]
+}
+
+/// The summary's `AllReduce` row: the fastest call is the per-call floor that
+/// small messages, like a decode step's activations, pay; the highest bus
+/// bandwidth is what large messages approach.
+#[derive(Clone, Copy)]
+struct AllReduceSummary<'a> {
+    evidence: &'a CollectiveEvidence,
+    floor_us: f64,
+    peak_busbw_gbps: f64,
+}
+
+/// The `NVLink` bf16 `AllReduce` curve with the most GPUs for `profile`.
+fn largest_nvlink_all_reduce<'a>(
+    profile: &Profile,
+    collectives: &'a [CollectiveEvidence],
+) -> Option<AllReduceSummary<'a>> {
+    collectives
+        .iter()
+        .filter(|evidence| {
+            evidence.gpu == profile.id
+                && evidence.topology == Topology::Nvlink
+                && evidence.dtype == Dtype::Bf16
+        })
+        .filter_map(|evidence| {
+            let curve = evidence.curve(Collective::AllReduce)?;
+            let floor = curve
+                .points
+                .iter()
+                .map(|point| point.time_us)
+                .reduce(f64::min)?;
+            let peak = curve
+                .points
+                .iter()
+                .map(|point| point.busbw_gbps)
+                .reduce(f64::max)?;
+            Some(AllReduceSummary {
+                evidence,
+                floor_us: floor,
+                peak_busbw_gbps: peak,
+            })
+        })
+        .max_by_key(|all_reduce| all_reduce.evidence.gpu_count)
+}
+
+/// One row of the unit-cost table: what is moved or computed, how many GPUs
+/// the rental bills while it happens, and how long one GPU takes.
+struct UnitCost {
+    name: &'static str,
+    gpus_billed: f64,
+    seconds: fn(&Rates) -> Option<f64>,
+}
+
+const TB: f64 = 1e12;
+const EFLOP: f64 = 1e18;
+
+const UNIT_COSTS: [UnitCost; 4] = [
+    UnitCost {
+        name: "1 TB of HBM traffic, read + write counted",
+        gpus_billed: 1.0,
+        seconds: |rates| Some(TB / (rates.hbm_gbps * 1e9)),
+    },
+    UnitCost {
+        name: "1 TB host ↔ device, pinned, slower direction",
+        gpus_billed: 1.0,
+        seconds: |rates| {
+            rates
+                .h2d
+                .into_iter()
+                .chain(rates.d2h)
+                .map(|rate| rate.gbps)
+                .reduce(f64::min)
+                .map(|gbps| TB / (gbps * 1e9))
+        },
+    },
+    // A peer copy needs both GPUs of the pair, as in `modal run ... --gpu
+    // H100!:2`, and the rental bills both for the whole copy.
+    UnitCost {
+        name: "1 TB GPU → GPU over NVLink, both GPUs billed",
+        gpus_billed: 2.0,
+        seconds: |rates| Some(TB / (rates.g2g.gbps * 1e9)),
+    },
+    UnitCost {
+        name: "1 EFLOP of dense BF16 GEMM at the 8192³ rate",
+        gpus_billed: 1.0,
+        seconds: |rates| {
+            rates
+                .compute_tflops
+                .get(&Dtype::Bf16)
+                .map(|rate| EFLOP / (rate.tflops * 1e12))
+        },
+    },
+];
+
+/// Renders what moving 1 TB or doing 1 EFLOP of dense BF16 costs on each
+/// priced GPU, like the "$ / TiB read" table in sirupsen/napkin-math: one
+/// GPU's time at the profile's rate, times the GPUs billed, times the price
+/// record's per-second price. One column per price record, so two providers
+/// for one GPU get two columns.
+#[must_use]
+pub fn unit_costs(profiles: &[Profile], records: &[PriceRecord]) -> String {
+    let columns: Vec<(&PriceRecord, &Profile, Rates)> = records
+        .iter()
+        .filter_map(|record| {
+            let profile = profiles.iter().find(|p| p.id == record.gpu)?;
+            Some((record, profile, profile.rates(false)))
+        })
+        .collect();
+    let mut out = String::new();
+    let mut header = vec!["Work".to_owned()];
+    header.extend(
+        columns
+            .iter()
+            .map(|(record, profile, _)| format!("{} `{}`", profile.id.to_uppercase(), record.id)),
+    );
+    emit_owned(&mut out, &header);
+    let mut align = vec!["---".to_owned()];
+    align.extend(columns.iter().map(|_| "---:".to_owned()));
+    emit_owned(&mut out, &align);
+
+    let mut price = vec!["Price per GPU-hour".to_owned()];
+    price.extend(
+        columns
+            .iter()
+            .map(|(record, _, _)| fmt_money(record.per_gpu_hour(), record.currency)),
+    );
+    emit_owned(&mut out, &price);
+    for row in &UNIT_COSTS {
+        let mut cells = vec![row.name.to_owned()];
+        cells.extend(columns.iter().map(|(record, _, rates)| {
+            (row.seconds)(rates).map_or_else(
+                || "—".to_owned(),
+                |seconds| {
+                    fmt_money_sig(
+                        row.gpus_billed * seconds * record.per_gpu_hour() / 3600.0,
+                        record.currency,
+                        SIG,
+                    )
+                },
+            )
+        }));
+        emit_owned(&mut out, &cells);
+    }
+    let _ = writeln!(
+        out,
+        "\nEach cell is the time one GPU takes at the rates in `napkin table` and `napkin \
+         compare`, times the GPUs billed, times the price record, at one significant digit. It \
+         assumes billing covers only that work at full speed: no startup, idle time, or rounding \
+         up to the billing increment, which `napkin cost` adds."
+    );
+    out
+}
+
+fn emit_owned(out: &mut String, cells: &[String]) {
+    emit(out, &cells.iter().map(String::as_str).collect::<Vec<_>>());
 }
 
 fn append_operation_table(out: &mut String, m: &Measured, rates: &Rates, exact: bool) {
@@ -1145,6 +1430,114 @@ mod tests {
             "{table}"
         );
         assert!(table.contains("Board limits: 700 W"), "{table}");
+    }
+
+    fn table_rows(table: &str) -> Vec<Vec<&str>> {
+        table
+            .lines()
+            .filter(|line| line.starts_with("| ") && !line.starts_with("| ---"))
+            .map(|line| {
+                line.trim_matches('|')
+                    .split(" | ")
+                    .map(str::trim)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn summary_has_one_latency_and_one_throughput_per_row() {
+        let h100 = find("h100").unwrap();
+        let table = summary(h100, crate::profile::collectives()).unwrap();
+        let rows = table_rows(&table);
+        assert_eq!(rows[0], ["Operation", "Latency", "Throughput"]);
+        assert!(rows.iter().all(|row| row.len() == 3), "{table}");
+        assert_eq!(rows.len(), 10, "{table}");
+        for expected in [
+            "| Kernel launch | 2 μs |  |",
+            "| HBM random read | 300 ns |  |",
+            "| HBM copy, read + write counted |  | 3 TB/s |",
+            "| Host ↔ device, pinned | 9 μs | 60 GB/s |",
+            "| GPU ↔ GPU, NVLink one-way | 10 μs | 400 GB/s |",
+            "| AllReduce, 8 GPUs on NVLink, bus bandwidth | 40 μs | 500 GB/s |",
+            "| Dense BF16 GEMM, 8192³ |  | 700 TFLOP/s |",
+            "| BF16 GEMM, 8×8192×8192 (decode, 8 tokens) |  | 20 TFLOP/s |",
+        ] {
+            assert!(table.contains(expected), "{expected}\n{table}");
+        }
+        assert!(!table.contains('†'), "{table}");
+        assert!(table.contains("(H100!:8, 2026-10-12)"), "{table}");
+    }
+
+    #[test]
+    fn summary_drops_rows_it_has_no_evidence_for() {
+        let mut profile = h100_with(&[], None);
+        let table = summary(&profile, &[]).unwrap();
+        assert!(!table.contains("AllReduce"), "{table}");
+        assert!(!table.contains("decode"), "{table}");
+
+        let measured = profile.measured.as_mut().unwrap();
+        measured.sync_us = None;
+        measured.hbm_latency_ns = None;
+        let table = summary(&profile, &[]).unwrap();
+        assert!(!table.contains("Launch + sync"), "{table}");
+        assert!(!table.contains("HBM random read"), "{table}");
+    }
+
+    #[test]
+    fn summary_takes_the_slower_host_direction() {
+        let mut profile = h100_with(&[], None);
+        profile.nvbandwidth = None;
+        let measured = profile.measured.as_mut().unwrap();
+        measured.h2d_latency_us = Some(5.0);
+        measured.d2h_latency_us = Some(20.0);
+        measured.h2d_gbps = 30.0;
+        measured.d2h_gbps = 60.0;
+        let table = summary(&profile, &[]).unwrap();
+        assert!(
+            table.contains("| Host ↔ device, pinned | 20 μs | 30 GB/s |"),
+            "{table}"
+        );
+    }
+
+    #[test]
+    fn unit_costs_multiply_one_gpus_time_by_gpus_billed_and_price() {
+        let mut profile = h100_with(&[], None);
+        profile.nvbandwidth = None;
+        let measured = profile.measured.as_mut().unwrap();
+        measured.hbm_gbps = 1000.0;
+        measured.h2d_gbps = 100.0;
+        measured.d2h_gbps = 50.0;
+        measured.g2g_gbps = Some(500.0);
+        measured.compute_tflops.insert(Dtype::Bf16, 1000.0);
+        let mut record = *crate::price::find("modal-h100").unwrap();
+        record.amount = 1.0;
+        record.per = crate::price::Per::Second;
+        let table = unit_costs(&[profile], &[record]);
+        let rows = table_rows(&table);
+        assert_eq!(rows[0], ["Work", "H100 `modal-h100`"]);
+        assert_eq!(
+            rows[1..],
+            [
+                vec!["Price per GPU-hour", "$3600"],
+                // 1 TB / 1000 GB/s = 1 s at $1/s.
+                vec!["1 TB of HBM traffic, read + write counted", "$1"],
+                // The slower direction, 50 GB/s: 20 s.
+                vec!["1 TB host ↔ device, pinned, slower direction", "$20"],
+                // 1 TB / 500 GB/s = 2 s on each of two billed GPUs.
+                vec!["1 TB GPU → GPU over NVLink, both GPUs billed", "$4"],
+                // 10¹⁸ FLOP / 10¹⁵ FLOP/s = 1000 s.
+                vec!["1 EFLOP of dense BF16 GEMM at the 8192³ rate", "$1000"],
+            ]
+        );
+    }
+
+    #[test]
+    fn unit_costs_skip_records_for_unknown_gpus() {
+        let mut record = *crate::price::find("modal-h100").unwrap();
+        record.gpu = "t4";
+        let table = unit_costs(crate::profile::builtin(), &[record]);
+        assert_eq!(table_rows(&table)[0], ["Work"]);
     }
 
     #[test]

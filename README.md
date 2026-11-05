@@ -9,7 +9,26 @@ Eskildsen's [Napkin Math](https://github.com/sirupsen/napkin-math).
 
 ## Numbers
 
-Below are numbers rounded for memorization, not faux precision.
+Below are numbers rounded for memorization, not faux precision. Learn this
+table first; the detailed tables after it give each number's basis, its
+spread between rounds, and its time for 1 MB and 1 GB.
+
+<!-- napkin summary --gpu h100 -->
+| Operation | Latency | Throughput |
+| --- | ---: | ---: |
+| Kernel launch | 2 μs |  |
+| Launch + sync round trip | 7 μs |  |
+| HBM random read | 300 ns |  |
+| HBM copy, read + write counted |  | 3 TB/s |
+| Host ↔ device, pinned | 9 μs | 60 GB/s |
+| GPU ↔ GPU, NVLink one-way | 10 μs | 400 GB/s |
+| AllReduce, 8 GPUs on NVLink, bus bandwidth | 40 μs | 500 GB/s |
+| Dense BF16 GEMM, 8192³ |  | 700 TFLOP/s |
+| BF16 GEMM, 8×8192×8192 (decode, 8 tokens) |  | 20 TFLOP/s |
+
+H100 SXM 80GB, one significant digit. Host ↔ device is the slower direction. Host and NVLink throughput come from NVBandwidth 2026-10-12, the rest from napkin-bench's median round. The AllReduce row is the fastest call and the highest bus bandwidth on the NCCL Tests curve (H100!:8, 2026-10-12).
+<!-- /napkin -->
+
 All four GPUs were measured on Modal on 2026-10-12 by `napkin-bench` (Rust +
 cudarc, CUDA-event timing, CUDA 12.9, driver 580.95.05 on H100 and
 610.57.04 on A100/B200/B300): `H100!:2`, `A100-80GB:2`, `B200:2`, and `B300:2`.
@@ -463,6 +482,28 @@ one.
 - `modal-a100`, `modal-h100`, `modal-b200`, `modal-b300`: Serverless base price, billed per second. Region selection adds 1.15-1.75x (https://modal.com/docs/guide/region-selection); GPU functions can be preempted (https://modal.com/docs/guide/preemption).
 <!-- /napkin -->
 
+### Cost of moving 1 TB or computing 1 EFLOP
+
+Like Simon's cost-per-TiB-read table, this one turns measured throughput into
+dollars: the seconds 1 TB (or 1 EFLOP) takes at the measured rate, times the
+price per GPU-second above.
+
+<!-- napkin unit-costs -->
+| Work | A100 `modal-a100` | H100 `modal-h100` | B200 `modal-b200` | B300 `modal-b300` |
+| --- | ---: | ---: | ---: | ---: |
+| Price per GPU-hour | $2.5 | $3.95 | $6.25 | $7.1 |
+| 1 TB of HBM traffic, read + write counted | $0.0004 | $0.0004 | $0.0003 | $0.0003 |
+| 1 TB host ↔ device, pinned, slower direction | $0.03 | $0.02 | $0.03 | $0.04 |
+| 1 TB GPU → GPU over NVLink, both GPUs billed | $0.005 | $0.006 | $0.005 | $0.005 |
+| 1 EFLOP of dense BF16 GEMM at the 8192³ rate | $3 | $2 | $1 | $1 |
+
+Each cell is the time one GPU takes at the rates in `napkin table` and `napkin compare`, times the GPUs billed, times the price record, at one significant digit. It assumes billing covers only that work at full speed: no startup, idle time, or rounding up to the billing increment, which `napkin cost` adds.
+<!-- /napkin -->
+
+Bytes that stay in HBM are almost free; bytes that cross PCIe cost about 50
+times as much per terabyte, because the host link is about 50 times slower and
+the GPU is billed while it waits.
+
 ### Utilization can reverse a price-performance ranking
 
 Ranked by datasheet dense BF16 per dollar at the Modal prices above, a B200
@@ -505,7 +546,9 @@ cost per token. Try each on paper first.
 cargo install --path crates/napkin
 
 napkin gpus                                       # profiles and their basis
-napkin table --gpu h100                           # the tables above
+napkin summary --gpu h100                         # the memorization table
+napkin table --gpu h100                           # the detailed tables
+napkin unit-costs                                 # cost of 1 TB or 1 EFLOP per GPU
 napkin compare                                    # every GPU side by side
 napkin estimate --gpu h100 --dtype bf16 --flops 200T --bytes 1TB [--h2d 2GB]
 napkin estimate --gpu h100 --dtype bf16 --gemm 4096x4096x4096

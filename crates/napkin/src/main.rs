@@ -42,6 +42,13 @@ enum Command {
         #[arg(long)]
         exact: bool,
     },
+    /// Print the markdown memorization table: one latency and one throughput per row.
+    Summary {
+        #[arg(long, default_value = "h100")]
+        gpu: String,
+    },
+    /// Print the markdown cost of moving 1 TB or doing 1 EFLOP on each priced GPU.
+    UnitCosts,
     /// Print the markdown cross-GPU comparison table.
     Compare {
         /// Print unrounded values.
@@ -287,6 +294,8 @@ fn dispatch(command: &Command) -> Result<String, String> {
     match command {
         Command::Gpus => Ok(cmd_gpus()),
         Command::Table { gpu, exact } => cmd_table(gpu, *exact),
+        Command::Summary { gpu } => cmd_summary(gpu),
+        Command::UnitCosts => Ok(cmd_unit_costs()),
         Command::Compare { exact } => Ok(cmd_compare(*exact)),
         Command::Estimate {
             gpu,
@@ -527,6 +536,16 @@ fn cmd_table(gpu: &str, exact: bool) -> Result<String, String> {
     let p = get_profile(gpu)?;
     napkin::table::numbers(p, exact)
         .ok_or_else(|| format!("{gpu} has no measured profile; run napkin-bench on it"))
+}
+
+fn cmd_summary(gpu: &str) -> Result<String, String> {
+    let p = get_profile(gpu)?;
+    napkin::table::summary(p, profile::collectives())
+        .ok_or_else(|| format!("{gpu} has no measured profile; run napkin-bench on it"))
+}
+
+fn cmd_unit_costs() -> String {
+    napkin::table::unit_costs(profile::builtin(), price::builtin())
 }
 
 fn cmd_compare(exact: bool) -> String {
@@ -1406,6 +1425,8 @@ fn render_marker(command: &str) -> Result<String, String> {
     let tokens: Vec<&str> = command.split_whitespace().collect();
     match tokens.as_slice() {
         ["table", "--gpu", gpu] => cmd_table(gpu, false),
+        ["summary", "--gpu", gpu] => cmd_summary(gpu),
+        ["unit-costs"] => Ok(cmd_unit_costs()),
         ["compare"] => Ok(cmd_compare(false)),
         ["prices"] => Ok(napkin::table::prices(price::builtin())),
         ["example", args @ ..] => {
