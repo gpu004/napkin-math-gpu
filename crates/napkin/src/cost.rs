@@ -1,5 +1,3 @@
-//! Estimates billed GPU cost from useful busy time and overhead.
-
 use std::fmt;
 
 /// Work represented by a completed count or a rate during busy time.
@@ -9,7 +7,6 @@ pub enum Work {
     Rate(f64),
 }
 
-/// Work completed and its cost efficiency.
 #[derive(Clone, Copy, Debug)]
 pub struct WorkTotal {
     pub source: Work,
@@ -17,7 +14,6 @@ pub struct WorkTotal {
     pub per_dollar: f64,
 }
 
-/// Timing assumptions for a GPU job.
 #[derive(Clone, Copy, Debug)]
 pub struct Job {
     pub gpus: u32,
@@ -29,7 +25,6 @@ pub struct Job {
     pub work: Option<Work>,
 }
 
-/// The resulting running, billed, and useful-time cost estimates.
 #[derive(Clone, Copy, Debug)]
 pub struct Cost {
     pub running_s: f64,
@@ -41,7 +36,6 @@ pub struct Cost {
     pub work: Option<WorkTotal>,
 }
 
-/// An invalid job or price assumption.
 #[derive(Debug)]
 pub struct CostError(pub String);
 
@@ -168,20 +162,36 @@ mod tests {
         );
     }
 
-    // Times stay inside `[0, 1e5]` seconds, utilization inside `[0.05, 1]`,
-    // and the price inside `[0.01, 100]` USD per GPU-hour, so every product
-    // is finite and the `1e-9` relative comparison is not an ulp comparison.
+    const MAX_GPUS: u32 = 64;
+    const MIN_BUSY_S: f64 = 1e-3;
+    const MAX_SECONDS: f64 = 1e5;
+    const MIN_UTILIZATION: f64 = 0.05;
+    const MIN_PRICE_PER_GPU_HOUR: f64 = 0.01;
+    const MAX_PRICE_PER_GPU_HOUR: f64 = 100.0;
+
     fn draw_job(tc: &TestCase) -> (Job, f64) {
         let job = Job {
-            gpus: tc.draw(gs::integers::<u32>().min_value(1).max_value(64)),
-            busy_s: tc.draw(gs::floats::<f64>().min_value(1e-3).max_value(1e5)),
-            utilization: tc.draw(gs::floats::<f64>().min_value(0.05).max_value(1.0)),
-            startup_s: tc.draw(gs::floats::<f64>().min_value(0.0).max_value(1e5)),
-            idle_s: tc.draw(gs::floats::<f64>().min_value(0.0).max_value(1e5)),
+            gpus: tc.draw(gs::integers::<u32>().min_value(1).max_value(MAX_GPUS)),
+            busy_s: tc.draw(
+                gs::floats::<f64>()
+                    .min_value(MIN_BUSY_S)
+                    .max_value(MAX_SECONDS),
+            ),
+            utilization: tc.draw(
+                gs::floats::<f64>()
+                    .min_value(MIN_UTILIZATION)
+                    .max_value(1.0),
+            ),
+            startup_s: tc.draw(gs::floats::<f64>().min_value(0.0).max_value(MAX_SECONDS)),
+            idle_s: tc.draw(gs::floats::<f64>().min_value(0.0).max_value(MAX_SECONDS)),
             granularity_s: None,
             work: None,
         };
-        let price = tc.draw(gs::floats::<f64>().min_value(0.01).max_value(100.0));
+        let price = tc.draw(
+            gs::floats::<f64>()
+                .min_value(MIN_PRICE_PER_GPU_HOUR)
+                .max_value(MAX_PRICE_PER_GPU_HOUR),
+        );
         (job, price)
     }
 
@@ -332,9 +342,6 @@ mod tests {
         );
     }
 
-    // Granularity is a whole number of seconds in `[1, 3600]`. The bill is
-    // the wall clock rounded up to that quantum, and an exact multiple is
-    // left alone.
     #[hegel::test]
     fn billing_quantum_rounds_the_wall_clock_up(tc: TestCase) {
         let (mut job, price) = draw_job(&tc);

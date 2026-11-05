@@ -1,6 +1,3 @@
-//! Roofline estimation: compute vs HBM on device, plus host, transfer,
-//! interconnect, and launch stages, summed serially or overlapped.
-
 use std::fmt;
 use std::str::FromStr;
 
@@ -168,12 +165,6 @@ pub struct TransferTime {
 }
 
 impl TransferTime {
-    /// Times `transfer` with the alpha-beta (latency plus bandwidth) model.
-    ///
-    /// The bandwidth is the bulk 512 MiB rate, which small copies never
-    /// reach, and the latency is the 4-byte synchronous round trip. A 4-byte
-    /// sync H2D copy at 5 μs and 50 GB/s is `5 μs + 4 B / 50 GB/s =
-    /// 5.00008 μs`; at 512 MiB the same latency is under 0.1% of the time.
     fn new(transfer: Transfer, mode: CopyMode, gbps: f64, latency_us: Option<f64>) -> Self {
         let waits = match mode {
             CopyMode::Sync => transfer.copies,
@@ -310,11 +301,26 @@ fn missing_rate(profile: &Profile, flag: &str, what: &str) -> EstimateError {
     ))
 }
 
-/// Validates one transfer kind and times it. `kind` is `"h2d"`, `"d2h"`, or
-/// `"g2g"`, which is also the CLI flag name.
+#[derive(Clone, Copy)]
+enum CopyKind {
+    H2d,
+    D2h,
+    G2g,
+}
+
+impl fmt::Display for CopyKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::H2d => "h2d",
+            Self::D2h => "d2h",
+            Self::G2g => "g2g",
+        })
+    }
+}
+
 fn transfer_time(
     profile: &Profile,
-    kind: &str,
+    kind: CopyKind,
     transfer: Transfer,
     mode: CopyMode,
     gbps: Option<f64>,
@@ -382,7 +388,7 @@ pub fn estimate(
     let copy_mode = workload.copy_mode;
     let h2d = transfer_time(
         profile,
-        "h2d",
+        CopyKind::H2d,
         workload.h2d,
         copy_mode,
         rates.h2d.map(|rate| rate.gbps),
@@ -390,7 +396,7 @@ pub fn estimate(
     )?;
     let d2h = transfer_time(
         profile,
-        "d2h",
+        CopyKind::D2h,
         workload.d2h,
         copy_mode,
         rates.d2h.map(|rate| rate.gbps),
@@ -398,7 +404,7 @@ pub fn estimate(
     )?;
     let g2g = transfer_time(
         profile,
-        "g2g",
+        CopyKind::G2g,
         workload.g2g,
         copy_mode,
         Some(rates.g2g.gbps),
@@ -581,9 +587,11 @@ mod tests {
     use super::*;
     use crate::profile::{Ceiling, Measured};
 
+    const RELATIVE_TOLERANCE: f64 = 1e-9;
+
     fn near(actual: f64, expected: f64) {
         let difference = (actual - expected).abs();
-        // `∞ − ∞` is NaN. Two infinities with the same sign are the same result.
+        // `∞ − ∞` is NaN.
         if difference.is_nan() {
             assert!(
                 actual.is_infinite()
@@ -595,15 +603,11 @@ mod tests {
         }
         let scale = actual.abs().max(expected.abs()).max(1e-12);
         assert!(
-            difference <= 1e-9 * scale,
+            difference <= RELATIVE_TOLERANCE * scale,
             "{actual} differs from {expected} by {difference}"
         );
     }
 
-    // Copy counts stay in `0..=100` and each copy moves at least one byte, so
-    // the bytes-versus-copies check accepts the transfer. FLOPs and bytes stay
-    // below `1e15`, where dividing by the fixture's GB/s and TFLOP/s rates
-    // cannot overflow.
     fn draw_transfer(tc: &TestCase) -> Transfer {
         let copies = tc.draw(gs::integers::<u64>().min_value(0).max_value(100));
         if copies == 0 {
@@ -635,9 +639,6 @@ mod tests {
         (workload, tflops)
     }
 
-    // A zero draw is "this stage is absent". A nonzero draw is at least one
-    // byte or one FLOP, so a ratio such as FLOPs per HBM byte cannot overflow
-    // to infinity inside the stated maxima.
     fn optional_quantity(tc: &TestCase, max: f64) -> f64 {
         if tc.draw(gs::booleans()) {
             0.0
@@ -1287,9 +1288,6 @@ mod tests {
         assert_eq!(unicode.parse::<GemmDims>().unwrap(), dims);
     }
 
-    // The fixture's rates are the assumptions: HBM 2000 GB/s, host copy
-    // 100 GB/s, H2D 50 GB/s at 5 μs, D2H 40 GB/s at 6 μs, G2G 300 GB/s at
-    // 3 μs, and a 5 μs launch. The override replaces the fp16 peak.
     #[hegel::test]
     fn estimate_is_the_roofline_plus_alpha_beta_copies(tc: TestCase) {
         let (workload, tflops) = draw_workload(&tc);

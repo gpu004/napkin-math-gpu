@@ -1,5 +1,3 @@
-//! `napkin`: the GPU napkin-math CLI.
-
 use std::fmt::Write as _;
 use std::num::NonZeroU64;
 use std::path::PathBuf;
@@ -485,8 +483,6 @@ fn cmd_collective(
     Ok(out)
 }
 
-/// Lists the other link rates the profile knows, so a reader can see they
-/// were deliberately left out of the curve-based answer.
 fn append_unused_links(out: &mut String, gpu_profile: &Profile) {
     let peer_copy = gpu_profile
         .measured
@@ -516,8 +512,6 @@ fn append_unused_links(out: &mut String, gpu_profile: &Profile) {
     }
 }
 
-/// When no curve matches, for example `--count 16` on two 8-GPU machines,
-/// points at the datasheet link instead of leaving the user with a bare refusal.
 fn with_network_hint(error: String, gpu_profile: &Profile, query: &Query<'_>) -> String {
     match &gpu_profile.ceiling.network {
         Some(network) if collective::find_evidence(profile::collectives(), query).is_none() => {
@@ -582,14 +576,16 @@ fn opt_bytes(value: Option<&str>) -> Result<f64, String> {
     })
 }
 
-/// Without an explicit count, bytes on the command line are one copy; an
-/// explicit count is passed through so `estimate` can reject a mismatch.
 fn transfer(bytes: Option<&str>, copies: Option<u64>) -> Result<Transfer, String> {
     let bytes = opt_bytes(bytes)?;
     Ok(Transfer {
         bytes,
-        copies: copies.unwrap_or(u64::from(bytes > 0.0)),
+        copies: copies.unwrap_or_else(|| one_copy_if_any_bytes(bytes)),
     })
+}
+
+fn one_copy_if_any_bytes(bytes: f64) -> u64 {
+    u64::from(bytes > 0.0)
 }
 
 fn bound(lower_bound: bool) -> &'static str {
@@ -935,17 +931,20 @@ fn cmd_cost(
     if currency.len() != 3 || !currency.bytes().all(|byte| byte.is_ascii_uppercase()) {
         return Err("currency must be exactly three uppercase ASCII letters".to_owned());
     }
-    let (price_per_gpu_hour, first_line, price_line) = if let Some(record_id) = offer {
+    let resolved = if let Some(record_id) = offer {
         offer_price(record_id, gpus)?
     } else {
         let price = price.ok_or_else(|| "pass exactly one of --price or --offer".to_owned())?;
         let amount = units::parse_number(price).map_err(|error| error.to_string())?;
-        let first_line = format!(
-            "{gpus} {} · {}/GPU-hour (--price)",
-            if gpus == 1 { "GPU" } else { "GPUs" },
-            fmt_money(amount, currency)
-        );
-        (amount, first_line, None)
+        ResolvedPrice {
+            per_gpu_hour: amount,
+            headline: format!(
+                "{gpus} {} · {}/GPU-hour (--price)",
+                if gpus == 1 { "GPU" } else { "GPUs" },
+                fmt_money(amount, currency)
+            ),
+            provenance: None,
+        }
     };
     let busy_s = units::parse_duration(time).map_err(|error| error.to_string())?;
     let utilization_value = utilization.unwrap_or(1.0);
@@ -981,10 +980,10 @@ fn cmd_cost(
         granularity_s,
         work,
     };
-    let result = cost::cost(&job, price_per_gpu_hour).map_err(|error| error.to_string())?;
-    let mut out = format!("{first_line}\n");
-    if let Some(line) = price_line {
-        out.push_str(&line);
+    let result = cost::cost(&job, resolved.per_gpu_hour).map_err(|error| error.to_string())?;
+    let mut out = format!("{}\n", resolved.headline);
+    if let Some(lines) = resolved.provenance {
+        out.push_str(&lines);
     }
     CostDisplay {
         utilization,
@@ -997,10 +996,13 @@ fn cmd_cost(
     Ok(out)
 }
 
-/// Resolves `napkin cost --offer`: the record's per-GPU-hour price, the
-/// headline line, and the price provenance plus any commitment or partial
-/// instance caveat.
-fn offer_price(record_id: &str, gpus: u32) -> Result<(f64, String, Option<String>), String> {
+struct ResolvedPrice {
+    per_gpu_hour: f64,
+    headline: String,
+    provenance: Option<String>,
+}
+
+fn offer_price(record_id: &str, gpus: u32) -> Result<ResolvedPrice, String> {
     let record = price::find(record_id).ok_or_else(|| {
         format!("no price record {record_id:?}; run `napkin prices` or pass --price")
     })?;
@@ -1040,7 +1042,11 @@ fn offer_price(record_id: &str, gpus: u32) -> Result<(f64, String, Option<String
             record.id, record.gpus
         );
     }
-    Ok((record.per_gpu_hour(), first_line, Some(price_line)))
+    Ok(ResolvedPrice {
+        per_gpu_hour: record.per_gpu_hour(),
+        headline: first_line,
+        provenance: Some(price_line),
+    })
 }
 
 struct CostDisplay<'a> {

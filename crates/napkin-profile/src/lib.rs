@@ -1,5 +1,3 @@
-//! GPU profile types shared by the estimator and benchmark harness.
-
 pub mod collective;
 
 use std::collections::BTreeMap;
@@ -69,7 +67,7 @@ pub struct Ceiling {
 }
 
 /// Datasheet RDMA link from one GPU to a GPU in another machine. Nothing here
-/// is measured: no NCCL Tests curve in this repository spans two machines.
+/// is measured.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Network {
     /// Reference system and NIC, e.g. `"DGX H100, ConnectX-7 InfiniBand"`.
@@ -95,7 +93,6 @@ impl Network {
     }
 }
 
-/// One GPU SKU's datasheet profile plus any measured calibration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Profile {
     /// Short identifier, e.g. `"h100"`.
@@ -379,31 +376,21 @@ pub struct Measured {
 /// measurements stored in [`Measured`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GemmShapeSuite {
-    /// Time this shape suite was captured.
     pub captured_at: String,
     /// Requested Modal GPU and instance count for this run.
     pub gpu_request: String,
-    /// CUDA device name reported by the run.
     pub device_name: String,
-    /// NVIDIA driver version reported by the run.
     pub driver_version: String,
-    /// CUDA runtime version used by the run.
     pub cuda_version: String,
-    /// cuBLASLt library version used for all recorded shapes.
     pub library: String,
-    /// `PCIe` generation observed for this run, when reported.
     #[serde(default)]
     pub pcie_gen: Option<u8>,
-    /// `PCIe` link width observed for this run, when reported.
     #[serde(default)]
     pub pcie_width: Option<u8>,
-    /// Ordered per-shape measurements.
     pub shapes: Vec<GemmShape>,
-    /// Correctness results from the shape-suite run.
     pub checks: BTreeMap<String, bool>,
     /// Raw per-round shape timings in milliseconds.
     pub samples_ms: BTreeMap<String, Vec<f64>>,
-    /// NVML GPU state observed during the shape-suite rounds.
     pub gpu_state: Option<GpuState>,
 }
 
@@ -441,7 +428,6 @@ pub struct GemmShape {
     pub ldc: u32,
     /// cuBLASLt epilogue, e.g. `"CUBLASLT_EPILOGUE_DEFAULT"`.
     pub epilogue: String,
-    /// Algorithm attributes selected by the heuristic.
     pub algorithm: GemmAlgo,
     /// Workspace limit passed to the heuristic, in bytes.
     pub workspace_limit_bytes: u64,
@@ -469,23 +455,14 @@ impl GemmShape {
 /// Raw enum values and workspace/waves returned by the cuBLASLt heuristic.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GemmAlgo {
-    /// cuBLASLt algorithm ID.
     pub id: i32,
-    /// cuBLASLt tile configuration ID.
     pub tile: i32,
-    /// Kernel pipeline stage configuration.
     pub stages: i32,
-    /// Split-K factor.
     pub split_k: i32,
-    /// Reduction scheme enum value.
     pub reduction_scheme: i32,
-    /// CTA swizzling enum value.
     pub cta_swizzling: i32,
-    /// Custom algorithm option enum value.
     pub custom_option: i32,
-    /// Heuristic-selected workspace size, in bytes.
     pub workspace_bytes: u64,
-    /// Heuristic's estimated number of waves.
     pub waves: f64,
 }
 
@@ -494,11 +471,8 @@ pub struct GemmAlgo {
 pub struct GemmCheck {
     /// Number of deterministically sampled output elements.
     pub sampled: u32,
-    /// Largest absolute error among sampled outputs.
     pub max_abs_error: f64,
-    /// Relative tolerance used by the pass criterion.
     pub rtol: f64,
-    /// Absolute tolerance used by the pass criterion.
     pub atol: f64,
     /// Whether every sampled output met `atol + rtol × |reference|`.
     pub passed: bool,
@@ -661,14 +635,12 @@ impl fmt::Display for Basis {
     }
 }
 
-/// One dtype's throughput with its provenance.
 #[derive(Clone, Copy, Debug)]
 pub struct ComputeRate {
     pub tflops: f64,
     pub basis: Basis,
 }
 
-/// One transfer throughput and its evidence source.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TransferRate {
     pub gbps: f64,

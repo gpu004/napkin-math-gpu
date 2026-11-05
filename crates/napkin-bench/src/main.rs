@@ -1,7 +1,3 @@
-//! `napkin-bench`: measures one or two GPUs and prints a `Measured` JSON
-//! profile on stdout. Progress goes to stderr. Exits non-zero if any
-//! correctness check fails.
-
 mod cuda;
 mod gpu_state;
 mod stats;
@@ -58,7 +54,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// Current UTC date/time as `YYYY-MM-DD`, without a chrono dependency.
 #[must_use]
 fn iso_now() -> String {
     let secs = std::time::SystemTime::now()
@@ -66,6 +61,16 @@ fn iso_now() -> String {
         .map_or(0, |d| d.as_secs());
     let days = (secs / 86_400).cast_signed();
     let secs_of_day = secs % 86_400;
+    let (year, m, d) = civil_from_days(days);
+    format!(
+        "{year:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        secs_of_day / 3600,
+        (secs_of_day % 3600) / 60,
+        secs_of_day % 60
+    )
+}
+
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -76,10 +81,17 @@ fn iso_now() -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = if m <= 2 { y + 1 } else { y };
-    format!(
-        "{year:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
-        secs_of_day / 3600,
-        (secs_of_day % 3600) / 60,
-        secs_of_day % 60
-    )
+    (year, m, d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::civil_from_days;
+
+    #[test]
+    fn civil_from_days_counts_from_the_unix_epoch() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
+        assert_eq!(civil_from_days(20_738), (2026, 10, 12));
+    }
 }
