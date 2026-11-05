@@ -1,3 +1,5 @@
+use napkin::collective::{self, Query};
+use napkin::profile::collective::{Collective, Topology};
 use napkin::profile::{Basis, Dtype};
 use napkin::units::round_sig;
 use napkin::{price, profile};
@@ -135,6 +137,96 @@ fn readme_cost_examples_match_cli() {
         examples += 1;
     }
     assert!(examples >= 2, "expected at least two README cost examples");
+}
+
+fn eight_h100s(op: Collective, bytes: f64) -> Result<f64, String> {
+    collective::estimate(&Query {
+        gpu: "h100",
+        gpu_count: 8,
+        topology: Topology::Nvlink,
+        collective: op,
+        dtype: Dtype::Bf16,
+        bytes,
+    })
+    .map(|estimate| estimate.time_s)
+}
+
+/// The "Across machines" example composes measured eight-GPU curves with the
+/// datasheet RDMA link; when either moves, the README arithmetic must too.
+#[test]
+fn cross_machine_example_follows_from_curves_and_network() -> Result<(), Box<dyn std::error::Error>>
+{
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))?;
+    let network = profile::find("h100")
+        .and_then(|h100| h100.ceiling.network.as_ref())
+        .ok_or("h100 has no datasheet network")?;
+    assert_eq!(network.nic_gbit_per_gpu, 400.0);
+    assert_eq!(network.gbps(), 50.0);
+    assert_eq!(network.gpus_per_node, 8);
+    assert_eq!(network.latency_us, 5.0);
+    let latency = network.latency_us / 1e6;
+    let rate = network.gbps() * 1e9;
+    let ms = |seconds: f64| seconds * 1e3;
+    let us = |seconds: f64| seconds * 1e6;
+
+    let gradients = 4.0 * f64::from(1_u32 << 30);
+    let reduce_scatter = eight_h100s(Collective::ReduceScatter, gradients)?;
+    let all_gather = eight_h100s(Collective::AllGather, gradients)?;
+    let all_reduce = eight_h100s(Collective::AllReduce, gradients)?;
+    // A two-rank AllReduce sends 2(n-1)/n = 1× its shard, in two steps.
+    let shard = gradients / f64::from(network.gpus_per_node);
+    let wire = shard / rate + 2.0 * latency;
+    let serial = reduce_scatter + wire + all_gather;
+    let pipelined = reduce_scatter.max(wire).max(all_gather);
+    assert!(same(round_sig(ms(reduce_scatter), 3), 10.6));
+    assert!(same(round_sig(ms(all_gather), 3), 10.6));
+    assert!(same(round_sig(ms(all_reduce), 3), 15.7));
+    assert!(same(round_sig(shard / 1e6, 3), 537.0));
+    assert!(same(round_sig(ms(wire), 3), 10.7));
+    assert!(same(round_sig(ms(serial), 2), 32.0));
+    assert!(same(round_sig(ms(pipelined), 2), 11.0));
+    assert!(same(round_sig(ms(8.0 * shard / rate), 2), 86.0));
+    assert!(same(round_sig(ms(shard / 43e9), 3), 12.5));
+
+    let activations = 128.0 * 1024.0;
+    let small_scatter = eight_h100s(Collective::ReduceScatter, activations)?;
+    let small_gather = eight_h100s(Collective::AllGather, activations)?;
+    let small_reduce = eight_h100s(Collective::AllReduce, activations)?;
+    let small_wire = activations / f64::from(network.gpus_per_node) / rate + 2.0 * latency;
+    let small = small_scatter + small_wire + small_gather;
+    assert!(same(round_sig(us(small_scatter), 3), 39.9));
+    assert!(same(round_sig(us(small_gather), 3), 42.4));
+    assert!(same(round_sig(us(small_reduce), 3), 38.9));
+    assert!(same(round_sig(us(small), 1), 90.0));
+    assert!(same(round_sig(ms(160.0 * small), 2), 15.0));
+    assert!(same(round_sig(ms(160.0 * small_reduce), 2), 6.2));
+
+    for text in [
+        "400 Gbit/s / 8 bits = 50 GB/s per GPU, each direction",
+        "8 GPUs × one ConnectX-7 each = 8 × 50 GB/s = 400 GB/s out",
+        "latency     5 μs one-way",
+        "4 GiB / 8 = 512 MiB shard",
+        "512 MiB = 537 MB, so 537 MB / 50 GB/s = 10.7 ms, plus two 5 μs steps",
+        "40 GiB/s (43 GB/s), below the 50 GB/s (46.6 GiB/s) line rate",
+        "reduce-scatter 10.6 ms",
+        "network        10.7 ms    datasheet: 537 MB / 50 GB/s + 2 × 5 μs",
+        "all-gather     10.6 ms",
+        "serial         32 ms",
+        "pipelined      ≥ 11 ms",
+        "measured 15.7 ms",
+        "between 11 and 32 ms",
+        "8 × 10.7 = 86 ms",
+        "43 GB/s would make the\nnetwork stage 12.5 ms",
+        "39.9 μs ReduceScatter",
+        "42.4 μs AllGather, for about 90 μs",
+        "cost 15 ms instead of 6.2 ms",
+    ] {
+        assert!(
+            readme.contains(text),
+            "README \"Across machines\" no longer says {text:?}"
+        );
+    }
+    Ok(())
 }
 
 #[test]
