@@ -8,8 +8,8 @@ use std::process::ExitCode;
 use napkin_profile::collective::{Collective, CollectiveEvidence, Curve, CurvePoint, Topology};
 use napkin_profile::{
     Access, Bandwidth, Ceiling, CopyPath, Dtype, Endpoint, GemmAlgo, GemmCheck, GemmShape,
-    GemmShapeSuite, GpuState, Latency, Measured, Nvbandwidth, Profile, RoundState, Span, Statistic,
-    tflops,
+    GemmShapeSuite, GpuState, Latency, Measured, Nvbandwidth, Profile, Repeat, RoundState, Span,
+    Statistic, tflops,
 };
 use serde::Deserialize;
 
@@ -108,6 +108,7 @@ fn run() -> Result<(), String> {
     println!("cargo:rerun-if-changed={}", nccl_dir.display());
     let collectives = load_collectives(&nccl_dir, &profiles)?;
     let profiles = attach_nvbandwidth(profiles, &paths.nvbandwidth)?;
+    let profiles = attach_repeats(profiles, &profiles_dir.join("repeats"))?;
     validate_transfer_cross_checks(&profiles)?;
     let generated = emit_profiles(&profiles, &collectives);
     let out_dir = env::var("OUT_DIR").map_err(|e| e.to_string())?;
@@ -562,6 +563,87 @@ fn attach_nvbandwidth(
     Ok(profiles)
 }
 
+/// Attaches `profiles/repeats/<id>/*.json`, written by
+/// `modal run modal/bench.py --gpu <id> --repeat N`. A repeat must be a
+/// passing full run of the same Modal request on the same device model as the
+/// canonical profile, or its spread would compare different hardware.
+fn attach_repeats(mut profiles: Vec<Profile>, repeats_dir: &Path) -> Result<Vec<Profile>, String> {
+    println!("cargo:rerun-if-changed={}", repeats_dir.display());
+    if !repeats_dir.exists() {
+        return Ok(profiles);
+    }
+    let entries = fs::read_dir(repeats_dir)
+        .map_err(|error| format!("cannot read {}: {error}", repeats_dir.display()))?;
+    for entry in entries {
+        let dir = entry
+            .map_err(|error| format!("cannot read entry in {}: {error}", repeats_dir.display()))?
+            .path();
+        println!("cargo:rerun-if-changed={}", dir.display());
+        let id = dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("invalid repeats directory name: {}", dir.display()))?;
+        let profile = profiles
+            .iter_mut()
+            .find(|profile| profile.id == id)
+            .ok_or_else(|| format!("repeats directory {} names no profile", dir.display()))?;
+        let canonical = profile
+            .measured
+            .as_ref()
+            .ok_or_else(|| format!("repeats for {id} have no measured profile"))?;
+        let files = fs::read_dir(&dir)
+            .map_err(|error| format!("cannot read {}: {error}", dir.display()))?;
+        for file in files {
+            let path = file
+                .map_err(|error| format!("cannot read entry in {}: {error}", dir.display()))?
+                .path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                return Err(format!("unexpected file in repeats: {}", path.display()));
+            }
+            let json = fs::read_to_string(&path)
+                .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+            let repeat: Repeat = serde_json::from_str(&json)
+                .map_err(|error| format!("invalid repeat JSON in {}: {error}", path.display()))?;
+            validate_measured(id, &repeat.measured)?;
+            let mismatch = [
+                (
+                    "gpu_request",
+                    &repeat.measured.gpu_request,
+                    &canonical.gpu_request,
+                ),
+                (
+                    "device_name",
+                    &repeat.measured.device_name,
+                    &canonical.device_name,
+                ),
+            ]
+            .into_iter()
+            .find(|(_, repeat, canonical)| repeat != canonical);
+            if let Some((field, repeat, canonical)) = mismatch {
+                return Err(format!(
+                    "{}: {field} {repeat:?} differs from the canonical profile's {canonical:?}",
+                    path.display()
+                ));
+            }
+            if usize::try_from(repeat.measured.device_count).ok()
+                != Some(repeat.host.gpu_uuids.len())
+            {
+                return Err(format!(
+                    "{}: {} GPU UUIDs for {} devices",
+                    path.display(),
+                    repeat.host.gpu_uuids.len(),
+                    repeat.measured.device_count
+                ));
+            }
+            profile.repeats.push(repeat);
+        }
+        profile
+            .repeats
+            .sort_by(|left, right| left.measured.captured_at.cmp(&right.measured.captured_at));
+    }
+    Ok(profiles)
+}
+
 fn validate_transfer_cross_checks(profiles: &[Profile]) -> Result<(), String> {
     for profile in profiles {
         for check in profile.transfer_cross_check() {
@@ -910,6 +992,7 @@ fn emit_profile(profile: &Profile, generated: &mut String) {
         ceiling,
         measured,
         nvbandwidth,
+        repeats,
     } = profile;
     let Ceiling {
         hbm_gbps,
@@ -966,15 +1049,39 @@ fn emit_profile(profile: &Profile, generated: &mut String) {
     );
     emit_field(generated, "            ", "source", &string_literal(source));
     generated.push_str("        },\n");
-    let measured = measured
-        .as_ref()
-        .map_or_else(|| "None".to_owned(), emit_measured);
+    let measured = measured.as_ref().map_or_else(
+        || "None".to_owned(),
+        |measured| format!("Some({})", measured_literal(measured)),
+    );
     emit_field(generated, "        ", "measured", &measured);
     let nvbandwidth = nvbandwidth
         .as_ref()
         .map_or_else(|| "None".to_owned(), emit_nvbandwidth);
     emit_field(generated, "        ", "nvbandwidth", &nvbandwidth);
+    let repeats = (0..repeats.len())
+        .map(|index| format!("generated_repeat_{id}_{index}()"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    emit_field(
+        generated,
+        "        ",
+        "repeats",
+        &format!("vec![{repeats}]"),
+    );
     generated.push_str("    }\n}\n");
+    for (index, repeat) in profile.repeats.iter().enumerate() {
+        let _ = writeln!(
+            generated,
+            "#[expect(clippy::unreadable_literal, reason = \"preserve source profile precision\")]\n\
+             fn generated_repeat_{id}_{index}() -> Repeat {{\n    Repeat {{\n        host: Host {{ \
+             cloud_provider: {}, region: {}, task_id: {}, gpu_uuids: {} }},\n        measured: {},\n    }}\n}}",
+            string_literal(&repeat.host.cloud_provider),
+            string_literal(&repeat.host.region),
+            string_literal(&repeat.host.task_id),
+            string_vec(&repeat.host.gpu_uuids),
+            measured_literal(&repeat.measured),
+        );
+    }
 }
 
 fn emit_nvbandwidth(evidence: &Nvbandwidth) -> String {
@@ -1095,7 +1202,7 @@ fn endpoint_literal(endpoint: Endpoint) -> String {
     }
 }
 
-fn emit_measured(measured: &Measured) -> String {
+fn measured_literal(measured: &Measured) -> String {
     let Measured {
         captured_at,
         gpu_request,
@@ -1184,11 +1291,11 @@ fn emit_measured(measured: &Measured) -> String {
                 .map_or_else(|| "None".to_owned(), gpu_state_literal),
         ),
     ];
-    let mut generated = String::from("Some(Measured {\n");
+    let mut generated = String::from("Measured {\n");
     for (name, value) in fields {
         emit_field(&mut generated, "            ", name, &value);
     }
-    generated.push_str("        })");
+    generated.push_str("        }");
     generated
 }
 

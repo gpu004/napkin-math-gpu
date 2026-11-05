@@ -598,6 +598,7 @@ mod tests {
                 source: "fixture".to_owned(),
             },
             nvbandwidth: None,
+            repeats: Vec::new(),
             measured: Some(Measured {
                 captured_at: "2026-08-08T00:00:00+00:00".to_owned(),
                 gpu_request: "TEST!:2".to_owned(),
