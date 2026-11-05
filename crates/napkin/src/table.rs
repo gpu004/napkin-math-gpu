@@ -10,7 +10,7 @@ use crate::profile::{
     TransferMetric, TransferRate,
 };
 use crate::units::{
-    fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_sig, fmt_tflops, round_sig,
+    fmt_bytes, fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_sig, fmt_tflops, round_sig,
 };
 
 const SIG: u32 = 1;
@@ -749,7 +749,73 @@ pub fn compare(profiles: &[Profile], exact: bool) -> String {
 
     append_measured_table(&mut out, profiles);
     append_transfer_cross_check_table(&mut out, profiles);
+    append_copy_size_table(&mut out, profiles, exact);
     out
+}
+
+/// One row per GPU and copy kind with a measured fixed cost: the 4-byte
+/// synchronous copy latency `L`, the bandwidth `P` that `napkin estimate`
+/// charges, and two sizes read off the line `time = L + bytes / P`. On an
+/// H100 with `L = 8.8 μs` and `P = 55.5 GB/s`, a copy stays within 5% of `L`
+/// up to `0.05 × L × P ≈ 24 KB` and takes `2 × L` at `L × P ≈ 490 KB`.
+fn append_copy_size_table(out: &mut String, profiles: &[Profile], exact: bool) {
+    let sig = if exact { 3 } else { 2 };
+    let rows: Vec<_> = profiles
+        .iter()
+        .flat_map(|profile| {
+            let rates = profile.rates(false);
+            [
+                ("H2D", rates.h2d_latency_us, rates.h2d),
+                ("D2H", rates.d2h_latency_us, rates.d2h),
+                ("GPU ↔ GPU", rates.g2g_latency_us, Some(rates.g2g)),
+            ]
+            .into_iter()
+            .filter_map(move |(copy, latency_us, rate)| Some((profile, copy, latency_us?, rate?)))
+        })
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    out.push('\n');
+    emit(
+        out,
+        &[
+            "GPU",
+            "Copy",
+            "Latency `L` (4 B)",
+            "Bandwidth `P`",
+            "Latency size `0.05 × L × P`",
+            "Break-even `L × P`",
+        ],
+    );
+    emit(out, &["---", "---", "---:", "---:", "---:", "---:"]);
+    for (profile, copy, latency_us, rate) in rows {
+        let break_even_bytes = latency_us * 1e-6 * rate.gbps * 1e9;
+        emit(
+            out,
+            &[
+                &profile.name,
+                copy,
+                &fmt_duration(latency_us / 1e6, sig),
+                &fmt_gbps(rate.gbps, sig),
+                &fmt_bytes(SPREAD_FLAG * break_even_bytes, sig),
+                &fmt_bytes(break_even_bytes, sig),
+            ],
+        );
+    }
+    let _ = writeln!(
+        out,
+        "\nA latency is one copy at a time, each waiting for the last, at the largest size that \
+         takes as long as the smallest. napkin-bench times only the smallest, a 4-byte copy plus \
+         the stream synchronize that waits for it, so the last two columns come from the line \
+         `time = L + bytes / P`, not from a sweep of sizes. At the latency size, a copy of \
+         `{:.2} × L × P` bytes takes {:.0}% longer than `L`, the spread at which rounds are \
+         flagged as disagreeing. At break-even the bytes cost as much as the fixed cost and the \
+         copy takes `2 × L`: smaller copies are latency-bound, larger ones bandwidth-bound. `P` \
+         is the rate `napkin estimate` charges, with the basis in the first table.",
+        SPREAD_FLAG,
+        SPREAD_FLAG * 100.0,
+    );
 }
 
 fn append_measured_table(out: &mut String, profiles: &[Profile]) {
@@ -1145,6 +1211,32 @@ mod tests {
             "{table}"
         );
         assert!(table.contains("Board limits: 700 W"), "{table}");
+    }
+
+    #[test]
+    fn copy_sizes_follow_latency_times_bandwidth() {
+        let mut profile = h100_with(&[], None);
+        profile.nvbandwidth = None;
+        let measured = profile.measured.as_mut().unwrap();
+        measured.h2d_latency_us = Some(10.0);
+        measured.h2d_gbps = 50.0;
+        measured.d2h_latency_us = None;
+        measured.g2g_latency_us = None;
+        let table = compare(&[profile.clone()], false);
+        assert!(
+            table.contains("| H100 SXM 80GB | H2D | 10 μs | 50 GB/s | 25 KB | 500 KB |"),
+            "{table}"
+        );
+        assert!(!table.contains("| H100 SXM 80GB | D2H |"), "{table}");
+        assert!(!table.contains("| GPU ↔ GPU |"), "{table}");
+        assert!(
+            table.contains("`0.05 × L × P` bytes takes 5% longer"),
+            "{table}"
+        );
+
+        profile.measured.as_mut().unwrap().h2d_latency_us = None;
+        let table = compare(&[profile], false);
+        assert!(!table.contains("Break-even"), "{table}");
     }
 
     #[test]

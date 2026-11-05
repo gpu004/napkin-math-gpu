@@ -112,6 +112,23 @@ Read through NVML 13.580.95.05 via nvml-wrapper 0.13 every 5 ms on the GPU that 
 | B300 SXM 288GB | D2H | 57.1 GB/s | 52.5 GB/s | 57.4 GB/s | 0.994 | Gen6 x16 / Gen6 x16 |
 | B300 SXM 288GB | GPU0→GPU1 | 764 GB/s | 717 GB/s | 765 GB/s | 0.998 | n/a (NVLink) |
 | B300 SXM 288GB | GPU1→GPU0 | 764 GB/s | 717 GB/s | 766 GB/s | 0.998 | n/a (NVLink) |
+
+| GPU | Copy | Latency `L` (4 B) | Bandwidth `P` | Latency size `0.05 × L × P` | Break-even `L × P` |
+| --- | --- | ---: | ---: | ---: | ---: |
+| A100 SXM 80GB | H2D | 14 μs | 25 GB/s | 18 KB | 360 KB |
+| A100 SXM 80GB | D2H | 13 μs | 26 GB/s | 17 KB | 350 KB |
+| A100 SXM 80GB | GPU ↔ GPU | 15 μs | 280 GB/s | 210 KB | 4.3 MB |
+| H100 SXM 80GB | H2D | 8.8 μs | 56 GB/s | 24 KB | 490 KB |
+| H100 SXM 80GB | D2H | 9.4 μs | 55 GB/s | 26 KB | 520 KB |
+| H100 SXM 80GB | GPU ↔ GPU | 10 μs | 400 GB/s | 200 KB | 4.1 MB |
+| B200 SXM 180GB | H2D | 11 μs | 56 GB/s | 29 KB | 590 KB |
+| B200 SXM 180GB | D2H | 14 μs | 57 GB/s | 39 KB | 780 KB |
+| B200 SXM 180GB | GPU ↔ GPU | 13 μs | 760 GB/s | 480 KB | 9.7 MB |
+| B300 SXM 288GB | H2D | 13 μs | 56 GB/s | 37 KB | 740 KB |
+| B300 SXM 288GB | D2H | 15 μs | 57 GB/s | 42 KB | 850 KB |
+| B300 SXM 288GB | GPU ↔ GPU | 18 μs | 760 GB/s | 700 KB | 14 MB |
+
+A latency is one copy at a time, each waiting for the last, at the largest size that takes as long as the smallest. napkin-bench times only the smallest, a 4-byte copy plus the stream synchronize that waits for it, so the last two columns come from the line `time = L + bytes / P`, not from a sweep of sizes. At the latency size, a copy of `0.05 × L × P` bytes takes 5% longer than `L`, the spread at which rounds are flagged as disagreeing. At break-even the bytes cost as much as the fixed cost and the copy takes `2 × L`: smaller copies are latency-bound, larger ones bandwidth-bound. `P` is the rate `napkin estimate` charges, with the basis in the first table.
 <!-- /napkin -->
 
 Modal request semantics matter: `H100!` pins an H100 — a plain `H100` request
@@ -153,35 +170,81 @@ round trip is added to copies, and copies are not counted as launches. Without
 a measured `L_copy` (for example `--ceiling`), napkin uses `bytes / P` alone,
 prints `≥`, and says why.
 
-### Why a 4-byte copy is not in the bandwidth row
+### Copy latency and the break-even size
 
-The H100 bandwidth row moves 512 MiB in about 9.7 ms, timed with CUDA events
-on the GPU. The ~10 μs fixed cost of a copy is 0.1% of that, so it vanishes
-into the throughput. Divide 4 bytes by the same 55 GB/s and you get 0.07 ns;
-the measured 4-byte synchronous copy takes 9.8 μs, about 140,000 times longer.
-Small copies are all fixed cost: driver call, DMA setup, and the wait for
-completion, none of which scale with bytes. The size where the two terms are
-equal is `L_copy × P = 9.8 μs × 55 GB/s ≈ 500 KB`; below it a copy is
-latency-bound, above it bandwidth-bound. So moving 1 GB as 100,000 small
-copies is about 50 times slower than one large copy:
+Following Simon's [Napkin Math](https://github.com/sirupsen/napkin-math), a
+latency is one operation at a time, each waiting for the last, at the largest
+size that takes as long as the smallest. The smallest copy is 4 bytes, and
+napkin-bench times exactly that: issue, copy, and the stream synchronize that
+waits for it, on the wall clock. That is `L_copy`.
+
+The bandwidth row is a different measurement: 512 MiB timed with CUDA events
+on the GPU, where a fixed cost of microseconds is about 0.1% of the time and
+vanishes into the throughput. 4 bytes at 55 GB/s would take under a tenth of a
+nanosecond, yet the measured copy takes microseconds. Small copies are all fixed
+cost: driver call, DMA setup, and the wait for completion, none of which scale
+with bytes.
+
+napkin-bench does not sweep sizes, so napkin draws the straight line
+`time = L_copy + bytes / P` between the two measured points. Two sizes fall out
+of it, and the last table under [Other GPUs](#other-gpus) gives both for every
+GPU and copy kind:
 
 ```text
-$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 4B
-h2d         9.8 μs   1 sync copy: 1 × 9.8 μs + 4 B / 55 GB/s
-
-$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB
-h2d         18 ms   1 sync copy: 1 × 9.8 μs + 1 GB / 55 GB/s
-
-$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000
-h2d         1 s   100000 sync copies: 100000 × 9.8 μs + 1 GB / 55 GB/s
-
-$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000 --copy-mode async
-h2d         ≥ 18 ms   100000 async copies: 1 × 9.8 μs + 1 GB / 55 GB/s; lower bound: per-copy cost of queued async copies is unmeasured
+latency size = 0.05 × L_copy × P   a copy this big takes 5% longer than 4 bytes
+break-even   = L_copy × P          the bytes cost as much as the fixed cost: 2 × L_copy
 ```
 
-This latency-plus-bandwidth line is a straight-line fit through two measured
-points. Real transfers between the two sizes, pageable host memory, and
-copies that overlap with each other can land off it.
+Up to the latency size, a copy takes as long as the smallest one, so by
+Simon's rule it costs `L_copy`. Below break-even a copy is latency-bound, above
+it bandwidth-bound. On an H100 the two sizes are about 20 KB and 500 KB for
+host → device. So moving 1 GB as 100,000 copies of 10 KB, each under the
+break-even size, pays the fixed cost 100,000 times; queueing them
+asynchronously and waiting once pays it once, as a lower bound:
+
+<!-- napkin example estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB -->
+```text
+$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
+intensity   0 FLOP/B   ridge 230 FLOP/B   h2d-bound
+compute     0 s
+memory      0 s
+device      0 s
+h2d         18 ms   1 sync copy: 1 × 8.8 μs + 1 GB / 56 GB/s   NVBandwidth CE
+total       18 ms   h2d-bound
+```
+<!-- /napkin -->
+
+<!-- napkin example estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000 -->
+```text
+$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
+intensity   0 FLOP/B   ridge 230 FLOP/B   h2d-bound
+compute     0 s
+memory      0 s
+device      0 s
+h2d         900 ms   100000 sync copies: 100000 × 8.8 μs + 1 GB / 56 GB/s   NVBandwidth CE
+total       900 ms   h2d-bound
+```
+<!-- /napkin -->
+
+<!-- napkin example estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000 --copy-mode async -->
+```text
+$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000 --copy-mode async
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
+intensity   0 FLOP/B   ridge 230 FLOP/B   h2d-bound
+compute     0 s
+memory      0 s
+device      0 s
+h2d         ≥ 18 ms   100000 async copies: 1 × 8.8 μs + 1 GB / 56 GB/s; lower bound: per-copy cost of queued async copies is unmeasured   NVBandwidth CE
+total       ≥ 18 ms   h2d-bound
+```
+<!-- /napkin -->
+
+The line is fitted through two measured points. Real transfers between the
+two sizes, pageable host memory, and copies that overlap with each other can
+land off it, and a size sweep would replace the latency-size column with a
+measurement.
 
 Count algorithmic traffic, not allocation size: a copy reads and writes, while
 `C = A + B` reads two streams and writes one. Capacity is separate from speed:
