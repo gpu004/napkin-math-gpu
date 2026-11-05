@@ -29,6 +29,19 @@ spread between rounds, and its time for 1 MB and 1 GB.
 H100 SXM 80GB, one significant digit. Host ↔ device is the slower direction. Host and NVLink throughput come from NVBandwidth 2026-10-12, the rest from napkin-bench's median round. The AllReduce row is the fastest call and the highest bus bandwidth on the NCCL Tests curve (H100!:8, 2026-10-12).
 <!-- /napkin -->
 
+Units are decimal: GB is 10⁹ bytes and TB/s is 10¹² bytes per second.
+Simon's table is binary (GiB, TiB), so a number carried between the two is off
+by 7% at GiB (2³⁰ / 10⁹ = 1.074) and 10% at TiB (2⁴⁰ / 10¹² = 1.10). His
+7 TiB/s B200 memory row is 7.7 TB/s, NVIDIA's 8 TB/s datasheet figure;
+napkin-bench's HBM copy measured 6.4 TB/s.
+
+Every number comes from one Modal host per GPU model, measured on one day. The
+† marks below are spread between rounds on that host, not between machines.
+Simon averages three machine types and requires each latency to hold within
+15% on every machine he measured. No canonical run here has been repeated on
+another host or day yet, so a number may belong to one machine rather than to
+the GPU model.
+
 All four GPUs were measured on Modal on 2026-10-12 by `napkin-bench` (Rust +
 cudarc, CUDA-event timing, CUDA 12.9, driver 580.95.05 on H100 and
 610.57.04 on A100/B200/B300): `H100!:2`, `A100-80GB:2`, `B200:2`, and `B300:2`.
@@ -43,7 +56,7 @@ H100.
 **Note 1:** Compute figures are dense, not sparse. NVIDIA's headline Tensor
 Core numbers assume structured sparsity; dense is half.
 
-**Note 2:** Take the numbers with a grain of salt. GB means 10^9 bytes. For
+**Note 2:** Take the numbers with a grain of salt. For
 transfers, [NVBandwidth](https://github.com/NVIDIA/nvbandwidth) is the state of
 the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 
@@ -652,6 +665,14 @@ See [BENCHMARKS.md](BENCHMARKS.md#nccl-tests) for what is recorded and how
   measured/theoretical, software stack — no throughput number is universal.
 - **Sum serial stages; max overlapped ones.** Overlap is a property of the
   workload, not of the GPU.
+- **Weights barely compress, so compression won't speed up loading them.**
+  As Simon notes, floats that use their full mantissa barely compress, and
+  BF16 weights do. Only the 8-bit exponent is predictable:
+  [DFloat11](https://arxiv.org/abs/2504.11651) entropy-codes it losslessly and
+  saves about 30%. Loading Llama-3-70B's 140 GB over a 56 GB/s host link takes
+  2.5 s; 30% fewer bytes saves under a second and adds a decompression kernel.
+  Fewer bits per weight (`napkin llm --weight-bits 4`) cut the bytes 4x, but
+  they change the model.
 - **One or two significant digits.** You want order-of-magnitude answers;
   extra digits are not extra certainty.
 - **Validate against one real end-to-end run.** A napkin estimate is a lower
