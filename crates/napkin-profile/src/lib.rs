@@ -63,6 +63,36 @@ pub struct Ceiling {
     pub compute_tflops: BTreeMap<Dtype, f64>,
     /// Source URLs and how the figures were derived.
     pub source: String,
+    /// Scale-out link between machines; `None` until a sourced figure exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<Network>,
+}
+
+/// Datasheet RDMA link from one GPU to a GPU in another machine. Nothing here
+/// is measured: no NCCL Tests curve in this repository spans two machines.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Network {
+    /// Reference system and NIC, e.g. `"DGX H100, ConnectX-7 InfiniBand"`.
+    pub system: String,
+    /// Line rate of the NIC each GPU owns, one direction, Gbit/s
+    /// (10^9 bits/s). A DGX H100 gives each of its 8 GPUs its own 400 Gbit/s
+    /// ConnectX-7, so the machine can send 8 × 400 Gbit/s at once.
+    pub nic_gbit_per_gpu: f64,
+    /// GPUs per machine, each with its own NIC.
+    pub gpus_per_node: u32,
+    /// One-way GPU-to-GPU latency across the network, μs: an order of
+    /// magnitude for one RDMA write, not a measured NCCL floor.
+    pub latency_us: f64,
+    /// Source URLs and how the figures were derived.
+    pub source: String,
+}
+
+impl Network {
+    /// Per-GPU line rate in GB/s (10^9 bytes/s): 400 Gbit/s / 8 = 50 GB/s.
+    #[must_use]
+    pub fn gbps(&self) -> f64 {
+        self.nic_gbit_per_gpu / 8.0
+    }
 }
 
 /// One GPU SKU's datasheet profile plus any measured calibration.
@@ -671,6 +701,22 @@ mod tests {
     #[test]
     fn decimal_tflops_uses_milliseconds() {
         assert_eq!(tflops(1e12, 2.0), 500.0);
+    }
+
+    #[test]
+    fn network_is_optional_and_converts_bits_to_bytes() {
+        let without: Ceiling = serde_json::from_str(
+            r#"{"hbm_gbps": 1, "nvlink_gbps": 1, "compute_tflops": {}, "source": "s"}"#,
+        )
+        .unwrap();
+        assert!(without.network.is_none());
+        let with: Ceiling = serde_json::from_str(
+            r#"{"hbm_gbps": 1, "nvlink_gbps": 1, "compute_tflops": {}, "source": "s",
+                "network": {"system": "DGX", "nic_gbit_per_gpu": 400, "gpus_per_node": 8,
+                            "latency_us": 5, "source": "https://example.com"}}"#,
+        )
+        .unwrap();
+        assert_eq!(with.network.map(|network| network.gbps()), Some(50.0));
     }
 
     fn gpu_state(source: &str) -> GpuState {

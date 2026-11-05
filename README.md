@@ -40,6 +40,9 @@ the art; for collectives, [NCCL Tests](https://github.com/NVIDIA/nccl-tests).
 | HBM copy (read + write) |  | 3 TB/s | 300 ns | 300 μs | napkin-bench |
 | Elementwise add |  | 3 TB/s | 300 ns | 300 μs | napkin-bench |
 | GPU ↔ GPU, NVLink one-way, slower direction | 10 μs | 400 GB/s | 3 μs | 3 ms | NVBandwidth CE; latency napkin-bench |
+| GPU ↔ GPU across machines, RDMA one-way (400 Gbit/s NIC per GPU) | 5 μs | 50 GB/s | 20 μs | 20 ms | datasheet line rate |
+
+The RDMA row is not measured: no NCCL Tests curve here spans two machines. It is the DGX H100, ConnectX-7 InfiniBand line rate, 400 Gbit/s / 8 = 50 GB/s per GPU in each direction, with 8 GPUs per machine and one NIC each. Source: https://docs.nvidia.com/dgx/dgxh100-user-guide/introduction-to-dgxh100.html (checked 2026-11-05) — eight H100s and eight single-port ConnectX-7 cards, InfiniBand up to 400 Gbps each. NVIDIA publishes no end-to-end latency; 5 μs is the GPU ↔ GPU RDMA row of https://github.com/sirupsen/napkin-math (checked 2026-11-05), which also rounds the rate to 40 GiB/s.
 
 | Dense GEMM, 8192³ | Throughput | 1 GFLOP | 1 TFLOP | Ridge point | Basis |
 | --- | ---: | ---: | ---: | ---: | --- |
@@ -422,6 +425,7 @@ collective  algbw 3.37 GB/s · busbw 5.89 GB/s (busbw = algbw × 2(n-1)/n)
 curve       128 KiB 38.9 μs · floor 36.8 μs · peak busbw 479 GB/s at 4 GiB
 peer copy   395 GB/s measured (napkin-bench cuMemcpyPeer, one GPU pair; not used here)
 nvlink      900 GB/s per-GPU datasheet aggregate, both directions (not used here)
+network     50 GB/s per-GPU RDMA datasheet line rate, one direction, across machines (not used here)
 evidence    NCCL 2.27.3 · nccl-tests v2.21.1 (afd59ab) · H100!:8 · 2026-10-12 · profiles/nccl-tests/h100x8
 ```
 <!-- /napkin -->
@@ -440,6 +444,70 @@ rate and the 900 GB/s datasheet NVLink figure answer different questions and
 are not used. The same message costs 11.1 μs on two H100s, but two GPUs cannot
 hold this working set, and `napkin collective` refuses counts and topologies
 it has no curve for (`--count 4` is an error) rather than scaling a curve.
+
+### Across machines: a datasheet RDMA link
+
+Every NCCL Tests curve above was measured on one machine. Modal offers
+multi-node clusters in beta, but no run here has used one, so the link between
+machines is a datasheet row, the last row of the H100 table:
+
+```text
+line rate   400 Gbit/s / 8 bits = 50 GB/s per GPU, each direction
+per machine 8 GPUs × one ConnectX-7 each = 8 × 50 GB/s = 400 GB/s out
+latency     5 μs one-way
+```
+
+The 400 Gbit/s NIC per GPU comes from NVIDIA's [DGX H100 user
+guide](https://docs.nvidia.com/dgx/dgxh100-user-guide/introduction-to-dgxh100.html).
+It is a line rate, a ceiling like the 900 GB/s NVLink figure, not what NCCL
+achieves. NVIDIA publishes no end-to-end latency for it, so 5 μs is the order
+of magnitude from Simon's [GPU ↔ GPU RDMA
+row](https://github.com/sirupsen/napkin-math). That row rounds the same link
+to 40 GiB/s (43 GB/s), below the 50 GB/s (46.6 GiB/s) line rate.
+
+`napkin collective` still refuses 16 GPUs, because no curve covers them. You can
+estimate them by hand by composing measured curves with the link. Take a
+data-parallel AllReduce of 4 GiB of bf16 gradients per GPU over two machines
+of eight H100s. Assume the three-stage schedule hierarchical AllReduce uses:
+
+1. ReduceScatter inside each machine over NVLink. Each GPU then holds a
+   4 GiB / 8 = 512 MiB shard of its machine's partial sums.
+2. Each GPU runs a two-rank AllReduce of its shard with the matching GPU in the
+   other machine, over its own NIC. Two ranks send `2(n-1)/n` = 1× the shard,
+   512 MiB = 537 MB, so 537 MB / 50 GB/s = 10.7 ms, plus two 5 μs steps.
+3. AllGather inside each machine to hand every GPU the full result.
+
+The two NVLink stages come from the measured eight-GPU curves:
+
+```sh
+napkin collective --gpu h100 --count 8 --topology nvlink --op reduce-scatter --bytes 4GiB
+napkin collective --gpu h100 --count 8 --topology nvlink --op all-gather --bytes 4GiB
+```
+
+```text
+reduce-scatter 10.6 ms    measured, 8 H100s on NVLink
+network        10.7 ms    datasheet: 537 MB / 50 GB/s + 2 × 5 μs
+all-gather     10.6 ms    measured, 8 H100s on NVLink
+serial         32 ms      the stages one after another
+pipelined      ≥ 11 ms    the slowest stage, if NCCL overlaps the chunks
+```
+
+One machine does the same 4 GiB AllReduce in a measured 15.7 ms. Two machines
+land somewhere between 11 and 32 ms. The network stage is only as slow as the
+NVLink stages because each GPU has its own NIC: if all eight GPUs shared one
+400 Gbit/s NIC, the same stage would take 8 × 10.7 = 86 ms. Several things can
+move the real number off this sketch. NCCL may pick a flat ring or a tree
+instead of this schedule, in-network reduction (SHARP) changes the traffic,
+and achieved RDMA bandwidth sits below the line rate: 43 GB/s would make the
+network stage 12.5 ms.
+
+Small messages behave differently. A tensor-parallel 128 KiB AllReduce that
+spans the two machines pays the same three stages: 39.9 μs ReduceScatter,
+2 × 5 μs on the network, and 42.4 μs AllGather, for about 90 μs. That is more
+than twice the 38.9 μs one-machine call, and 160 of them per decode step
+cost 15 ms instead of 6.2 ms. This is why tensor parallelism usually stays
+inside one machine and only data or pipeline parallelism crosses the network.
+Measure a two-machine NCCL Tests curve before trusting either figure.
 
 ### Loading the weights: storage comes before PCIe
 

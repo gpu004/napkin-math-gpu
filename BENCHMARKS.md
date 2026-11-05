@@ -14,6 +14,7 @@ not itself a measurement methodology.
 | Peak FLOPs by dtype | NVIDIA product datasheet | Dense/sparse convention, precision, form factor, source URL, published value |
 | HBM bandwidth and capacity | NVIDIA product datasheet | Theoretical bandwidth and capacity |
 | NVLink generation and peak bandwidth | NVIDIA product or system datasheet | Per-GPU theoretical aggregate and topology assumptions |
+| Network between machines (RDMA) | NVIDIA system datasheet, until NCCL Tests runs across nodes | Per-GPU NIC line rate, GPUs per machine, order-of-magnitude latency, source URL |
 | CPU↔GPU and GPU↔GPU bandwidth | NVIDIA NVBandwidth | Version, command, topology, raw JSON, normalized directional values |
 | P2P latency and connectivity | CUDA Samples `p2pBandwidthLatencyTest` | Pinned CUDA Samples revision, command, raw matrix |
 | AllReduce | NVIDIA NCCL Tests `all_reduce_perf` | Algorithm bandwidth, bus bandwidth, message-size curve, topology |
@@ -225,6 +226,16 @@ notes. Measured calibrations live in `profiles/<id>.measured.json`, produced by
 - NCCL Tests collectives: [H100 × 2](profiles/nccl-tests/h100x2) ·
   [H100 × 8](profiles/nccl-tests/h100x8) (a different Modal host: driver
   610.57.04 and a PCIe Gen 4 host link, versus 580.95.05 and Gen 5 for × 2)
+- Network between machines: datasheet only, in `ceiling.network` of
+  [the H100 profile](profiles/h100.json). It records the DGX H100's one
+  400 Gbit/s ConnectX-7 per GPU and eight GPUs per machine, plus the 5 μs
+  latency from Simon Eskildsen's napkin-math table, since NVIDIA publishes no
+  end-to-end figure. No NCCL Tests curve spans two machines: Modal's multi-node
+  clusters (`@modal.experimental.clustered(size=2, rdma=True)`) are a private
+  beta that no run here has had access to. `napkin collective` therefore
+  refuses more GPUs than one machine holds and names the datasheet link instead.
+  Once a two-node run exists, it should land as `profiles/nccl-tests/h100x16/`
+  with its own topology label.
 
 NVBandwidth v0.10.0 evidence is ingested with per-metric provenance from
 `profiles/nvbandwidth/<gpu>x2/`: verbatim `nvbandwidth.json`, `run.json`
