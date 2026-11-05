@@ -381,6 +381,12 @@ fn problem_answers_follow_from_teaching_constants() -> Result<(), Box<dyn std::e
         ),
         ("9 μs × 56 GB/s ≈ 500 KB", L_COPY * P / 1e3, 2, 500.0),
         (
+            "under the 25 KB latency size",
+            napkin::table::SPREAD_FLAG * L_COPY * P / 1e3,
+            2,
+            25.0,
+        ),
+        (
             "F / M = 690 × 10¹² / 3 × 10¹² ≈ 230  FLOP/B",
             ridge,
             2,

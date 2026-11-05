@@ -107,12 +107,15 @@ Every synchronous copy pays the fixed cost before its bytes count:
 copy time   = copies × L_copy + bytes / P
 10,000 sync = 10,000 × 9 μs + 40 MB / 56 GB/s = 90 ms + 0.7 ms ≈ 90 ms
 1 packed    = 1 × 9 μs + 4 × 10⁷ B / 5.6 × 10¹⁰ B/s ≈ 0.7 ms
-crossover   = L_copy × P = 9 μs × 56 GB/s ≈ 500 KB
+break-even  = L_copy × P = 9 μs × 56 GB/s ≈ 500 KB
 ```
 
 **Answer:** about 90 ms for 10,000 copies against 0.7 ms for one packed copy,
 over 100 times slower. A 4 KB copy is over 100 times smaller than the 500 KB
-crossover, so it is all fixed cost.
+break-even size. It is also under the 25 KB latency size (`0.05 × L_copy × P`),
+where the line first runs 5% above `L_copy`. So, by the rule that a latency
+holds up to the largest size that takes as long as the smallest, a 4 KB copy
+costs the same as a 4-byte one: all fixed cost.
 
 <!-- napkin example estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 40MB --h2d-copies 10000 -->
 ```text
