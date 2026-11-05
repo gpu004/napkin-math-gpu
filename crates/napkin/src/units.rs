@@ -1,6 +1,3 @@
-//! Quantity parsing and napkin formatting: a few significant digits, always
-//! with units attached.
-
 use std::fmt;
 
 /// A quantity that failed to parse.
@@ -292,13 +289,13 @@ mod tests {
 
     use super::*;
 
-    // `1e-9` is many orders above an f64 ulp at the magnitudes these tests
-    // draw, and far below a one-digit change.
+    const RELATIVE_TOLERANCE: f64 = 1e-9;
+
     fn near(actual: f64, expected: f64) {
         let difference = (actual - expected).abs();
         let scale = actual.abs().max(expected.abs()).max(1e-12);
         assert!(
-            difference <= 1e-9 * scale,
+            difference <= RELATIVE_TOLERANCE * scale,
             "{actual} differs from {expected} by {difference}"
         );
     }
@@ -396,11 +393,8 @@ mod tests {
         }
     }
 
-    // Magnitudes stay in `[1e-6, 1e12]` and significance in `1..=6`. One
-    // significant digit may move a value by up to half a power of ten, which
-    // is a relative error of `0.5 × 10^(1 − sig)`.
     #[hegel::test]
-    fn round_sig_stays_within_half_an_ulp_and_is_idempotent(tc: TestCase) {
+    fn round_sig_stays_within_half_the_last_kept_digit_and_is_idempotent(tc: TestCase) {
         let magnitude = tc.draw(gs::floats::<f64>().min_value(1e-6).max_value(1e12));
         let value = if tc.draw(gs::booleans()) {
             -magnitude
@@ -412,16 +406,14 @@ mod tests {
         assert!(rounded.is_sign_negative() == value.is_sign_negative() || rounded == 0.0);
         assert!(rounded.is_finite());
         near(round_sig(rounded, sig), rounded);
-        let tolerance = 0.5 * 10_f64.powi(1 - i32::try_from(sig).unwrap_or(1));
+        let half_last_digit = 0.5 * 10_f64.powi(1 - i32::try_from(sig).unwrap_or(1));
         let relative = (rounded - value).abs() / value.abs();
         assert!(
-            relative <= tolerance * (1.0 + 1e-6),
-            "round_sig({value}, {sig}) = {rounded}, relative error {relative}, half-ulp {tolerance}"
+            relative <= half_last_digit * (1.0 + 1e-6),
+            "round_sig({value}, {sig}) = {rounded}, relative error {relative}, half the last kept digit {half_last_digit}"
         );
     }
 
-    // The printed SI form uses the same decimal prefixes `parse_number` reads,
-    // so parsing it recovers `round_sig`, not the unrounded input.
     #[hegel::test]
     fn printed_si_quantities_parse_back_to_their_rounded_value(tc: TestCase) {
         let magnitude = tc.draw(gs::floats::<f64>().min_value(1.0).max_value(1e12));
@@ -436,8 +428,6 @@ mod tests {
         near(parsed, round_sig(value, sig));
     }
 
-    // A coefficient times a named scale. `B` means 10^9 only for counts;
-    // binary prefixes are exact powers of 1024.
     #[hegel::test]
     fn unit_suffix_multiplies_the_coefficient(tc: TestCase) {
         let coefficient = tc.draw(gs::integers::<u32>().min_value(0).max_value(10_000));

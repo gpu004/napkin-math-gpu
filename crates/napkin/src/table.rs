@@ -1,6 +1,3 @@
-//! Markdown table rendering for the README "Numbers" section: one
-//! significant digit, sized for memorization rather than faux precision.
-
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
@@ -15,14 +12,9 @@ use crate::units::{
 
 const SIG: u32 = 1;
 
-/// A cell gets a † when the rounds behind it disagree by more than this
-/// fraction (`Measured::round_spread`). Back-to-back rounds of one kernel on
-/// an otherwise idle GPU usually agree to a few tenths of a percent (fp32
-/// GEMM and HBM copy do on every GPU here), so a larger range means the GPU
-/// changed state during the run and the median alone would hide it.
-pub const SPREAD_FLAG: f64 = 0.05;
+pub const ROUND_SPREAD_THRESHOLD: f64 = 0.05;
+pub const LATENCY_SIZE_SLOWDOWN: f64 = ROUND_SPREAD_THRESHOLD;
 
-/// `samples_ms` keys in table order, with the name the footnote uses.
 const SAMPLE_NAMES: [(&str, &str); 17] = [
     ("launch_us", "kernel launch"),
     ("sync_us", "launch + sync"),
@@ -46,10 +38,9 @@ const SAMPLE_NAMES: [(&str, &str); 17] = [
 fn flagged(m: &Measured, keys: &[&str]) -> bool {
     keys.iter()
         .filter_map(|key| m.round_spread(key))
-        .any(|spread| spread > SPREAD_FLAG)
+        .any(|spread| spread > ROUND_SPREAD_THRESHOLD)
 }
 
-/// Appends a † to a non-empty `cell` whose rounds are flagged.
 fn mark(m: &Measured, keys: &[&str], cell: String) -> String {
     if !cell.is_empty() && flagged(m, keys) {
         format!("{cell} †")
@@ -109,6 +100,10 @@ fn host_link_cell(rates: &Rates, measured: Option<&Measured>, sig: u32) -> Strin
     host_link_label(bandwidth, gpu_gen, effective_gen, width)
 }
 
+fn without_query_string(url: &str) -> &str {
+    url.split_once('?').map_or(url, |(path, _)| path)
+}
+
 /// Renders dated price records and groups records with the same note.
 #[must_use]
 pub fn prices(records: &[PriceRecord]) -> String {
@@ -141,11 +136,7 @@ pub fn prices(records: &[PriceRecord]) -> String {
             .source
             .strip_prefix("https://")
             .unwrap_or(record.source);
-        // The Azure API query string is longer than the rest of the row; the
-        // link keeps it.
-        let source_text = source_text
-            .split_once('?')
-            .map_or(source_text, |(path, _)| path);
+        let source_text = without_query_string(source_text);
         let source = format!("[{source_text}]({})", record.source);
         let id = format!("`{}`", record.id);
         emit(
@@ -369,8 +360,6 @@ fn network_row(network: &Network, exact: bool) -> [String; 6] {
     ]
 }
 
-/// Says under the table that the RDMA row is a vendor ceiling and where each
-/// of its numbers comes from, because every other transfer row is measured.
 fn network_note(out: &mut String, network: &Network) {
     let _ = writeln!(
         out,
@@ -509,7 +498,7 @@ fn spread_footnote(out: &mut String, m: &Measured) {
         .iter()
         .filter_map(|(key, name)| {
             m.round_spread(key)
-                .filter(|spread| *spread > SPREAD_FLAG)
+                .filter(|spread| *spread > ROUND_SPREAD_THRESHOLD)
                 .map(|spread| format!("{name} {}%", fmt_sig(spread * 100.0, 2)))
         })
         .collect();
@@ -517,7 +506,7 @@ fn spread_footnote(out: &mut String, m: &Measured) {
         spreads.extend(suite.shapes.iter().filter_map(|shape| {
             suite
                 .round_spread(&shape.samples_key())
-                .filter(|spread| *spread > SPREAD_FLAG)
+                .filter(|spread| *spread > ROUND_SPREAD_THRESHOLD)
                 .map(|spread| {
                     format!(
                         "{} {} GEMM {}%",
@@ -536,7 +525,7 @@ fn spread_footnote(out: &mut String, m: &Measured) {
         "\n† Rounds disagree by more than {:.0}%: {}. Spread is the slowest measured round over \
          the fastest, minus one: the observed range, not a confidence interval. The cell shows the \
          median round.",
-        SPREAD_FLAG * 100.0,
+        ROUND_SPREAD_THRESHOLD * 100.0,
         spreads.join(", "),
     );
 }
@@ -582,7 +571,7 @@ fn emit_gemm_shape_rows(out: &mut String, m: &Measured, sig: u32, exact: bool) {
         let throughput = fmt_tflops(shape.tflops, sig);
         let throughput = if suite
             .round_spread(&key)
-            .is_some_and(|spread| spread > SPREAD_FLAG)
+            .is_some_and(|spread| spread > ROUND_SPREAD_THRESHOLD)
         {
             format!("{throughput} †")
         } else {
@@ -868,11 +857,6 @@ pub fn compare(profiles: &[Profile], exact: bool) -> String {
     out
 }
 
-/// One row per GPU and copy kind with a measured fixed cost: the 4-byte
-/// synchronous copy latency `L`, the bandwidth `P` that `napkin estimate`
-/// charges, and two sizes read off the line `time = L + bytes / P`. On an
-/// H100 with `L = 8.8 μs` and `P = 55.5 GB/s`, a copy stays within 5% of `L`
-/// up to `0.05 × L × P ≈ 24 KB` and takes `2 × L` at `L × P ≈ 490 KB`.
 fn append_copy_size_table(out: &mut String, profiles: &[Profile], exact: bool) {
     let sig = if exact { 3 } else { 2 };
     let rows: Vec<_> = profiles
@@ -913,7 +897,7 @@ fn append_copy_size_table(out: &mut String, profiles: &[Profile], exact: bool) {
                 copy,
                 &fmt_duration(latency_us / 1e6, sig),
                 &fmt_gbps(rate.gbps, sig),
-                &fmt_bytes(SPREAD_FLAG * break_even_bytes, sig),
+                &fmt_bytes(LATENCY_SIZE_SLOWDOWN * break_even_bytes, sig),
                 &fmt_bytes(break_even_bytes, sig),
             ],
         );
@@ -928,8 +912,8 @@ fn append_copy_size_table(out: &mut String, profiles: &[Profile], exact: bool) {
          flagged as disagreeing. At break-even the bytes cost as much as the fixed cost and the \
          copy takes `2 × L`: smaller copies are latency-bound, larger ones bandwidth-bound. `P` \
          is the rate `napkin estimate` charges, with the basis in the first table.",
-        SPREAD_FLAG,
-        SPREAD_FLAG * 100.0,
+        LATENCY_SIZE_SLOWDOWN,
+        LATENCY_SIZE_SLOWDOWN * 100.0,
     );
 }
 

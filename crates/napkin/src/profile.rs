@@ -1,6 +1,3 @@
-//! Built-in GPU profiles, generated from `profiles/*.json` by `build.rs` and validated at build time;
-//! types come from `napkin-profile`.
-
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
@@ -16,12 +13,10 @@ pub fn builtin() -> &'static [Profile] {
     BUILTIN.as_slice()
 }
 
-/// Returns the built-in NCCL Tests collective evidence.
 pub fn collectives() -> &'static [CollectiveEvidence] {
     COLLECTIVES.as_slice()
 }
 
-/// Finds a built-in profile by its identifier.
 pub fn find(id: &str) -> Option<&'static Profile> {
     BUILTIN.iter().find(|profile| profile.id == id)
 }
@@ -202,7 +197,6 @@ mod tests {
         assert_eq!(evidence.driver_version, "580.95.05");
         assert_eq!(evidence.gpu_request, "H100!:2");
         assert_eq!(evidence.version, "v0.10.0");
-        assert!(evidence.verified);
         assert_eq!(evidence.bandwidths.len(), 16);
         assert!(evidence.bandwidths.iter().any(|rate| {
             rate.testcase == "device_to_device_memcpy_read_ce"

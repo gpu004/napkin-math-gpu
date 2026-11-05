@@ -1,5 +1,3 @@
-//! Prediction-versus-observation cases embedded from `validation/`.
-
 use serde::Deserialize;
 
 use crate::estimate::{self, CopyMode, Estimate, Mode, Transfer, Workload};
@@ -16,7 +14,6 @@ struct EmbeddedCase {
 
 include!(concat!(env!("OUT_DIR"), "/validation.rs"));
 
-/// A parsed case and its prediction, observation, and run metadata.
 #[derive(Debug)]
 pub struct Case {
     pub id: String,
@@ -47,7 +44,6 @@ pub struct Case {
     pub run: RunInfo,
 }
 
-/// One observed `NVBandwidth` copy direction.
 #[derive(Debug)]
 pub struct Direction {
     pub name: String,
@@ -56,7 +52,6 @@ pub struct Direction {
     pub seconds: f64,
 }
 
-/// Runtime metadata recorded by the Modal runner.
 #[derive(Debug, Default, Deserialize)]
 pub struct RunInfo {
     pub captured_at: Option<String>,
@@ -75,13 +70,11 @@ pub struct RunInfo {
     pub monitor: Option<MonitorInfo>,
 }
 
-/// GPU identity captured by Modal.
 #[derive(Debug, Default, Deserialize)]
 pub struct GpuInfo {
     pub name: Option<String>,
 }
 
-/// Peak link and sampled operating range captured during a case.
 #[derive(Debug, Default, Deserialize)]
 pub struct MonitorInfo {
     pub pcie_gen_peak: Option<f64>,
@@ -90,7 +83,6 @@ pub struct MonitorInfo {
     pub power_w: Option<RangeInfo>,
 }
 
-/// Minimum and maximum for a sampled run metric.
 #[derive(Debug, Default, Deserialize)]
 pub struct RangeInfo {
     pub min: Option<f64>,

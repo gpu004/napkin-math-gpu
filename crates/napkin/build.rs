@@ -243,9 +243,7 @@ fn load_prices(prices_dir: &Path) -> Result<Vec<PriceRecordInput>, String> {
     paths.sort();
     let mut records = Vec::new();
     let mut ids = std::collections::BTreeSet::new();
-    // `napkin breakeven` pairs one provider's H100 and B200 prices under the
-    // same terms, so each provider may list one price per GPU and terms.
-    let mut offers = std::collections::BTreeSet::new();
+    let mut one_price_per_provider_gpu_terms = std::collections::BTreeSet::new();
     for path in paths {
         if !path.is_file()
             || path.extension().and_then(|extension| extension.to_str()) != Some("json")
@@ -261,7 +259,11 @@ fn load_prices(prices_dir: &Path) -> Result<Vec<PriceRecordInput>, String> {
             if !ids.insert(record.id.clone()) {
                 return Err(format!("duplicate price record id {:?}", record.id));
             }
-            if !offers.insert((record.provider.clone(), record.gpu.clone(), record.terms)) {
+            if !one_price_per_provider_gpu_terms.insert((
+                record.provider.clone(),
+                record.gpu.clone(),
+                record.terms,
+            )) {
                 return Err(format!(
                     "price record {:?} repeats another {} {} record with the same terms",
                     record.id, record.provider, record.gpu
@@ -1078,7 +1080,6 @@ fn emit_nvbandwidth(evidence: &Nvbandwidth) -> String {
                 Statistic::Mean => "Statistic::Mean".to_owned(),
             },
         ),
-        ("verified", evidence.verified.to_string()),
         ("bandwidths", bandwidths_literal(&evidence.bandwidths)),
         ("latencies", latencies_literal(&evidence.latencies)),
     ];

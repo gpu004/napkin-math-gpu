@@ -1,10 +1,7 @@
-//! Capacity arithmetic: does the working set fit, and on how many GPUs.
-
 use std::fmt;
 
 use crate::profile::Profile;
 
-/// Result of a fit calculation.
 #[derive(Clone, Copy, Debug)]
 pub struct Fit {
     /// `params * bits / 8`, in bytes.
@@ -17,14 +14,12 @@ pub struct Fit {
     pub working_bytes: f64,
     /// Per-GPU capacity after `headroom`.
     pub usable_bytes_per_gpu: f64,
-    /// Whether the working set fits on one GPU.
     pub fits_one: bool,
     /// Lower bound assuming weights and extra bytes shard evenly, ignoring
     /// communication.
     pub min_gpus: u64,
 }
 
-/// A fit that could not be computed.
 #[derive(Debug)]
 pub struct FitError(pub String);
 
@@ -101,6 +96,8 @@ mod tests {
     use super::*;
     use crate::profile::find;
 
+    const MAX_PER_GPU_SHARE_OF_HBM: f64 = 0.4;
+
     fn near(actual: f64, expected: f64) {
         let difference = (actual - expected).abs();
         let scale = actual.abs().max(expected.abs()).max(1e-12);
@@ -152,10 +149,6 @@ mod tests {
         assert!(error.to_string().contains("leave no usable memory"));
     }
 
-    // Parameters stay in `[1e6, 1e11]`, bits are a storage width, headroom is
-    // in `[0, 0.5]`, and per-GPU overhead is at most 40% of HBM. On the H100
-    // that leaves `per_gpu < usable`, so `fit` returns a count rather than
-    // the "no usable memory" error.
     #[hegel::test]
     fn gpu_count_is_the_sharded_working_set_rounded_up(tc: TestCase) {
         let h100 = find("h100").expect("built-in H100 profile");
@@ -165,7 +158,7 @@ mod tests {
         let per_gpu = tc.draw(
             gs::floats::<f64>()
                 .min_value(0.0)
-                .max_value(h100.memory_gb * 1e9 * 0.4),
+                .max_value(h100.memory_gb * 1e9 * MAX_PER_GPU_SHARE_OF_HBM),
         );
         let headroom = tc.draw(gs::floats::<f64>().min_value(0.0).max_value(0.5));
         let fitted = fit(h100, params, bits, extra, per_gpu, headroom).expect("bounded fit");

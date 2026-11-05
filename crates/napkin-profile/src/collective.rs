@@ -1,5 +1,3 @@
-//! Shared types for topology-aware NCCL collective estimates.
-
 use std::fmt;
 use std::path::Path;
 
@@ -7,7 +5,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::Dtype;
 
-/// NCCL collective algorithms supported by the measured profile data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum Collective {
