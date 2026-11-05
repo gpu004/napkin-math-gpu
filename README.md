@@ -378,6 +378,79 @@ are not used. The same message costs 11.1 μs on two H100s, but two GPUs cannot
 hold this working set, and `napkin collective` refuses counts and topologies
 it has no curve for (`--count 4` is an error) rather than scaling a curve.
 
+### Loading the weights: storage comes before PCIe
+
+The host → device row starts from pinned host RAM. Before that, a real job
+has to get its weights or dataset into RAM, from blob storage (S3, GCS, Azure
+Blob) or a local disk. `napkin-bench` does not measure either step, so this
+example borrows two rows from Simon Eskildsen's
+[Napkin Math](https://github.com/sirupsen/napkin-math#numbers). He measured
+them on 48 vCPU CPU VMs on GCP and AWS, not on GPU hosts:
+
+| Stage | Throughput | Basis |
+| --- | ---: | --- |
+| Blob storage read | 3 GiB/s = 3.2 GB/s | Simon's "Blob Storage, Zonal Read" row: 32–128 connections in parallel, capped by the VM's NIC |
+| Local SSD sequential read | 5 GiB/s = 5.4 GB/s | Simon's "SSD Sequential Read" row: every local SSD on the VM striped together |
+| Host → device, pinned | 56 GB/s | NVBandwidth CE, from the H100 table above |
+
+Load the 140 GB of 16-bit Llama-3-70B weights from the LLM example each way:
+
+```text
+blob storage   140 GB / 3.2 GB/s ≈ 44 s
+local SSD      140 GB / 5.4 GB/s ≈ 26 s
+PCIe           140 GB / 56 GB/s  ≈ 2.5 s
+```
+
+The PCIe line is the measured row:
+
+<!-- napkin example estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 140GB -->
+```text
+$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 140GB
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
+intensity   0 FLOP/B   ridge 230 FLOP/B   h2d-bound
+compute     0 s
+memory      0 s
+device      0 s
+h2d         2.5 s   1 sync copy: 1 × 8.8 μs + 140 GB / 56 GB/s   NVBandwidth CE
+total       2.5 s   h2d-bound
+```
+<!-- /napkin -->
+
+The disk or network step is 10 to 20 times slower than the PCIe step the
+tables measure, so storage, not PCIe, sets how long a cold start waits before
+the first kernel. The stages follow the same rule as the arithmetic above:
+sum serial stages, take the max of overlapped ones. Downloading the file to
+local SSD and then loading it pays `44 + 26 + 2.5 ≈ 72 s`. A loader that
+streams chunks from blob storage into pinned buffers, copying one chunk to the
+GPU while the next downloads, pays about the slowest stage, 44 s.
+
+Sharding does not shrink the storage step. The model needs at least three
+H100s (`napkin fit` above), and the tensor-parallel example uses eight. Each
+GPU then receives 17.5 GB over its own PCIe link, about 0.3 s if all eight
+links run at full rate at once; the host copies above were measured one GPU
+at a time, so that concurrent rate is an assumption. All 140 GB still
+crosses the host's one NIC or one disk array, so the storage step stays at
+44 or 26 s.
+
+These assumptions move the answer the most:
+
+- **Connections.** Simon's notes measured about 100 MiB/s on one connection.
+  A loader that issues one GET at a time takes `140 GB / 0.105 GB/s ≈ 1300 s`,
+  about 22 minutes. The 3 GiB/s needs dozens of range reads in flight.
+- **Provider.** With 32–128 connections, S3 peaked at 2.0 GiB/s and GCS at
+  4.3–4.9 GiB/s on those VMs: 65 s and 27–30 s for 140 GB.
+- **The host.** A GPU host has a different NIC and different local disks
+  than a 48 vCPU CPU VM, so its numbers can land on either side of these.
+  Measuring blob → GPU and SSD → GPU on Modal would replace the borrowed
+  rows.
+- **What is not counted.** Container start, imports, CUDA context creation,
+  and converting or deserializing the weights all add to a cold start, so
+  these times are lower bounds.
+
+Simon's [benchmarking notes](https://github.com/sirupsen/napkin-math/blob/master/BENCHMARKING.md#blob-storage-rows-march-2026)
+describe both measurements: the per-connection and per-provider blob rates,
+and the [striped local SSDs](https://github.com/sirupsen/napkin-math/blob/master/BENCHMARKING.md#ssd-network-disk-and-hdd-rows).
+
 ## Cost
 
 The fastest GPU is not always the cheapest way to finish a job. You pay for
@@ -418,8 +491,8 @@ useful      100% of billed GPU time is busy
 work        none (pass --work or --throughput: a workload rate, never peak FLOPs)
 ```
 
-The same job with a 30-second cold start, a minute kept warm afterwards, and
-per-minute billing costs 12x as much:
+The same job with an assumed 30-second cold start, a minute kept warm
+afterwards, and per-minute billing costs 12x as much:
 
 ```text
 $ napkin cost --gpus 2 --price 3 --time 10s --startup 30s --idle 60s --granularity 60s
@@ -436,6 +509,31 @@ cost        $0.2 per job
 useful      8.3% of billed GPU time is busy
 work        none (pass --work or --throughput: a workload rate, never peak FLOPs)
 ```
+
+A cold start can be derived instead of assumed. Eight H100s serving the 140 GB
+model wait at least 44 s for its weights to stream from blob storage
+([Loading the weights](#loading-the-weights-storage-comes-before-pcie)), so
+the same 10 seconds of work bills 54 s on each GPU:
+
+```text
+$ napkin cost --gpus 8 --price 3.95 --time 10s --startup 44s
+8 GPUs · $3.95/GPU-hour (--price)
+busy        10 s per GPU (--time)
+utilization 100% (default; pass --utilization)
+running     10 s = busy / utilization
+startup     44 s (--startup)
+idle        0 s (default; pass --idle)
+wall        54 s = startup + running + idle
+billed      54 s per GPU (exact; pass --granularity)
+GPU-hours   0.12 = 8 GPUs × billed
+cost        $0.474 per job
+useful      19% of billed GPU time is busy
+work        none (pass --work or --throughput: a workload rate, never peak FLOPs)
+```
+
+Loading from local SSD instead (`--startup 26s`) bills 36 s and $0.316, 28%
+useful. The PCIe step is at most 2.5 s of either startup, so storage is the
+term to shrink: keep weights on fast local disk, or keep a GPU warm.
 
 Tokens per dollar needs a workload rate: `--work 25K --unit tokens` for what
 the job completes, or `--throughput 2.5K --unit tokens` for its measured rate
