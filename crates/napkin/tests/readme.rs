@@ -43,6 +43,28 @@ fn readme_napkin_blocks_match_renderers() {
 }
 
 #[test]
+fn readme_copy_sizes_match_h100_profile() -> Result<(), Box<dyn std::error::Error>> {
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))?;
+    let rates = profile::find("h100")
+        .ok_or("missing h100 profile")?
+        .rates(false);
+    let latency_us = rates.h2d_latency_us.ok_or("h100 has no h2d latency")?;
+    let gbps = rates.h2d.ok_or("h100 has no h2d rate")?.gbps;
+    // μs × GB/s = 10⁻⁶ s × 10⁹ B/s = 10³ B, so the product is in KB.
+    let break_even_kb = latency_us * gbps;
+    let text = format!(
+        "about {} KB and {} KB",
+        round_sig(napkin::table::SPREAD_FLAG * break_even_kb, 1),
+        round_sig(break_even_kb, 1)
+    );
+    assert!(
+        readme.contains(&text),
+        "README's copy-latency prose should say {text:?}; update it with the profile"
+    );
+    Ok(())
+}
+
+#[test]
 fn validation_report_matches_cli_output() {
     let expected =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../VALIDATION.md"))
@@ -256,6 +278,86 @@ fn llm_recipe_follow_up_commands_have_example_markers() {
     }
 }
 
+/// The weight-loading example borrows storage rates from Simon Eskildsen's
+/// Napkin Math, measured on 48 vCPU CPU VMs, and combines them with this
+/// repo's measured H100 host → device rate. If either moves, the prose
+/// arithmetic and the derived cold start in the cost section must move too.
+#[test]
+fn readme_weight_loading_follows_from_cited_rates() -> Result<(), Box<dyn std::error::Error>> {
+    const GIB: f64 = 1_073_741_824.0;
+    const MIB: f64 = 1_048_576.0;
+    const WEIGHTS: f64 = 70e9 * 16.0 / 8.0;
+    // The prose divides by the rounded rates in its table, as a reader would
+    // on paper: 140 GB / 3.2 GB/s is 44 s, while the unrounded 3 GiB/s gives
+    // 43.5 s.
+    const BLOB: f64 = 3.2e9;
+    const SSD: f64 = 5.4e9;
+    const PCIE: f64 = 56e9;
+    const ONE_CONNECTION: f64 = 100.0 * MIB;
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))?;
+    let h100 = profile::find("h100").ok_or("missing h100 profile")?;
+    let h2d = h100
+        .rates(false)
+        .h2d
+        .ok_or("h100 has no published h2d rate")?;
+    assert_eq!(h2d.basis, Basis::Nvbandwidth);
+    let blob_s = WEIGHTS / BLOB;
+    let ssd_s = WEIGHTS / SSD;
+    let pcie_s = WEIGHTS / PCIE;
+    // (text in README.md, value from the cited rates, significant digits
+    // shown, value shown)
+    for (text, value, sig, shown) in [
+        ("| 3 GiB/s = 3.2 GB/s |", 3.0 * GIB / 1e9, 2, BLOB / 1e9),
+        ("| 5 GiB/s = 5.4 GB/s |", 5.0 * GIB / 1e9, 2, SSD / 1e9),
+        (
+            "| Host → device, pinned | 56 GB/s |",
+            h2d.gbps,
+            2,
+            PCIE / 1e9,
+        ),
+        ("140 GB / 3.2 GB/s ≈ 44 s", blob_s, 2, 44.0),
+        ("140 GB / 5.4 GB/s ≈ 26 s", ssd_s, 2, 26.0),
+        ("140 GB / 56 GB/s  ≈ 2.5 s", pcie_s, 2, 2.5),
+        ("10 to 20 times slower", ssd_s / pcie_s, 1, 10.0),
+        ("10 to 20 times slower", blob_s / pcie_s, 1, 20.0),
+        ("`44 + 26 + 2.5 ≈ 72 s`", blob_s + ssd_s + pcie_s, 2, 72.0),
+        (
+            "17.5 GB over its own PCIe link",
+            WEIGHTS / 8.0 / 1e9,
+            3,
+            17.5,
+        ),
+        ("about 0.3 s if all eight", WEIGHTS / 8.0 / PCIE, 1, 0.3),
+        (
+            "`140 GB / 0.105 GB/s ≈ 1300 s`",
+            ONE_CONNECTION / 1e9,
+            3,
+            0.105,
+        ),
+        (
+            "`140 GB / 0.105 GB/s ≈ 1300 s`",
+            WEIGHTS / ONE_CONNECTION,
+            2,
+            1300.0,
+        ),
+        ("about 22 minutes", WEIGHTS / ONE_CONNECTION / 60.0, 2, 22.0),
+        ("65 s and 27–30 s", WEIGHTS / (2.0 * GIB), 2, 65.0),
+        ("65 s and 27–30 s", WEIGHTS / (4.9 * GIB), 2, 27.0),
+        ("65 s and 27–30 s", WEIGHTS / (4.3 * GIB), 2, 30.0),
+        ("wait at least 44 s", blob_s, 2, 44.0),
+        ("--startup 44s", blob_s, 2, 44.0),
+        ("`--startup 26s`", ssd_s, 2, 26.0),
+        ("at most 2.5 s of either startup", pcie_s, 2, 2.5),
+    ] {
+        assert!(readme.contains(text), "README.md no longer says {text:?}");
+        assert!(
+            same(round_sig(value, sig), shown),
+            "{text:?}: the cited rates give {value}, not {shown}"
+        );
+    }
+    Ok(())
+}
+
 fn problems() -> std::io::Result<String> {
     std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../PROBLEMS.md"))
 }
@@ -450,6 +552,12 @@ fn problem_answers_follow_from_teaching_constants() -> Result<(), Box<dyn std::e
             0.7,
         ),
         ("9 μs × 56 GB/s ≈ 500 KB", L_COPY * P / 1e3, 2, 500.0),
+        (
+            "under the 25 KB latency size",
+            napkin::table::SPREAD_FLAG * L_COPY * P / 1e3,
+            2,
+            25.0,
+        ),
         (
             "F / M = 690 × 10¹² / 3 × 10¹² ≈ 230  FLOP/B",
             ridge,

@@ -115,6 +115,23 @@ Read through NVML 13.580.95.05 via nvml-wrapper 0.13 every 5 ms on the GPU that 
 | B300 SXM 288GB | D2H | 57.1 GB/s | 52.5 GB/s | 57.4 GB/s | 0.994 | Gen6 x16 / Gen6 x16 |
 | B300 SXM 288GB | GPU0→GPU1 | 764 GB/s | 717 GB/s | 765 GB/s | 0.998 | n/a (NVLink) |
 | B300 SXM 288GB | GPU1→GPU0 | 764 GB/s | 717 GB/s | 766 GB/s | 0.998 | n/a (NVLink) |
+
+| GPU | Copy | Latency `L` (4 B) | Bandwidth `P` | Latency size `0.05 × L × P` | Break-even `L × P` |
+| --- | --- | ---: | ---: | ---: | ---: |
+| A100 SXM 80GB | H2D | 14 μs | 25 GB/s | 18 KB | 360 KB |
+| A100 SXM 80GB | D2H | 13 μs | 26 GB/s | 17 KB | 350 KB |
+| A100 SXM 80GB | GPU ↔ GPU | 15 μs | 280 GB/s | 210 KB | 4.3 MB |
+| H100 SXM 80GB | H2D | 8.8 μs | 56 GB/s | 24 KB | 490 KB |
+| H100 SXM 80GB | D2H | 9.4 μs | 55 GB/s | 26 KB | 520 KB |
+| H100 SXM 80GB | GPU ↔ GPU | 10 μs | 400 GB/s | 200 KB | 4.1 MB |
+| B200 SXM 180GB | H2D | 11 μs | 56 GB/s | 29 KB | 590 KB |
+| B200 SXM 180GB | D2H | 14 μs | 57 GB/s | 39 KB | 780 KB |
+| B200 SXM 180GB | GPU ↔ GPU | 13 μs | 760 GB/s | 480 KB | 9.7 MB |
+| B300 SXM 288GB | H2D | 13 μs | 56 GB/s | 37 KB | 740 KB |
+| B300 SXM 288GB | D2H | 15 μs | 57 GB/s | 42 KB | 850 KB |
+| B300 SXM 288GB | GPU ↔ GPU | 18 μs | 760 GB/s | 700 KB | 14 MB |
+
+A latency is one copy at a time, each waiting for the last, at the largest size that takes as long as the smallest. napkin-bench times only the smallest, a 4-byte copy plus the stream synchronize that waits for it, so the last two columns come from the line `time = L + bytes / P`, not from a sweep of sizes. At the latency size, a copy of `0.05 × L × P` bytes takes 5% longer than `L`, the spread at which rounds are flagged as disagreeing. At break-even the bytes cost as much as the fixed cost and the copy takes `2 × L`: smaller copies are latency-bound, larger ones bandwidth-bound. `P` is the rate `napkin estimate` charges, with the basis in the first table.
 <!-- /napkin -->
 
 Modal request semantics matter: `H100!` pins an H100 — a plain `H100` request
@@ -156,35 +173,81 @@ round trip is added to copies, and copies are not counted as launches. Without
 a measured `L_copy` (for example `--ceiling`), napkin uses `bytes / P` alone,
 prints `≥`, and says why.
 
-### Why a 4-byte copy is not in the bandwidth row
+### Copy latency and the break-even size
 
-The H100 bandwidth row moves 512 MiB in about 9.7 ms, timed with CUDA events
-on the GPU. The ~10 μs fixed cost of a copy is 0.1% of that, so it vanishes
-into the throughput. Divide 4 bytes by the same 55 GB/s and you get 0.07 ns;
-the measured 4-byte synchronous copy takes 9.8 μs, about 140,000 times longer.
-Small copies are all fixed cost: driver call, DMA setup, and the wait for
-completion, none of which scale with bytes. The size where the two terms are
-equal is `L_copy × P = 9.8 μs × 55 GB/s ≈ 500 KB`; below it a copy is
-latency-bound, above it bandwidth-bound. So moving 1 GB as 100,000 small
-copies is about 50 times slower than one large copy:
+Following Simon's [Napkin Math](https://github.com/sirupsen/napkin-math), a
+latency is one operation at a time, each waiting for the last, at the largest
+size that takes as long as the smallest. The smallest copy is 4 bytes, and
+napkin-bench times exactly that: issue, copy, and the stream synchronize that
+waits for it, on the wall clock. That is `L_copy`.
+
+The bandwidth row is a different measurement: 512 MiB timed with CUDA events
+on the GPU, where a fixed cost of microseconds is about 0.1% of the time and
+vanishes into the throughput. 4 bytes at 55 GB/s would take under a tenth of a
+nanosecond, yet the measured copy takes microseconds. Small copies are all fixed
+cost: driver call, DMA setup, and the wait for completion, none of which scale
+with bytes.
+
+napkin-bench does not sweep sizes, so napkin draws the straight line
+`time = L_copy + bytes / P` between the two measured points. Two sizes fall out
+of it, and the last table under [Other GPUs](#other-gpus) gives both for every
+GPU and copy kind:
 
 ```text
-$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 4B
-h2d         9.8 μs   1 sync copy: 1 × 9.8 μs + 4 B / 55 GB/s
-
-$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB
-h2d         18 ms   1 sync copy: 1 × 9.8 μs + 1 GB / 55 GB/s
-
-$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000
-h2d         1 s   100000 sync copies: 100000 × 9.8 μs + 1 GB / 55 GB/s
-
-$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000 --copy-mode async
-h2d         ≥ 18 ms   100000 async copies: 1 × 9.8 μs + 1 GB / 55 GB/s; lower bound: per-copy cost of queued async copies is unmeasured
+latency size = 0.05 × L_copy × P   a copy this big takes 5% longer than 4 bytes
+break-even   = L_copy × P          the bytes cost as much as the fixed cost: 2 × L_copy
 ```
 
-This latency-plus-bandwidth line is a straight-line fit through two measured
-points. Real transfers between the two sizes, pageable host memory, and
-copies that overlap with each other can land off it.
+Up to the latency size, a copy takes as long as the smallest one, so by
+Simon's rule it costs `L_copy`. Below break-even a copy is latency-bound, above
+it bandwidth-bound. On an H100 the two sizes are about 20 KB and 500 KB for
+host → device. So moving 1 GB as 100,000 copies of 10 KB, each under the
+break-even size, pays the fixed cost 100,000 times; queueing them
+asynchronously and waiting once pays it once, as a lower bound:
+
+<!-- napkin example estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB -->
+```text
+$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
+intensity   0 FLOP/B   ridge 230 FLOP/B   h2d-bound
+compute     0 s
+memory      0 s
+device      0 s
+h2d         18 ms   1 sync copy: 1 × 8.8 μs + 1 GB / 56 GB/s   NVBandwidth CE
+total       18 ms   h2d-bound
+```
+<!-- /napkin -->
+
+<!-- napkin example estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000 -->
+```text
+$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
+intensity   0 FLOP/B   ridge 230 FLOP/B   h2d-bound
+compute     0 s
+memory      0 s
+device      0 s
+h2d         900 ms   100000 sync copies: 100000 × 8.8 μs + 1 GB / 56 GB/s   NVBandwidth CE
+total       900 ms   h2d-bound
+```
+<!-- /napkin -->
+
+<!-- napkin example estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000 --copy-mode async -->
+```text
+$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 1GB --h2d-copies 100000 --copy-mode async
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
+intensity   0 FLOP/B   ridge 230 FLOP/B   h2d-bound
+compute     0 s
+memory      0 s
+device      0 s
+h2d         ≥ 18 ms   100000 async copies: 1 × 8.8 μs + 1 GB / 56 GB/s; lower bound: per-copy cost of queued async copies is unmeasured   NVBandwidth CE
+total       ≥ 18 ms   h2d-bound
+```
+<!-- /napkin -->
+
+The line is fitted through two measured points. Real transfers between the
+two sizes, pageable host memory, and copies that overlap with each other can
+land off it, and a size sweep would replace the latency-size column with a
+measurement.
 
 Count algorithmic traffic, not allocation size: a copy reads and writes, while
 `C = A + B` reads two streams and writes one. Capacity is separate from speed:
@@ -446,6 +509,79 @@ cost 15 ms instead of 6.2 ms. This is why tensor parallelism usually stays
 inside one machine and only data or pipeline parallelism crosses the network.
 Measure a two-machine NCCL Tests curve before trusting either figure.
 
+### Loading the weights: storage comes before PCIe
+
+The host → device row starts from pinned host RAM. Before that, a real job
+has to get its weights or dataset into RAM, from blob storage (S3, GCS, Azure
+Blob) or a local disk. `napkin-bench` does not measure either step, so this
+example borrows two rows from Simon Eskildsen's
+[Napkin Math](https://github.com/sirupsen/napkin-math#numbers). He measured
+them on 48 vCPU CPU VMs on GCP and AWS, not on GPU hosts:
+
+| Stage | Throughput | Basis |
+| --- | ---: | --- |
+| Blob storage read | 3 GiB/s = 3.2 GB/s | Simon's "Blob Storage, Zonal Read" row: 32–128 connections in parallel, capped by the VM's NIC |
+| Local SSD sequential read | 5 GiB/s = 5.4 GB/s | Simon's "SSD Sequential Read" row: every local SSD on the VM striped together |
+| Host → device, pinned | 56 GB/s | NVBandwidth CE, from the H100 table above |
+
+Load the 140 GB of 16-bit Llama-3-70B weights from the LLM example each way:
+
+```text
+blob storage   140 GB / 3.2 GB/s ≈ 44 s
+local SSD      140 GB / 5.4 GB/s ≈ 26 s
+PCIe           140 GB / 56 GB/s  ≈ 2.5 s
+```
+
+The PCIe line is the measured row:
+
+<!-- napkin example estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 140GB -->
+```text
+$ napkin estimate --gpu h100 --dtype bf16 --flops 0 --bytes 0 --h2d 140GB
+H100 SXM 80GB · bf16 · napkin-bench 2026-10-12
+intensity   0 FLOP/B   ridge 230 FLOP/B   h2d-bound
+compute     0 s
+memory      0 s
+device      0 s
+h2d         2.5 s   1 sync copy: 1 × 8.8 μs + 140 GB / 56 GB/s   NVBandwidth CE
+total       2.5 s   h2d-bound
+```
+<!-- /napkin -->
+
+The disk or network step is 10 to 20 times slower than the PCIe step the
+tables measure, so storage, not PCIe, sets how long a cold start waits before
+the first kernel. The stages follow the same rule as the arithmetic above:
+sum serial stages, take the max of overlapped ones. Downloading the file to
+local SSD and then loading it pays `44 + 26 + 2.5 ≈ 72 s`. A loader that
+streams chunks from blob storage into pinned buffers, copying one chunk to the
+GPU while the next downloads, pays about the slowest stage, 44 s.
+
+Sharding does not shrink the storage step. The model needs at least three
+H100s (`napkin fit` above), and the tensor-parallel example uses eight. Each
+GPU then receives 17.5 GB over its own PCIe link, about 0.3 s if all eight
+links run at full rate at once; the host copies above were measured one GPU
+at a time, so that concurrent rate is an assumption. All 140 GB still
+crosses the host's one NIC or one disk array, so the storage step stays at
+44 or 26 s.
+
+These assumptions move the answer the most:
+
+- **Connections.** Simon's notes measured about 100 MiB/s on one connection.
+  A loader that issues one GET at a time takes `140 GB / 0.105 GB/s ≈ 1300 s`,
+  about 22 minutes. The 3 GiB/s needs dozens of range reads in flight.
+- **Provider.** With 32–128 connections, S3 peaked at 2.0 GiB/s and GCS at
+  4.3–4.9 GiB/s on those VMs: 65 s and 27–30 s for 140 GB.
+- **The host.** A GPU host has a different NIC and different local disks
+  than a 48 vCPU CPU VM, so its numbers can land on either side of these.
+  Measuring blob → GPU and SSD → GPU on Modal would replace the borrowed
+  rows.
+- **What is not counted.** Container start, imports, CUDA context creation,
+  and converting or deserializing the weights all add to a cold start, so
+  these times are lower bounds.
+
+Simon's [benchmarking notes](https://github.com/sirupsen/napkin-math/blob/master/BENCHMARKING.md#blob-storage-rows-march-2026)
+describe both measurements: the per-connection and per-provider blob rates,
+and the [striped local SSDs](https://github.com/sirupsen/napkin-math/blob/master/BENCHMARKING.md#ssd-network-disk-and-hdd-rows).
+
 ## Cost
 
 The fastest GPU is not always the cheapest way to finish a job. You pay for
@@ -486,8 +622,8 @@ useful      100% of billed GPU time is busy
 work        none (pass --work or --throughput: a workload rate, never peak FLOPs)
 ```
 
-The same job with a 30-second cold start, a minute kept warm afterwards, and
-per-minute billing costs 12x as much:
+The same job with an assumed 30-second cold start, a minute kept warm
+afterwards, and per-minute billing costs 12x as much:
 
 ```text
 $ napkin cost --gpus 2 --price 3 --time 10s --startup 30s --idle 60s --granularity 60s
@@ -504,6 +640,31 @@ cost        $0.2 per job
 useful      8.3% of billed GPU time is busy
 work        none (pass --work or --throughput: a workload rate, never peak FLOPs)
 ```
+
+A cold start can be derived instead of assumed. Eight H100s serving the 140 GB
+model wait at least 44 s for its weights to stream from blob storage
+([Loading the weights](#loading-the-weights-storage-comes-before-pcie)), so
+the same 10 seconds of work bills 54 s on each GPU:
+
+```text
+$ napkin cost --gpus 8 --price 3.95 --time 10s --startup 44s
+8 GPUs · $3.95/GPU-hour (--price)
+busy        10 s per GPU (--time)
+utilization 100% (default; pass --utilization)
+running     10 s = busy / utilization
+startup     44 s (--startup)
+idle        0 s (default; pass --idle)
+wall        54 s = startup + running + idle
+billed      54 s per GPU (exact; pass --granularity)
+GPU-hours   0.12 = 8 GPUs × billed
+cost        $0.474 per job
+useful      19% of billed GPU time is busy
+work        none (pass --work or --throughput: a workload rate, never peak FLOPs)
+```
+
+Loading from local SSD instead (`--startup 26s`) bills 36 s and $0.316, 28%
+useful. The PCIe step is at most 2.5 s of either startup, so storage is the
+term to shrink: keep weights on fast local disk, or keep a GPU warm.
 
 Tokens per dollar needs a workload rate: `--work 25K --unit tokens` for what
 the job completes, or `--throughput 2.5K --unit tokens` for its measured rate
@@ -619,7 +780,10 @@ napkin readme --write README.md PROBLEMS.md  # refreshes the tables
   that cross the link.
 - `h2d_latency_us` / `d2h_latency_us`: 4-byte synchronous copies, wall clock;
   each sample includes the stream synchronize, so it is a per-copy fixed cost,
-  not a bandwidth.
+  not a bandwidth. The 2026-10-12 profiles predate
+  [#32](https://github.com/gpu004/napkin-math-gpu/issues/32): their H2D copies
+  also allocated and freed the 4-byte destination, which on `H100!:2` read
+  8.9 μs against 6.0 μs for the copy alone.
 - `hbm_gbps`: 512 MiB device-to-device memcpy; read + write counted (2x).
 - `elementwise_gbps`: NVRTC `c[i] = a[i] + b[i]` fp32; two reads + one write (3x).
 - `hbm_latency_ns`: single-thread pointer chase over a random cycle in a
