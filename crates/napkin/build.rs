@@ -597,36 +597,7 @@ fn attach_repeats(mut profiles: Vec<Profile>, repeats_dir: &Path) -> Result<Vec<
             let path = file
                 .map_err(|error| format!("cannot read entry in {}: {error}", dir.display()))?
                 .path();
-            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
-                return Err(format!("unexpected file in repeats: {}", path.display()));
-            }
-            let json = fs::read_to_string(&path)
-                .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-            let repeat: Repeat = serde_json::from_str(&json)
-                .map_err(|error| format!("invalid repeat JSON in {}: {error}", path.display()))?;
-            validate_measured(id, &repeat.measured)?;
-            require_same(
-                &path,
-                "gpu_request",
-                &repeat.measured.gpu_request,
-                &canonical.gpu_request,
-            )?;
-            require_same(
-                &path,
-                "device_name",
-                &repeat.measured.device_name,
-                &canonical.device_name,
-            )?;
-            if usize::try_from(repeat.measured.device_count).ok()
-                != Some(repeat.host.gpu_uuids.len())
-            {
-                return Err(format!(
-                    "{}: {} GPU UUIDs for {} devices",
-                    path.display(),
-                    repeat.host.gpu_uuids.len(),
-                    repeat.measured.device_count
-                ));
-            }
+            let repeat = load_repeat(&path, id, canonical)?;
             profile.repeats.push(repeat);
         }
         profile
@@ -634,6 +605,41 @@ fn attach_repeats(mut profiles: Vec<Profile>, repeats_dir: &Path) -> Result<Vec<
             .sort_by(|left, right| left.measured.captured_at.cmp(&right.measured.captured_at));
     }
     Ok(profiles)
+}
+
+/// Parses one repeat and checks it against the canonical run it will be
+/// compared with: same Modal request, same device, passing checks, and one
+/// GPU UUID per device.
+fn load_repeat(path: &Path, id: &str, canonical: &Measured) -> Result<Repeat, String> {
+    if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+        return Err(format!("unexpected file in repeats: {}", path.display()));
+    }
+    let json = fs::read_to_string(path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let repeat: Repeat = serde_json::from_str(&json)
+        .map_err(|error| format!("invalid repeat JSON in {}: {error}", path.display()))?;
+    validate_measured(id, &repeat.measured)?;
+    require_same(
+        path,
+        "gpu_request",
+        &repeat.measured.gpu_request,
+        &canonical.gpu_request,
+    )?;
+    require_same(
+        path,
+        "device_name",
+        &repeat.measured.device_name,
+        &canonical.device_name,
+    )?;
+    if usize::try_from(repeat.measured.device_count).ok() != Some(repeat.host.gpu_uuids.len()) {
+        return Err(format!(
+            "{}: {} GPU UUIDs for {} devices",
+            path.display(),
+            repeat.host.gpu_uuids.len(),
+            repeat.measured.device_count
+        ));
+    }
+    Ok(repeat)
 }
 
 fn require_same(path: &Path, field: &str, repeat: &str, canonical: &str) -> Result<(), String> {
