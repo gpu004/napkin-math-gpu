@@ -132,7 +132,6 @@ pub const METRICS: [Metric; 12] = [
 /// The lowest and highest value of one metric over a profile's runs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spread {
-    pub runs: usize,
     pub low: f64,
     pub high: f64,
 }
@@ -163,18 +162,15 @@ fn runs(profile: &Profile) -> impl Iterator<Item = &Measured> {
 /// at least two runs recorded a positive value.
 #[must_use]
 pub fn spread(profile: &Profile, metric: &Metric) -> Option<Spread> {
-    let values: Vec<f64> = runs(profile)
+    let mut values = runs(profile)
         .filter_map(metric.value)
-        .filter(|value| *value > 0.0)
-        .collect();
-    if values.len() < 2 {
-        return None;
-    }
-    Some(Spread {
-        runs: values.len(),
-        low: values.iter().copied().reduce(f64::min)?,
-        high: values.iter().copied().reduce(f64::max)?,
-    })
+        .filter(|value| *value > 0.0);
+    let (first, second) = (values.next()?, values.next()?);
+    let (low, high) = values.fold(
+        (first.min(second), first.max(second)),
+        |(low, high), value| (low.min(value), high.max(value)),
+    );
+    Some(Spread { low, high })
 }
 
 #[cfg(test)]
@@ -216,7 +212,8 @@ mod tests {
         let canonical = find("h100").unwrap().measured.as_ref().unwrap().hbm_gbps;
         let profile = with_repeats(&[canonical * 0.9, canonical * 1.08]);
         let wide = spread(&profile, &HBM_COPY).unwrap();
-        assert_eq!(wide.runs, 3);
+        assert!((wide.low - canonical * 0.9).abs() < 1e-9);
+        assert!((wide.high - canonical * 1.08).abs() < 1e-9);
         assert!((wide.fraction() - (1.08 / 0.9 - 1.0)).abs() < 1e-12);
         assert!(wide.varies_by_machine());
         let profile = with_repeats(&[canonical * 0.95]);
