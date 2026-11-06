@@ -6,6 +6,7 @@
 //! slowest run over the fastest, minus one.
 
 use crate::profile::{Dtype, Measured, Profile};
+use crate::units::{fmt_duration, fmt_gbps, fmt_sig, fmt_tflops};
 
 /// Spread between runs above which a number is said to vary by machine.
 pub const MACHINE_FLAG: f64 = 0.15;
@@ -16,6 +17,31 @@ pub enum Unit {
     Microseconds,
     Gbps,
     Tflops,
+}
+
+impl Unit {
+    /// The unit a raw metric value is in, for column headers.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Nanoseconds => "ns",
+            Self::Microseconds => "μs",
+            Self::Gbps => "GB/s",
+            Self::Tflops => "TFLOP/s",
+        }
+    }
+
+    /// `value` at `sig` significant digits with a readable unit, e.g.
+    /// H100's 2980 GB/s HBM copy at one digit is `"3 TB/s"`.
+    #[must_use]
+    pub fn format(self, value: f64, sig: u32) -> String {
+        match self {
+            Self::Nanoseconds => format!("{} ns", fmt_sig(value, sig)),
+            Self::Microseconds => fmt_duration(value / 1e6, sig),
+            Self::Gbps => fmt_gbps(value, sig),
+            Self::Tflops => fmt_tflops(value, sig),
+        }
+    }
 }
 
 /// One napkin-bench number every full run records.
@@ -126,7 +152,7 @@ impl Spread {
 }
 
 /// The canonical run followed by every repeat.
-pub fn runs(profile: &Profile) -> impl Iterator<Item = &Measured> {
+fn runs(profile: &Profile) -> impl Iterator<Item = &Measured> {
     profile
         .measured
         .iter()
