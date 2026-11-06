@@ -252,10 +252,101 @@ fn summary_prints_memorization_table() {
 fn unit_costs_prints_one_column_per_price_record() {
     let (stdout, _, code) = napkin(&["unit-costs"]);
     assert_eq!(code, 0);
+    let header = stdout.lines().next().unwrap_or("");
+    assert!(header.starts_with("| Work |"), "{stdout}");
+    for id in [
+        "aws-h100",
+        "azure-h100",
+        "gcp-h100",
+        "modal-a100",
+        "modal-h100",
+        "modal-b200",
+        "modal-b300",
+    ] {
+        assert!(
+            header.contains(&format!("`{id}`")),
+            "{id} missing from {header}"
+        );
+    }
+}
+
+#[test]
+fn collective_across_machines_refuses_and_names_the_datasheet_link() {
+    let (stdout, stderr, code) = napkin(&[
+        "collective",
+        "--gpu",
+        "h100",
+        "--count",
+        "16",
+        "--topology",
+        "nvlink",
+        "--op",
+        "all-reduce",
+        "--bytes",
+        "4GiB",
+    ]);
+    assert_eq!(code, 2, "{stdout}");
     assert!(
-        stdout.starts_with(
-            "| Work | A100 `modal-a100` | H100 `modal-h100` | B200 `modal-b200` | B300 `modal-b300` |"
-        ),
+        stderr.contains("no NCCL Tests evidence for h100 × 16"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("datasheet RDMA link: 400 Gbit/s = 50 GB/s per GPU each way, 5 μs one-way, 8 GPUs per machine"),
+        "{stderr}"
+    );
+
+    let (_, stderr, code) = napkin(&[
+        "collective",
+        "--gpu",
+        "b200",
+        "--count",
+        "16",
+        "--topology",
+        "nvlink",
+        "--op",
+        "all-reduce",
+        "--bytes",
+        "4GiB",
+    ]);
+    assert_eq!(code, 2);
+    assert!(!stderr.contains("RDMA"), "{stderr}");
+
+    let (_, stderr, code) = napkin(&[
+        "collective",
+        "--gpu",
+        "h100",
+        "--count",
+        "8",
+        "--topology",
+        "nvlink",
+        "--op",
+        "all-reduce",
+        "--bytes",
+        "8GiB",
+    ]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("does not extrapolate"), "{stderr}");
+    assert!(!stderr.contains("RDMA"), "{stderr}");
+}
+
+#[test]
+fn one_machine_collective_lists_the_unused_network_link() {
+    let (stdout, stderr, code) = napkin(&[
+        "collective",
+        "--gpu",
+        "h100",
+        "--count",
+        "8",
+        "--topology",
+        "nvlink",
+        "--op",
+        "all-reduce",
+        "--bytes",
+        "128KiB",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("network     50 GB/s per-GPU RDMA datasheet line rate, one direction, across machines (not used here)"),
         "{stdout}"
     );
 }
@@ -313,7 +404,7 @@ fn cost_offer_and_invalid_inputs() {
         "modal-h100",
     ]);
     assert_eq!(code, 0, "{stderr}");
-    assert!(stdout.contains("2026-10-12"), "{stdout}");
+    assert!(stdout.contains("2026-11-05"), "{stdout}");
     assert!(stdout.contains("https://modal.com/pricing"), "{stdout}");
     let (_, stderr, code) = napkin(&["cost", "--gpus", "1", "--time", "10s", "--offer", "unknown"]);
     assert_eq!(code, 2);
@@ -326,9 +417,63 @@ fn cost_offer_and_invalid_inputs() {
 fn prices_lists_all_builtin_records() {
     let (stdout, stderr, code) = napkin(&["prices"]);
     assert_eq!(code, 0, "{stderr}");
-    for id in ["modal-a100", "modal-h100", "modal-b200", "modal-b300"] {
+    for id in [
+        "modal-a100",
+        "modal-h100",
+        "modal-b200",
+        "modal-b300",
+        "aws-h100",
+        "aws-b200-1y",
+        "azure-h100-1y",
+        "gcp-b200-spot",
+    ] {
         assert!(stdout.contains(id), "{stdout}");
     }
+}
+
+#[test]
+fn cost_offer_flags_commitments_and_partial_instances() {
+    let (stdout, stderr, code) = napkin(&[
+        "cost",
+        "--gpus",
+        "1",
+        "--time",
+        "1h",
+        "--offer",
+        "aws-b200-1y",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("$89.72208/h for 8 GPUs"), "{stdout}");
+    assert!(stdout.contains("cost        $11.2 per job"), "{stdout}");
+    assert!(
+        stdout.contains("billed every hour of the 1-year term"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("aws-b200-1y rents 8 GPUs at a time"),
+        "{stdout}"
+    );
+    let (stdout, stderr, code) =
+        napkin(&["cost", "--gpus", "8", "--time", "1h", "--offer", "aws-b200"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(!stdout.contains("commitment  "), "{stdout}");
+    assert!(!stdout.contains("instance    "), "{stdout}");
+}
+
+#[test]
+fn breakeven_pairs_each_providers_h100_and_b200_prices() {
+    let (stdout, stderr, code) = napkin(&["breakeven"]);
+    assert_eq!(code, 0, "{stderr}");
+    for row in [
+        "| AWS | on-demand | $6.88 | $14.2 | 360 PFLOP | 330 PFLOP | 1.1× H100's utilization |",
+        "| Modal | on-demand, preemptible | $3.95 | $6.25 | 630 PFLOP | 760 PFLOP | 0.83× H100's utilization |",
+    ] {
+        assert!(stdout.contains(row), "{stdout}");
+    }
+    assert!(!stdout.contains("| Azure |"), "{stdout}");
+    let (_, stderr, code) = napkin(&["breakeven", "--vs", "x999"]);
+    assert_eq!(code, 2);
+    assert_ne!(stderr, "");
 }
 
 #[test]
@@ -356,11 +501,11 @@ fn utilization_reverses_peak_per_dollar_ranking() {
                 "--price",
                 "6.25",
                 "--time",
-                "630s",
+                "750s",
                 "--granularity",
                 "1s",
             ],
-            "cost        $1.09 per job",
+            "cost        $1.3 per job",
         ),
         (
             &[
@@ -386,13 +531,13 @@ fn utilization_reverses_peak_per_dollar_ranking() {
                 "--price",
                 "6.25",
                 "--time",
-                "630s",
+                "750s",
                 "--utilization",
                 "0.3",
                 "--granularity",
                 "1s",
             ],
-            "cost        $3.65 per job",
+            "cost        $4.34 per job",
         ),
     ] {
         let (stdout, stderr, code) = napkin(args);

@@ -95,8 +95,20 @@ pub fn fit(
 
 #[cfg(test)]
 mod tests {
+    use hegel::TestCase;
+    use hegel::generators as gs;
+
     use super::*;
     use crate::profile::find;
+
+    fn near(actual: f64, expected: f64) {
+        let difference = (actual - expected).abs();
+        let scale = actual.abs().max(expected.abs()).max(1e-12);
+        assert!(
+            difference <= 1e-9 * scale,
+            "{actual} differs from {expected} by {difference}"
+        );
+    }
 
     #[test]
     fn seventy_b_bf16_needs_two_h100s() {
@@ -138,5 +150,53 @@ mod tests {
         let h100 = find("h100").unwrap();
         let error = fit(h100, 7e9, 16.0, 0.0, 72e9, 0.1).unwrap_err();
         assert!(error.to_string().contains("leave no usable memory"));
+    }
+
+    // Parameters stay in `[1e6, 1e11]`, bits are a storage width, headroom is
+    // in `[0, 0.5]`, and per-GPU overhead is at most 40% of HBM. On the H100
+    // that leaves `per_gpu < usable`, so `fit` returns a count rather than
+    // the "no usable memory" error.
+    #[hegel::test]
+    fn gpu_count_is_the_sharded_working_set_rounded_up(tc: TestCase) {
+        let h100 = find("h100").expect("built-in H100 profile");
+        let params = tc.draw(gs::floats::<f64>().min_value(1e6).max_value(1e11));
+        let bits = tc.draw(gs::sampled_from(&[4.0, 8.0, 16.0, 32.0]));
+        let extra = tc.draw(gs::floats::<f64>().min_value(0.0).max_value(1e11));
+        let per_gpu = tc.draw(
+            gs::floats::<f64>()
+                .min_value(0.0)
+                .max_value(h100.memory_gb * 1e9 * 0.4),
+        );
+        let headroom = tc.draw(gs::floats::<f64>().min_value(0.0).max_value(0.5));
+        let fitted = fit(h100, params, bits, extra, per_gpu, headroom).expect("bounded fit");
+
+        let weight_bytes = params * bits / 8.0;
+        let usable = h100.memory_gb * 1e9 * (1.0 - headroom);
+        near(fitted.weight_bytes, weight_bytes);
+        near(fitted.extra_bytes, extra);
+        near(fitted.per_gpu_bytes, per_gpu);
+        near(fitted.working_bytes, weight_bytes + extra + per_gpu);
+        near(fitted.usable_bytes_per_gpu, usable);
+        assert_eq!(
+            fitted.fits_one,
+            fitted.working_bytes <= fitted.usable_bytes_per_gpu
+        );
+        let shard = (weight_bytes + extra) / (usable - per_gpu);
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "the drawn working set needs only a few H100s"
+        )]
+        let expected_gpus = shard.ceil() as u64;
+        assert_eq!(fitted.min_gpus, expected_gpus);
+        if fitted.fits_one {
+            assert_eq!(fitted.min_gpus, 1);
+        } else {
+            assert!(fitted.min_gpus >= 2);
+        }
+
+        let doubled = fit(h100, params * 2.0, bits, extra, per_gpu, headroom).expect("doubled");
+        assert!(doubled.min_gpus >= fitted.min_gpus);
+        assert!(doubled.weight_bytes > fitted.weight_bytes);
     }
 }

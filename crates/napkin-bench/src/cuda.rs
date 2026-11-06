@@ -1226,10 +1226,14 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
     let d2h_gbps = copy_bytes / (d2h_ms / 1e3) / 1e9;
     progress("d2h", &format!("{d2h_gbps:.0} GB/s"));
 
+    // Allocate the destination once, outside the timed loop: allocating it
+    // per copy adds a cuMemAllocAsync and a cuMemFreeAsync to every sample.
+    // On `H100!:2` that read 8.9 μs against 6.0 μs for the copy and
+    // synchronize alone (#32).
+    let mut h2d_dst = stream0.alloc_zeros::<f32>(1)?;
     let h2d_lat = wall_samples(5, 20, cfg.rounds, || {
         let one = [1.0f32];
-        let mut dst = unsafe { stream0.alloc::<f32>(1) }?;
-        stream0.memcpy_htod(&one, &mut dst)?;
+        stream0.memcpy_htod(&one, &mut h2d_dst)?;
         stream0.synchronize()?;
         Ok(())
     })?;

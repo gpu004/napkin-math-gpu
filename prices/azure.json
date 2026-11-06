@@ -1,0 +1,47 @@
+[
+  {
+    "id": "azure-h100",
+    "provider": "Azure",
+    "sku": "Standard_ND96isr_H100_v5, 8x H100 SXM, eastus",
+    "gpu": "h100",
+    "gpus": 8,
+    "currency": "USD",
+    "amount": 98.32,
+    "per": "hour",
+    "terms": "on-demand",
+    "preemptible": false,
+    "date": "2026-11-05",
+    "source": "https://prices.azure.com/api/retail/prices?$filter=armRegionName%20eq%20%27eastus%27%20and%20armSkuName%20eq%20%27Standard_ND96isr_H100_v5%27",
+    "note": "Linux pay-as-you-go VM price from the Azure Retail Prices API. The VM price includes the host CPUs, memory, and InfiniBand. Azure lists no B200 VM; ND GB200 v6 uses Grace-Blackwell GB200, not the B200 profile."
+  },
+  {
+    "id": "azure-h100-spot",
+    "provider": "Azure",
+    "sku": "Standard_ND96isr_H100_v5, 8x H100 SXM, eastus",
+    "gpu": "h100",
+    "gpus": 8,
+    "currency": "USD",
+    "amount": 18.169536,
+    "per": "hour",
+    "terms": "spot",
+    "preemptible": true,
+    "date": "2026-11-05",
+    "source": "https://prices.azure.com/api/retail/prices?$filter=armRegionName%20eq%20%27eastus%27%20and%20armSkuName%20eq%20%27Standard_ND96isr_H100_v5%27",
+    "note": "Spot price from the Azure Retail Prices API; Azure moves spot prices with spare capacity and can evict spot VMs at any time."
+  },
+  {
+    "id": "azure-h100-1y",
+    "provider": "Azure",
+    "sku": "Standard_ND96isr_H100_v5, 8x H100 SXM, eastus",
+    "gpu": "h100",
+    "gpus": 8,
+    "currency": "USD",
+    "amount": 551221.0,
+    "per": "year",
+    "terms": "1-year",
+    "preemptible": false,
+    "date": "2026-11-05",
+    "source": "https://prices.azure.com/api/retail/prices?$filter=armRegionName%20eq%20%27eastus%27%20and%20armSkuName%20eq%20%27Standard_ND96isr_H100_v5%27",
+    "note": "Reserved VM instance: the API lists one total for the whole 1-year term, billed whether or not the VM runs."
+  }
+]

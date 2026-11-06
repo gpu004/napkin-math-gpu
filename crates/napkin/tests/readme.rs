@@ -1,3 +1,5 @@
+use napkin::collective::{self, Query};
+use napkin::profile::collective::{Collective, Topology};
 use napkin::profile::{Basis, Dtype};
 use napkin::units::round_sig;
 use napkin::{price, profile, variation};
@@ -32,6 +34,16 @@ fn readme_napkin_blocks_match_renderers() {
             "<!-- napkin prices -->",
             napkin::table::prices(price::builtin()),
         ),
+        (
+            "<!-- napkin breakeven --gpu h100 --vs b200 --dtype bf16 -->",
+            napkin::table::breakeven(
+                price::builtin(),
+                h100,
+                profile::find("b200").unwrap(),
+                Dtype::Bf16,
+            )
+            .expect("h100 and b200 must have bf16 rates"),
+        ),
     ];
     for (marker, body) in expected_blocks {
         let start = readme
@@ -48,6 +60,102 @@ fn readme_napkin_blocks_match_renderers() {
             "README marker {marker} is stale; run `napkin readme --write README.md`"
         );
     }
+}
+
+/// The prose under the `napkin breakeven` table quotes rounded prices, rate
+/// ratios, and job costs. This fails when a price record or measured rate
+/// moves one of them; update the README sentence and this test together.
+#[test]
+fn readme_price_comparison_follows_from_records() -> Result<(), Box<dyn std::error::Error>> {
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))?;
+    let record = |id: &str| price::find(id).ok_or(format!("missing price record {id}"));
+    let bf16_tflops = |gpu: &str| -> Result<f64, String> {
+        profile::find(gpu)
+            .and_then(|profile| {
+                profile
+                    .rates(false)
+                    .compute_tflops
+                    .get(&Dtype::Bf16)
+                    .copied()
+            })
+            .map(|rate| rate.tflops)
+            .ok_or(format!("{gpu} has no bf16 rate"))
+    };
+    let h100_aws = record("aws-h100")?.per_gpu_hour();
+    let b200_aws = record("aws-b200")?.per_gpu_hour();
+    let h100_gcp_spot = record("gcp-h100-spot")?.per_gpu_hour();
+    let b200_gcp_spot = record("gcp-b200-spot")?.per_gpu_hour();
+    let (h100, b200) = (bf16_tflops("h100")?, bf16_tflops("b200")?);
+    // The utilization example's 1400 s at 50% on the H100 and 750 s at 30%
+    // on the B200, billed at AWS on-demand prices.
+    let job_cost = |busy_s: f64, utilization: f64, per_gpu_hour: f64| {
+        busy_s / utilization * per_gpu_hour / 3600.0
+    };
+    // (text in README.md, value from the records, significant digits shown,
+    // value shown)
+    for (text, value, sig, shown) in [
+        ("AWS charges $14.2", b200_aws, 3, 14.2),
+        ("against $6.88 for an H100", h100_aws, 3, 6.88),
+        ("2.07 times as much", b200_aws / h100_aws, 3, 2.07),
+        ("only 1.92 times the H100's", b200 / h100, 3, 1.92),
+        ("costs $5.35", job_cost(1400.0, 0.5, h100_aws), 3, 5.35),
+        (
+            "against $9.89 on the B200",
+            job_cost(750.0, 0.3, b200_aws),
+            3,
+            9.89,
+        ),
+        (
+            "down to 0.39 of the H100's utilization",
+            (h100 / h100_gcp_spot) / (b200 / b200_gcp_spot),
+            2,
+            0.39,
+        ),
+        ("give $10,400", b200_aws * 730.0 / 1e3, 3, 10.4),
+        (
+            "and $8,190",
+            record("aws-b200-1y")?.per_gpu_hour() * 730.0 / 1e3,
+            3,
+            8.19,
+        ),
+    ] {
+        assert!(readme.contains(text), "README.md no longer says {text:?}");
+        assert!(
+            (round_sig(value, sig) - shown).abs() < 1e-9,
+            "README.md says {text:?} but the records give {value}"
+        );
+    }
+    assert!(
+        b200_aws / h100_aws > b200 / h100,
+        "README.md says the B200 loses at AWS on-demand prices even at equal utilization"
+    );
+    assert!(
+        b200_gcp_spot < h100_gcp_spot,
+        "README.md says a GCP spot B200 GPU-hour costs less than an H100's"
+    );
+    Ok(())
+}
+
+#[test]
+fn readme_copy_sizes_match_h100_profile() -> Result<(), Box<dyn std::error::Error>> {
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))?;
+    let rates = profile::find("h100")
+        .ok_or("missing h100 profile")?
+        .rates(false);
+    let latency_us = rates.h2d_latency_us.ok_or("h100 has no h2d latency")?;
+    let gbps = rates.h2d.ok_or("h100 has no h2d rate")?.gbps;
+    // μs × GB/s = 10⁻⁶ s × 10⁹ B/s = 10³ B, so the product is in KB.
+    let break_even_kb = latency_us * gbps;
+    let text = format!(
+        "about {} KB and {} KB",
+        round_sig(napkin::table::SPREAD_FLAG * break_even_kb, 1),
+        round_sig(break_even_kb, 1)
+    );
+    assert!(
+        readme.contains(&text),
+        "README's copy-latency prose should say {text:?}; update it with the profile"
+    );
+    Ok(())
 }
 
 #[test]
@@ -239,6 +347,96 @@ fn readme_cost_examples_match_cli() {
     assert!(examples >= 2, "expected at least two README cost examples");
 }
 
+fn eight_h100s(op: Collective, bytes: f64) -> Result<f64, String> {
+    collective::estimate(&Query {
+        gpu: "h100",
+        gpu_count: 8,
+        topology: Topology::Nvlink,
+        collective: op,
+        dtype: Dtype::Bf16,
+        bytes,
+    })
+    .map(|estimate| estimate.time_s)
+}
+
+/// The "Across machines" example composes measured eight-GPU curves with the
+/// datasheet RDMA link; when either moves, the README arithmetic must too.
+#[test]
+fn cross_machine_example_follows_from_curves_and_network() -> Result<(), Box<dyn std::error::Error>>
+{
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))?;
+    let network = profile::find("h100")
+        .and_then(|h100| h100.ceiling.network.as_ref())
+        .ok_or("h100 has no datasheet network")?;
+    assert_eq!(network.nic_gbit_per_gpu, 400.0);
+    assert_eq!(network.gbps(), 50.0);
+    assert_eq!(network.gpus_per_node, 8);
+    assert_eq!(network.latency_us, 5.0);
+    let latency = network.latency_us / 1e6;
+    let rate = network.gbps() * 1e9;
+    let ms = |seconds: f64| seconds * 1e3;
+    let us = |seconds: f64| seconds * 1e6;
+
+    let gradients = 4.0 * f64::from(1_u32 << 30);
+    let reduce_scatter = eight_h100s(Collective::ReduceScatter, gradients)?;
+    let all_gather = eight_h100s(Collective::AllGather, gradients)?;
+    let all_reduce = eight_h100s(Collective::AllReduce, gradients)?;
+    // A two-rank AllReduce sends 2(n-1)/n = 1× its shard, in two steps.
+    let shard = gradients / f64::from(network.gpus_per_node);
+    let wire = shard / rate + 2.0 * latency;
+    let serial = reduce_scatter + wire + all_gather;
+    let pipelined = reduce_scatter.max(wire).max(all_gather);
+    assert!(same(round_sig(ms(reduce_scatter), 3), 10.6));
+    assert!(same(round_sig(ms(all_gather), 3), 10.6));
+    assert!(same(round_sig(ms(all_reduce), 3), 15.7));
+    assert!(same(round_sig(shard / 1e6, 3), 537.0));
+    assert!(same(round_sig(ms(wire), 3), 10.7));
+    assert!(same(round_sig(ms(serial), 2), 32.0));
+    assert!(same(round_sig(ms(pipelined), 2), 11.0));
+    assert!(same(round_sig(ms(8.0 * shard / rate), 2), 86.0));
+    assert!(same(round_sig(ms(shard / 43e9), 3), 12.5));
+
+    let activations = 128.0 * 1024.0;
+    let small_scatter = eight_h100s(Collective::ReduceScatter, activations)?;
+    let small_gather = eight_h100s(Collective::AllGather, activations)?;
+    let small_reduce = eight_h100s(Collective::AllReduce, activations)?;
+    let small_wire = activations / f64::from(network.gpus_per_node) / rate + 2.0 * latency;
+    let small = small_scatter + small_wire + small_gather;
+    assert!(same(round_sig(us(small_scatter), 3), 39.9));
+    assert!(same(round_sig(us(small_gather), 3), 42.4));
+    assert!(same(round_sig(us(small_reduce), 3), 38.9));
+    assert!(same(round_sig(us(small), 1), 90.0));
+    assert!(same(round_sig(ms(160.0 * small), 2), 15.0));
+    assert!(same(round_sig(ms(160.0 * small_reduce), 2), 6.2));
+
+    for text in [
+        "400 Gbit/s / 8 bits = 50 GB/s per GPU, each direction",
+        "8 GPUs × one ConnectX-7 each = 8 × 50 GB/s = 400 GB/s out",
+        "latency     5 μs one-way",
+        "4 GiB / 8 = 512 MiB shard",
+        "512 MiB = 537 MB, so 537 MB / 50 GB/s = 10.7 ms, plus two 5 μs steps",
+        "40 GiB/s (43 GB/s), below the 50 GB/s (46.6 GiB/s) line rate",
+        "reduce-scatter 10.6 ms",
+        "network        10.7 ms    datasheet: 537 MB / 50 GB/s + 2 × 5 μs",
+        "all-gather     10.6 ms",
+        "serial         32 ms",
+        "pipelined      ≥ 11 ms",
+        "measured 15.7 ms",
+        "between 11 and 32 ms",
+        "8 × 10.7 = 86 ms",
+        "43 GB/s would make the\nnetwork stage 12.5 ms",
+        "39.9 μs ReduceScatter",
+        "42.4 μs AllGather, for about 90 μs",
+        "cost 15 ms instead of 6.2 ms",
+    ] {
+        assert!(
+            readme.contains(text),
+            "README \"Across machines\" no longer says {text:?}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn llm_recipe_follow_up_commands_have_example_markers() {
     let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))
@@ -264,6 +462,86 @@ fn llm_recipe_follow_up_commands_have_example_markers() {
             );
         }
     }
+}
+
+/// The weight-loading example borrows storage rates from Simon Eskildsen's
+/// Napkin Math, measured on 48 vCPU CPU VMs, and combines them with this
+/// repo's measured H100 host → device rate. If either moves, the prose
+/// arithmetic and the derived cold start in the cost section must move too.
+#[test]
+fn readme_weight_loading_follows_from_cited_rates() -> Result<(), Box<dyn std::error::Error>> {
+    const GIB: f64 = 1_073_741_824.0;
+    const MIB: f64 = 1_048_576.0;
+    const WEIGHTS: f64 = 70e9 * 16.0 / 8.0;
+    // The prose divides by the rounded rates in its table, as a reader would
+    // on paper: 140 GB / 3.2 GB/s is 44 s, while the unrounded 3 GiB/s gives
+    // 43.5 s.
+    const BLOB: f64 = 3.2e9;
+    const SSD: f64 = 5.4e9;
+    const PCIE: f64 = 56e9;
+    const ONE_CONNECTION: f64 = 100.0 * MIB;
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))?;
+    let h100 = profile::find("h100").ok_or("missing h100 profile")?;
+    let h2d = h100
+        .rates(false)
+        .h2d
+        .ok_or("h100 has no published h2d rate")?;
+    assert_eq!(h2d.basis, Basis::Nvbandwidth);
+    let blob_s = WEIGHTS / BLOB;
+    let ssd_s = WEIGHTS / SSD;
+    let pcie_s = WEIGHTS / PCIE;
+    // (text in README.md, value from the cited rates, significant digits
+    // shown, value shown)
+    for (text, value, sig, shown) in [
+        ("| 3 GiB/s = 3.2 GB/s |", 3.0 * GIB / 1e9, 2, BLOB / 1e9),
+        ("| 5 GiB/s = 5.4 GB/s |", 5.0 * GIB / 1e9, 2, SSD / 1e9),
+        (
+            "| Host → device, pinned | 56 GB/s |",
+            h2d.gbps,
+            2,
+            PCIE / 1e9,
+        ),
+        ("140 GB / 3.2 GB/s ≈ 44 s", blob_s, 2, 44.0),
+        ("140 GB / 5.4 GB/s ≈ 26 s", ssd_s, 2, 26.0),
+        ("140 GB / 56 GB/s  ≈ 2.5 s", pcie_s, 2, 2.5),
+        ("10 to 20 times slower", ssd_s / pcie_s, 1, 10.0),
+        ("10 to 20 times slower", blob_s / pcie_s, 1, 20.0),
+        ("`44 + 26 + 2.5 ≈ 72 s`", blob_s + ssd_s + pcie_s, 2, 72.0),
+        (
+            "17.5 GB over its own PCIe link",
+            WEIGHTS / 8.0 / 1e9,
+            3,
+            17.5,
+        ),
+        ("about 0.3 s if all eight", WEIGHTS / 8.0 / PCIE, 1, 0.3),
+        (
+            "`140 GB / 0.105 GB/s ≈ 1300 s`",
+            ONE_CONNECTION / 1e9,
+            3,
+            0.105,
+        ),
+        (
+            "`140 GB / 0.105 GB/s ≈ 1300 s`",
+            WEIGHTS / ONE_CONNECTION,
+            2,
+            1300.0,
+        ),
+        ("about 22 minutes", WEIGHTS / ONE_CONNECTION / 60.0, 2, 22.0),
+        ("65 s and 27–30 s", WEIGHTS / (2.0 * GIB), 2, 65.0),
+        ("65 s and 27–30 s", WEIGHTS / (4.9 * GIB), 2, 27.0),
+        ("65 s and 27–30 s", WEIGHTS / (4.3 * GIB), 2, 30.0),
+        ("wait at least 44 s", blob_s, 2, 44.0),
+        ("--startup 44s", blob_s, 2, 44.0),
+        ("`--startup 26s`", ssd_s, 2, 26.0),
+        ("at most 2.5 s of either startup", pcie_s, 2, 2.5),
+    ] {
+        assert!(readme.contains(text), "README.md no longer says {text:?}");
+        assert!(
+            same(round_sig(value, sig), shown),
+            "{text:?}: the cited rates give {value}, not {shown}"
+        );
+    }
+    Ok(())
 }
 
 fn problems() -> std::io::Result<String> {
@@ -460,6 +738,12 @@ fn problem_answers_follow_from_teaching_constants() -> Result<(), Box<dyn std::e
             0.7,
         ),
         ("9 μs × 56 GB/s ≈ 500 KB", L_COPY * P / 1e3, 2, 500.0),
+        (
+            "under the 25 KB latency size",
+            napkin::table::SPREAD_FLAG * L_COPY * P / 1e3,
+            2,
+            25.0,
+        ),
         (
             "F / M = 690 × 10¹² / 3 × 10¹² ≈ 230  FLOP/B",
             ridge,

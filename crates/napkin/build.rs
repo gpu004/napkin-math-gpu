@@ -8,8 +8,8 @@ use std::process::ExitCode;
 use napkin_profile::collective::{Collective, CollectiveEvidence, Curve, CurvePoint, Topology};
 use napkin_profile::{
     Access, Bandwidth, Ceiling, CopyPath, Dtype, Endpoint, GemmAlgo, GemmCheck, GemmShape,
-    GemmShapeSuite, GpuState, Latency, Measured, Nvbandwidth, Profile, Repeat, RoundState, Span,
-    Statistic, tflops,
+    GemmShapeSuite, GpuState, Latency, Measured, Network, Nvbandwidth, Profile, Repeat, RoundState,
+    Span, Statistic, tflops,
 };
 use serde::Deserialize;
 
@@ -22,6 +22,7 @@ struct PriceRecordInput {
     provider: String,
     sku: String,
     gpu: String,
+    gpus: u32,
     currency: String,
     amount: f64,
     per: PricePerInput,
@@ -38,13 +39,18 @@ enum PricePerInput {
     Second,
     Minute,
     Hour,
+    Year,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum PriceTermsInput {
     OnDemand,
     Spot,
+    #[serde(rename = "1-year")]
+    OneYear,
+    #[serde(rename = "3-year")]
+    ThreeYear,
 }
 
 #[derive(Debug)]
@@ -238,6 +244,9 @@ fn load_prices(prices_dir: &Path) -> Result<Vec<PriceRecordInput>, String> {
     paths.sort();
     let mut records = Vec::new();
     let mut ids = std::collections::BTreeSet::new();
+    // `napkin breakeven` pairs one provider's H100 and B200 prices under the
+    // same terms, so each provider may list one price per GPU and terms.
+    let mut offers = std::collections::BTreeSet::new();
     for path in paths {
         if !path.is_file()
             || path.extension().and_then(|extension| extension.to_str()) != Some("json")
@@ -252,6 +261,12 @@ fn load_prices(prices_dir: &Path) -> Result<Vec<PriceRecordInput>, String> {
             validate_price(&record, &path)?;
             if !ids.insert(record.id.clone()) {
                 return Err(format!("duplicate price record id {:?}", record.id));
+            }
+            if !offers.insert((record.provider.clone(), record.gpu.clone(), record.terms)) {
+                return Err(format!(
+                    "price record {:?} repeats another {} {} record with the same terms",
+                    record.id, record.provider, record.gpu
+                ));
             }
             records.push(record);
         }
@@ -286,6 +301,9 @@ fn validate_price(record: &PriceRecordInput, path: &Path) -> Result<(), String> 
             "price record {:?} has unknown gpu {:?}",
             record.id, record.gpu
         ));
+    }
+    if record.gpus == 0 {
+        return Err(format!("price record {:?} covers zero GPUs", record.id));
     }
     if record.currency.len() != 3
         || !record
@@ -361,18 +379,22 @@ fn emit_prices(prices: &[PriceRecordInput]) -> Result<String, String> {
             PricePerInput::Second => "Per::Second",
             PricePerInput::Minute => "Per::Minute",
             PricePerInput::Hour => "Per::Hour",
+            PricePerInput::Year => "Per::Year",
         };
         let terms = match record.terms {
             PriceTermsInput::OnDemand => "Terms::OnDemand",
             PriceTermsInput::Spot => "Terms::Spot",
+            PriceTermsInput::OneYear => "Terms::Commitment { years: 1 }",
+            PriceTermsInput::ThreeYear => "Terms::Commitment { years: 3 }",
         };
         let _ = writeln!(
             generated,
-            "    PriceRecord {{ id: {:?}, provider: {:?}, sku: {:?}, gpu: {:?}, currency: {:?}, amount: {:?}_f64, per: {per}, terms: {terms}, preemptible: {}, date: Date {{ year: {year}, month: {month}, day: {day} }}, source: {:?}, note: {:?} }},",
+            "    PriceRecord {{ id: {:?}, provider: {:?}, sku: {:?}, gpu: {:?}, gpus: {}, currency: {:?}, amount: {:?}_f64, per: {per}, terms: {terms}, preemptible: {}, date: Date {{ year: {year}, month: {month}, day: {day} }}, source: {:?}, note: {:?} }},",
             record.id,
             record.provider,
             record.sku,
             record.gpu,
+            record.gpus,
             record.currency,
             record.amount,
             record.preemptible,
@@ -687,6 +709,33 @@ fn validate_ceiling(id: &str, ceiling: &Ceiling) -> Result<(), String> {
     if ceiling.source.is_empty() {
         return Err(format!("profile {id:?} has an empty ceiling.source"));
     }
+    if let Some(network) = &ceiling.network {
+        validate_network(id, network)?;
+    }
+    Ok(())
+}
+
+fn validate_network(id: &str, network: &Network) -> Result<(), String> {
+    if !(network.nic_gbit_per_gpu.is_finite() && network.nic_gbit_per_gpu > 0.0) {
+        return Err(format!(
+            "profile {id:?} has nonpositive ceiling.network.nic_gbit_per_gpu"
+        ));
+    }
+    if !(network.latency_us.is_finite() && network.latency_us > 0.0) {
+        return Err(format!(
+            "profile {id:?} has nonpositive ceiling.network.latency_us"
+        ));
+    }
+    if network.gpus_per_node == 0 {
+        return Err(format!(
+            "profile {id:?} has zero ceiling.network.gpus_per_node"
+        ));
+    }
+    if network.system.is_empty() || !network.source.contains("https://") {
+        return Err(format!(
+            "profile {id:?} ceiling.network needs a system and an https:// source"
+        ));
+    }
     Ok(())
 }
 
@@ -987,6 +1036,7 @@ fn topology_literal(topology: Topology) -> &'static str {
     match topology {
         Topology::Nvlink => "Topology::Nvlink",
         Topology::Pcie => "Topology::Pcie",
+        Topology::Rdma => "Topology::Rdma",
     }
 }
 
@@ -1007,6 +1057,7 @@ fn emit_profile(profile: &Profile, generated: &mut String) {
         nvlink_gbps,
         compute_tflops,
         source,
+        network,
     } = ceiling;
     if measured.is_some() {
         generated.push_str(
@@ -1056,6 +1107,10 @@ fn emit_profile(profile: &Profile, generated: &mut String) {
         &dtype_map(compute_tflops),
     );
     emit_field(generated, "            ", "source", &string_literal(source));
+    let network = network
+        .as_ref()
+        .map_or_else(|| "None".to_owned(), emit_network);
+    emit_field(generated, "            ", "network", &network);
     generated.push_str("        },\n");
     let measured = measured.as_ref().map_or_else(
         || "None".to_owned(),
@@ -1077,6 +1132,10 @@ fn emit_profile(profile: &Profile, generated: &mut String) {
         &format!("vec![{repeat_calls}]"),
     );
     generated.push_str("    }\n}\n");
+    emit_repeats(id, repeats, generated);
+}
+
+fn emit_repeats(id: &str, repeats: &[Repeat], generated: &mut String) {
     for (index, repeat) in repeats.iter().enumerate() {
         let _ = writeln!(
             generated,
@@ -1090,6 +1149,23 @@ fn emit_profile(profile: &Profile, generated: &mut String) {
             measured_literal(&repeat.measured),
         );
     }
+}
+
+fn emit_network(network: &Network) -> String {
+    let Network {
+        system,
+        nic_gbit_per_gpu,
+        gpus_per_node,
+        latency_us,
+        source,
+    } = network;
+    format!(
+        "Some(Network {{ system: {}, nic_gbit_per_gpu: {}, gpus_per_node: {gpus_per_node}_u32, latency_us: {}, source: {} }})",
+        string_literal(system),
+        float_literal(*nic_gbit_per_gpu),
+        float_literal(*latency_us),
+        string_literal(source),
+    )
 }
 
 fn emit_nvbandwidth(evidence: &Nvbandwidth) -> String {

@@ -575,8 +575,76 @@ fn bottleneck(stages: [f64; 6], compute_s: f64, memory_s: f64) -> Bottleneck {
 mod tests {
     use std::collections::BTreeMap;
 
+    use hegel::TestCase;
+    use hegel::generators as gs;
+
     use super::*;
     use crate::profile::{Ceiling, Measured};
+
+    fn near(actual: f64, expected: f64) {
+        let difference = (actual - expected).abs();
+        // `∞ − ∞` is NaN. Two infinities with the same sign are the same result.
+        if difference.is_nan() {
+            assert!(
+                actual.is_infinite()
+                    && expected.is_infinite()
+                    && actual.is_sign_positive() == expected.is_sign_positive(),
+                "{actual} differs from {expected}"
+            );
+            return;
+        }
+        let scale = actual.abs().max(expected.abs()).max(1e-12);
+        assert!(
+            difference <= 1e-9 * scale,
+            "{actual} differs from {expected} by {difference}"
+        );
+    }
+
+    // Copy counts stay in `0..=100` and each copy moves at least one byte, so
+    // the bytes-versus-copies check accepts the transfer. FLOPs and bytes stay
+    // below `1e15`, where dividing by the fixture's GB/s and TFLOP/s rates
+    // cannot overflow.
+    fn draw_transfer(tc: &TestCase) -> Transfer {
+        let copies = tc.draw(gs::integers::<u64>().min_value(0).max_value(100));
+        if copies == 0 {
+            return Transfer::default();
+        }
+        let bytes_per_copy = tc.draw(gs::floats::<f64>().min_value(1.0).max_value(1e8));
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "the drawn copy count is at most 100"
+        )]
+        let bytes = bytes_per_copy * copies as f64;
+        Transfer { bytes, copies }
+    }
+
+    fn draw_workload(tc: &TestCase) -> (Workload, f64) {
+        let tflops = tc.draw(gs::floats::<f64>().min_value(1.0).max_value(2_000.0));
+        let workload = Workload {
+            dtype: Dtype::Fp16,
+            throughput: Throughput::Override(tflops),
+            flops: optional_quantity(tc, 1e15),
+            hbm_bytes: optional_quantity(tc, 1e12),
+            host_bytes: optional_quantity(tc, 1e11),
+            h2d: draw_transfer(tc),
+            d2h: draw_transfer(tc),
+            g2g: draw_transfer(tc),
+            copy_mode: tc.draw(gs::sampled_from(&[CopyMode::Sync, CopyMode::Async])),
+            launches: tc.draw(gs::integers::<u64>().min_value(0).max_value(1_000)),
+        };
+        (workload, tflops)
+    }
+
+    // A zero draw is "this stage is absent". A nonzero draw is at least one
+    // byte or one FLOP, so a ratio such as FLOPs per HBM byte cannot overflow
+    // to infinity inside the stated maxima.
+    fn optional_quantity(tc: &TestCase, max: f64) -> f64 {
+        if tc.draw(gs::booleans()) {
+            0.0
+        } else {
+            tc.draw(gs::floats::<f64>().min_value(1.0).max_value(max))
+        }
+    }
 
     fn fixture() -> Profile {
         let compute = BTreeMap::from([
@@ -596,6 +664,7 @@ mod tests {
                 nvlink_gbps: 300.0,
                 compute_tflops: compute.clone(),
                 source: "fixture".to_owned(),
+                network: None,
             },
             nvbandwidth: None,
             repeats: Vec::new(),
@@ -1205,5 +1274,141 @@ mod tests {
                 .to_string();
             assert!(err.contains(message), "{err}");
         }
+    }
+
+    #[hegel::test]
+    fn gemm_dimensions_round_trip_through_their_text_form(tc: TestCase) {
+        let m = tc.draw(gs::integers::<u32>().min_value(1).max_value(1_000_000));
+        let n = tc.draw(gs::integers::<u32>().min_value(1).max_value(1_000_000));
+        let k = tc.draw(gs::integers::<u32>().min_value(1).max_value(1_000_000));
+        let dims = GemmDims { m, n, k };
+        let parsed = dims.to_string().parse::<GemmDims>().unwrap();
+        assert_eq!(parsed, dims);
+        let unicode = format!("{m}×{n}×{k}");
+        assert_eq!(unicode.parse::<GemmDims>().unwrap(), dims);
+    }
+
+    // The fixture's rates are the assumptions: HBM 2000 GB/s, host copy
+    // 100 GB/s, H2D 50 GB/s at 5 μs, D2H 40 GB/s at 6 μs, G2G 300 GB/s at
+    // 3 μs, and a 5 μs launch. The override replaces the fp16 peak.
+    #[hegel::test]
+    fn estimate_is_the_roofline_plus_alpha_beta_copies(tc: TestCase) {
+        let (workload, tflops) = draw_workload(&tc);
+        let profile = fixture();
+        let rates = profile.rates(false);
+        let serial = estimate(&profile, &workload, Mode::Serial, false).unwrap();
+        let overlapped = estimate(&profile, &workload, Mode::Overlapped, false).unwrap();
+
+        let compute_s = workload.flops / (tflops * 1e12);
+        let memory_s = workload.hbm_bytes / (rates.hbm_gbps * 1e9);
+        let host_s = if workload.host_bytes > 0.0 {
+            workload.host_bytes / (rates.host_copy_gbps.unwrap() * 1e9)
+        } else {
+            0.0
+        };
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "the drawn launch count is at most 1000"
+        )]
+        let launch_s = if workload.launches > 0 {
+            workload.launches as f64 * rates.launch_us.unwrap() / 1e6
+        } else {
+            0.0
+        };
+        near(serial.compute_s, compute_s);
+        near(serial.memory_s, memory_s);
+        near(serial.device_s, compute_s.max(memory_s));
+        near(serial.host_s, host_s);
+        near(serial.launch_s, launch_s);
+        near(serial.compute_tflops, tflops);
+        assert!(matches!(serial.compute_source, ComputeSource::Override));
+
+        let h2d = expected_transfer(
+            workload.h2d,
+            workload.copy_mode,
+            rates.h2d.unwrap().gbps,
+            rates.h2d_latency_us,
+        );
+        let d2h = expected_transfer(
+            workload.d2h,
+            workload.copy_mode,
+            rates.d2h.unwrap().gbps,
+            rates.d2h_latency_us,
+        );
+        let g2g = expected_transfer(
+            workload.g2g,
+            workload.copy_mode,
+            rates.g2g.gbps,
+            rates.g2g_latency_us,
+        );
+        near(serial.h2d.map_or(0.0, |time| time.seconds), h2d);
+        near(serial.d2h.map_or(0.0, |time| time.seconds), d2h);
+        near(serial.g2g.map_or(0.0, |time| time.seconds), g2g);
+        assert_transfer(serial.h2d.as_ref(), workload.h2d, workload.copy_mode);
+        assert_transfer(serial.d2h.as_ref(), workload.d2h, workload.copy_mode);
+        assert_transfer(serial.g2g.as_ref(), workload.g2g, workload.copy_mode);
+
+        let stages = [
+            serial.host_s,
+            serial.h2d.map_or(0.0, |time| time.seconds),
+            serial.device_s,
+            serial.g2g.map_or(0.0, |time| time.seconds),
+            serial.d2h.map_or(0.0, |time| time.seconds),
+            serial.launch_s,
+        ];
+        near(serial.total_s, stages.iter().sum());
+        near(
+            overlapped.total_s,
+            stages.iter().copied().fold(0.0, f64::max),
+        );
+        assert!(serial.total_s + 1e-9 >= overlapped.total_s);
+
+        if workload.hbm_bytes == 0.0 {
+            if workload.flops > 0.0 {
+                assert!(serial.intensity.is_infinite());
+            } else {
+                near(serial.intensity, 0.0);
+            }
+        } else {
+            near(serial.intensity, workload.flops / workload.hbm_bytes);
+        }
+    }
+
+    fn expected_transfer(
+        transfer: Transfer,
+        mode: CopyMode,
+        gbps: f64,
+        latency_us: Option<f64>,
+    ) -> f64 {
+        if transfer.copies == 0 {
+            return 0.0;
+        }
+        let waits = match mode {
+            CopyMode::Sync => transfer.copies,
+            CopyMode::Async => 1,
+        };
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "the drawn copy count is at most 100"
+        )]
+        let waits = waits as f64;
+        let bandwidth_s = transfer.bytes / (gbps * 1e9);
+        latency_us.map_or(bandwidth_s, |latency| waits * latency / 1e6 + bandwidth_s)
+    }
+
+    fn assert_transfer(time: Option<&TransferTime>, transfer: Transfer, mode: CopyMode) {
+        assert_eq!(time.is_none(), transfer.copies == 0);
+        let Some(time) = time else {
+            return;
+        };
+        let waits = match mode {
+            CopyMode::Sync => transfer.copies,
+            CopyMode::Async => 1,
+        };
+        assert_eq!(time.waits, waits);
+        assert_eq!(time.copies, transfer.copies);
+        assert_eq!(time.mode, mode);
+        let queued = waits < transfer.copies;
+        assert_eq!(time.lower_bound, queued.then_some(LowerBound::QueuedCopies));
     }
 }

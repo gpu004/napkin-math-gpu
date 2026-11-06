@@ -13,7 +13,7 @@ use napkin::estimate::{
 };
 use napkin::fit;
 use napkin::llm::{self, Model, Workload as LlmWorkload, element_bytes};
-use napkin::price::{self, Date, STALE_AFTER_DAYS};
+use napkin::price::{self, Date, STALE_AFTER_DAYS, Terms};
 use napkin::profile::collective::{Collective, Topology};
 use napkin::profile::{self, Basis, Dtype, Profile};
 use napkin::units::{
@@ -191,6 +191,16 @@ enum Command {
     },
     /// List dated GPU price records and their age.
     Prices,
+    /// Compare two GPUs' work per dollar at each provider's paired prices.
+    Breakeven {
+        #[arg(long, default_value = "h100")]
+        gpu: String,
+        /// GPU to compare against --gpu.
+        #[arg(long, default_value = "b200")]
+        vs: String,
+        #[arg(long, value_enum, default_value_t = Dtype::Bf16)]
+        dtype: Dtype,
+    },
     /// Derive memory, prefill and decode inputs for a transformer from explicit architecture and workload flags.
     Llm(LlmArgs),
     /// Rewrite the `<!-- napkin ... -->` marker blocks in Markdown files (README.md by default).
@@ -386,6 +396,7 @@ fn dispatch(command: &Command) -> Result<String, String> {
             unit,
         ),
         Command::Prices => cmd_prices(),
+        Command::Breakeven { gpu, vs, dtype } => cmd_breakeven(gpu, vs, *dtype),
         Command::Readme { check, paths, .. } => cmd_readme(paths, *check),
         Command::Validate { write, check } => cmd_validate(write.as_deref(), check.as_deref()),
         Command::MergeShapes { from, profile } => napkin::merge_shapes(from, profile)
@@ -410,7 +421,8 @@ fn cmd_collective(
         dtype,
         bytes: units::parse_bytes(bytes).map_err(|error| error.to_string())?,
     };
-    let estimate = collective::estimate(&query)?;
+    let estimate = collective::estimate(&query)
+        .map_err(|error| with_network_hint(error, gpu_profile, &query))?;
     let evidence = estimate.evidence;
     let redop = if op == Collective::AllGather {
         String::new()
@@ -468,6 +480,26 @@ fn cmd_collective(
         fmt_gbps(estimate.peak.busbw_gbps, 3),
         fmt_curve_bytes(estimate.peak.bytes)
     );
+    append_unused_links(&mut out, gpu_profile);
+    let captured_date = evidence
+        .captured_at
+        .get(..10)
+        .map_or(evidence.captured_at.as_str(), |captured| captured);
+    let _ = writeln!(
+        out,
+        "evidence    NCCL {} · nccl-tests {} · {} · {} · {}",
+        evidence.nccl_version,
+        evidence.nccl_tests,
+        evidence.modal_request,
+        captured_date,
+        evidence.raw_dir
+    );
+    Ok(out)
+}
+
+/// Lists the other link rates the profile knows, so a reader can see they
+/// were deliberately left out of the curve-based answer.
+fn append_unused_links(out: &mut String, gpu_profile: &Profile) {
     let peer_copy = gpu_profile
         .measured
         .as_ref()
@@ -487,20 +519,31 @@ fn cmd_collective(
         "nvlink      {} per-GPU datasheet aggregate, both directions (not used here)",
         fmt_gbps(gpu_profile.ceiling.nvlink_gbps, 3)
     );
-    let captured_date = evidence
-        .captured_at
-        .get(..10)
-        .map_or(evidence.captured_at.as_str(), |captured| captured);
-    let _ = writeln!(
-        out,
-        "evidence    NCCL {} · nccl-tests {} · {} · {} · {}",
-        evidence.nccl_version,
-        evidence.nccl_tests,
-        evidence.modal_request,
-        captured_date,
-        evidence.raw_dir
-    );
-    Ok(out)
+    if let Some(network) = &gpu_profile.ceiling.network {
+        let _ = writeln!(
+            out,
+            "network     {} per-GPU RDMA datasheet line rate, one direction, across machines (not used here)",
+            fmt_gbps(network.gbps(), 3)
+        );
+    }
+}
+
+/// When no curve matches, for example `--count 16` on two 8-GPU machines,
+/// points at the datasheet link instead of leaving the user with a bare refusal.
+fn with_network_hint(error: String, gpu_profile: &Profile, query: &Query<'_>) -> String {
+    match &gpu_profile.ceiling.network {
+        Some(network) if collective::find_evidence(profile::collectives(), query).is_none() => {
+            format!(
+                "{error}\nevery NCCL Tests curve is one machine; across machines {} has only a datasheet RDMA link: {} Gbit/s = {} per GPU each way, {} one-way, {} GPUs per machine. Combine it with the one-machine curves by hand (README.md, \"Across machines\")",
+                gpu_profile.name,
+                fmt_sig(network.nic_gbit_per_gpu, 3),
+                fmt_gbps(network.gbps(), 3),
+                fmt_duration(network.latency_us / 1e6, 3),
+                network.gpus_per_node,
+            )
+        }
+        _ => error,
+    }
 }
 
 fn fmt_curve_bytes(bytes: u64) -> String {
@@ -919,34 +962,7 @@ fn cmd_cost(
         return Err("currency must be exactly three uppercase ASCII letters".to_owned());
     }
     let (price_per_gpu_hour, first_line, price_line) = if let Some(record_id) = offer {
-        let record = price::find(record_id).ok_or_else(|| {
-            format!("no price record {record_id:?}; run `napkin prices` or pass --price")
-        })?;
-        let today =
-            Date::today().ok_or_else(|| "system clock is before the Unix epoch".to_owned())?;
-        let age = record.age_days(today);
-        let display_price = record.listed_price();
-        let terms = record.terms_label();
-        let first_line = format!(
-            "{gpus} {} · {} {} ({}): {display_price} = {}/GPU-hour",
-            if gpus == 1 { "GPU" } else { "GPUs" },
-            record.provider,
-            record.sku,
-            record.id,
-            fmt_money(record.per_gpu_hour(), record.currency)
-        );
-        let price_line = if record.is_stale(today) {
-            format!(
-                "price       STALE: dated {}, {age} days old (stale after {STALE_AFTER_DAYS} days); re-check {} or pass --price\n",
-                record.date, record.source
-            )
-        } else {
-            format!(
-                "price       {terms} · dated {}, {age} days old · {}\n",
-                record.date, record.source
-            )
-        };
-        (record.per_gpu_hour(), first_line, Some(price_line))
+        offer_price(record_id, gpus)?
     } else {
         let price = price.ok_or_else(|| "pass exactly one of --price or --offer".to_owned())?;
         let amount = units::parse_number(price).map_err(|error| error.to_string())?;
@@ -1005,6 +1021,52 @@ fn cmd_cost(
     }
     .append(&mut out, &job, &result);
     Ok(out)
+}
+
+/// Resolves `napkin cost --offer`: the record's per-GPU-hour price, the
+/// headline line, and the price provenance plus any commitment or partial
+/// instance caveat.
+fn offer_price(record_id: &str, gpus: u32) -> Result<(f64, String, Option<String>), String> {
+    let record = price::find(record_id).ok_or_else(|| {
+        format!("no price record {record_id:?}; run `napkin prices` or pass --price")
+    })?;
+    let today = Date::today().ok_or_else(|| "system clock is before the Unix epoch".to_owned())?;
+    let age = record.age_days(today);
+    let display_price = record.listed_price();
+    let terms = record.terms_label();
+    let first_line = format!(
+        "{gpus} {} · {} {} ({}): {display_price} = {}/GPU-hour",
+        if gpus == 1 { "GPU" } else { "GPUs" },
+        record.provider,
+        record.sku,
+        record.id,
+        fmt_money(record.per_gpu_hour(), record.currency)
+    );
+    let mut price_line = if record.is_stale(today) {
+        format!(
+            "price       STALE: dated {}, {age} days old (stale after {STALE_AFTER_DAYS} days); re-check {} or pass --price\n",
+            record.date, record.source
+        )
+    } else {
+        format!(
+            "price       {terms} · dated {}, {age} days old · {}\n",
+            record.date, record.source
+        )
+    };
+    if let Terms::Commitment { years } = record.terms {
+        let _ = writeln!(
+            price_line,
+            "commitment  billed every hour of the {years}-year term, busy or not; this counts only this job's hours"
+        );
+    }
+    if !gpus.is_multiple_of(record.gpus) {
+        let _ = writeln!(
+            price_line,
+            "instance    {} rents {} GPUs at a time; this prices {gpus} at the per-GPU rate",
+            record.id, record.gpus
+        );
+    }
+    Ok((record.per_gpu_hour(), first_line, Some(price_line)))
 }
 
 struct CostDisplay<'a> {
@@ -1154,6 +1216,13 @@ fn cmd_prices() -> Result<String, String> {
         }
     }
     Ok(out)
+}
+
+fn cmd_breakeven(gpu: &str, vs: &str, dtype: Dtype) -> Result<String, String> {
+    let a = get_profile(gpu)?;
+    let b = get_profile(vs)?;
+    napkin::table::breakeven(price::builtin(), a, b, dtype)
+        .ok_or_else(|| format!("{gpu} or {vs} has no {dtype} rate"))
 }
 
 fn byte_arg(bytes: f64) -> String {
@@ -1437,6 +1506,14 @@ fn render_marker(command: &str) -> Result<String, String> {
         ["variation"] => Ok(cmd_variation()),
         ["compare"] => Ok(cmd_compare(false)),
         ["prices"] => Ok(napkin::table::prices(price::builtin())),
+        ["breakeven", ..] => {
+            let cli = Cli::try_parse_from(std::iter::once("napkin").chain(tokens.iter().copied()))
+                .map_err(|error| error.to_string())?;
+            match &cli.command {
+                Command::Breakeven { gpu, vs, dtype } => cmd_breakeven(gpu, vs, *dtype),
+                _ => Err(format!("unsupported marker command {command:?}")),
+            }
+        }
         ["example", args @ ..] => {
             let cli = Cli::try_parse_from(std::iter::once("napkin").chain(args.iter().copied()))
                 .map_err(|error| error.to_string())?;

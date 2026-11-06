@@ -4,13 +4,13 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use crate::price::PriceRecord;
+use crate::price::{PriceRecord, pairs};
 use crate::profile::{
-    Basis, CopyPath, CrossCheck, Dtype, GpuState, Measured, Profile, Rates, RoundState, Span,
-    TransferMetric, TransferRate,
+    Basis, CopyPath, CrossCheck, Dtype, GpuState, Measured, Network, Profile, Rates, RoundState,
+    Span, TransferMetric, TransferRate,
 };
 use crate::units::{
-    fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_sig, fmt_tflops, round_sig,
+    fmt_bytes, fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_sig, fmt_tflops, round_sig,
 };
 
 mod between_machines;
@@ -151,6 +151,11 @@ pub fn prices(records: &[PriceRecord]) -> String {
             .source
             .strip_prefix("https://")
             .unwrap_or(record.source);
+        // The Azure API query string is longer than the rest of the row; the
+        // link keeps it.
+        let source_text = source_text
+            .split_once('?')
+            .map_or(source_text, |(path, _)| path);
         let source = format!("[{source_text}]({})", record.source);
         let id = format!("`{}`", record.id);
         emit(
@@ -185,6 +190,70 @@ pub fn prices(records: &[PriceRecord]) -> String {
     out
 }
 
+/// Renders, for each provider and terms that price both GPUs, the work per
+/// dollar of each and the utilization ratio at which `b` stops being cheaper
+/// per job. At Modal's on-demand prices, H100 at $3.95/h and 691 TFLOP/s bf16
+/// does 630 PFLOP per dollar and B200 at $6.25/h and 1325 TFLOP/s does 760, so
+/// the B200 is cheaper per job while its utilization stays above
+/// 630 / 760 ≈ 0.83 of the H100's. Above 1, the B200 costs more per job even
+/// at equal utilization. Returns `None` when either GPU has no `dtype` rate.
+#[must_use]
+pub fn breakeven(
+    records: &[PriceRecord],
+    a: &Profile,
+    b: &Profile,
+    dtype: Dtype,
+) -> Option<String> {
+    let rate_a = *a.rates(false).compute_tflops.get(&dtype)?;
+    let rate_b = *b.rates(false).compute_tflops.get(&dtype)?;
+    let name_a = a.id.to_uppercase();
+    let name_b = b.id.to_uppercase();
+    let mut out = String::new();
+    emit(
+        &mut out,
+        &[
+            "Provider",
+            "Terms",
+            &format!("{name_a} per GPU-hour"),
+            &format!("{name_b} per GPU-hour"),
+            &format!("{name_a} {dtype} per dollar"),
+            &format!("{name_b} {dtype} per dollar"),
+            &format!("{name_b} cheaper per job above"),
+        ],
+    );
+    emit(
+        &mut out,
+        &["---", "---", "---:", "---:", "---:", "---:", "---:"],
+    );
+    for (price_a, price_b) in pairs(records, &a.id, &b.id) {
+        let pflop_per_dollar =
+            |tflops: f64, record: &PriceRecord| tflops * 3600.0 / record.per_gpu_hour() / 1e3;
+        let work_a = pflop_per_dollar(rate_a.tflops, price_a);
+        let work_b = pflop_per_dollar(rate_b.tflops, price_b);
+        emit(
+            &mut out,
+            &[
+                price_a.provider,
+                &price_a.terms_label(),
+                &fmt_money(price_a.per_gpu_hour(), price_a.currency),
+                &fmt_money(price_b.per_gpu_hour(), price_b.currency),
+                &format!("{} PFLOP", fmt_sig(work_a, 2)),
+                &format!("{} PFLOP", fmt_sig(work_b, 2)),
+                &format!("{}× {name_a}'s utilization", fmt_sig(work_a / work_b, 2)),
+            ],
+        );
+    }
+    let _ = writeln!(
+        out,
+        "\nRates: {name_a} {} {dtype} ({}), {name_b} {} {dtype} ({}). Work per dollar is rate × 3600 s ÷ price per GPU-hour.",
+        fmt_tflops(rate_a.tflops, 3),
+        rate_a.basis,
+        fmt_tflops(rate_b.tflops, 3),
+        rate_b.basis,
+    );
+    Some(out)
+}
+
 /// Renders the two "Numbers" tables (data movement + dense GEMM) for a
 /// measured profile. Returns `None` when the profile has no measurement.
 #[must_use]
@@ -192,8 +261,12 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
     let m = profile.measured.as_ref()?;
     let rates = profile.rates(false);
     let sig = if exact { 3 } else { SIG };
+    let network = profile.ceiling.network.as_ref();
     let mut out = String::new();
-    append_operation_table(&mut out, m, &rates, exact);
+    append_operation_table(&mut out, m, &rates, network, exact);
+    if let Some(network) = network {
+        network_note(&mut out, network);
+    }
     out.push('\n');
     append_gemm_table(&mut out, m, exact);
     let measured_shapes = if m
@@ -221,7 +294,13 @@ fn emit_owned(out: &mut String, cells: &[String]) {
     emit(out, &cells.iter().map(String::as_str).collect::<Vec<_>>());
 }
 
-fn append_operation_table(out: &mut String, m: &Measured, rates: &Rates, exact: bool) {
+fn append_operation_table(
+    out: &mut String,
+    m: &Measured,
+    rates: &Rates,
+    network: Option<&Network>,
+    exact: bool,
+) {
     emit(
         out,
         &[
@@ -234,7 +313,11 @@ fn append_operation_table(out: &mut String, m: &Measured, rates: &Rates, exact: 
         ],
     );
     emit(out, &["---", "---:", "---:", "---:", "---:", "---"]);
-    for cells in operation_rows(m, rates, exact) {
+    let mut rows = operation_rows(m, rates, exact);
+    if let Some(network) = network {
+        rows.push(network_row(network, exact));
+    }
+    for cells in rows {
         if cells[1..5].iter().all(String::is_empty) {
             continue;
         }
@@ -282,6 +365,38 @@ fn operation_rows(m: &Measured, rates: &Rates, exact: bool) -> Vec<[String; 6]> 
         exact,
     ));
     rows
+}
+
+fn network_row(network: &Network, exact: bool) -> [String; 6] {
+    let sig = if exact { 3 } else { SIG };
+    let gbps = network.gbps();
+    [
+        format!(
+            "GPU ↔ GPU across machines, RDMA one-way ({} Gbit/s NIC per GPU)",
+            fmt_sig(network.nic_gbit_per_gpu, 3)
+        ),
+        fmt_duration(network.latency_us / 1e6, sig),
+        fmt_gbps(gbps, sig),
+        cell_time(1e6, gbps, exact),
+        cell_time(1e9, gbps, exact),
+        "datasheet line rate".to_owned(),
+    ]
+}
+
+/// Says under the table that the RDMA row is a vendor ceiling and where each
+/// of its numbers comes from, because every other transfer row is measured.
+fn network_note(out: &mut String, network: &Network) {
+    let _ = writeln!(
+        out,
+        "\nThe RDMA row is not measured: no NCCL Tests curve here spans two machines. It is the {} \
+         line rate, {} Gbit/s / 8 = {} per GPU in each direction, with {} GPUs per machine \
+         and one NIC each. Source: {}",
+        network.system,
+        fmt_sig(network.nic_gbit_per_gpu, 3),
+        fmt_gbps(network.gbps(), 3),
+        network.gpus_per_node,
+        network.source,
+    );
 }
 
 fn non_transfer_rows(
@@ -763,7 +878,73 @@ pub fn compare(profiles: &[Profile], exact: bool) -> String {
 
     append_measured_table(&mut out, profiles);
     append_transfer_cross_check_table(&mut out, profiles);
+    append_copy_size_table(&mut out, profiles, exact);
     out
+}
+
+/// One row per GPU and copy kind with a measured fixed cost: the 4-byte
+/// synchronous copy latency `L`, the bandwidth `P` that `napkin estimate`
+/// charges, and two sizes read off the line `time = L + bytes / P`. On an
+/// H100 with `L = 8.8 μs` and `P = 55.5 GB/s`, a copy stays within 5% of `L`
+/// up to `0.05 × L × P ≈ 24 KB` and takes `2 × L` at `L × P ≈ 490 KB`.
+fn append_copy_size_table(out: &mut String, profiles: &[Profile], exact: bool) {
+    let sig = if exact { 3 } else { 2 };
+    let rows: Vec<_> = profiles
+        .iter()
+        .flat_map(|profile| {
+            let rates = profile.rates(false);
+            [
+                ("H2D", rates.h2d_latency_us, rates.h2d),
+                ("D2H", rates.d2h_latency_us, rates.d2h),
+                ("GPU ↔ GPU", rates.g2g_latency_us, Some(rates.g2g)),
+            ]
+            .into_iter()
+            .filter_map(move |(copy, latency_us, rate)| Some((profile, copy, latency_us?, rate?)))
+        })
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    out.push('\n');
+    emit(
+        out,
+        &[
+            "GPU",
+            "Copy",
+            "Latency `L` (4 B)",
+            "Bandwidth `P`",
+            "Latency size `0.05 × L × P`",
+            "Break-even `L × P`",
+        ],
+    );
+    emit(out, &["---", "---", "---:", "---:", "---:", "---:"]);
+    for (profile, copy, latency_us, rate) in rows {
+        let break_even_bytes = latency_us * 1e-6 * rate.gbps * 1e9;
+        emit(
+            out,
+            &[
+                &profile.name,
+                copy,
+                &fmt_duration(latency_us / 1e6, sig),
+                &fmt_gbps(rate.gbps, sig),
+                &fmt_bytes(SPREAD_FLAG * break_even_bytes, sig),
+                &fmt_bytes(break_even_bytes, sig),
+            ],
+        );
+    }
+    let _ = writeln!(
+        out,
+        "\nA latency is one copy at a time, each waiting for the last, at the largest size that \
+         takes as long as the smallest. napkin-bench times only the smallest, a 4-byte copy plus \
+         the stream synchronize that waits for it, so the last two columns come from the line \
+         `time = L + bytes / P`, not from a sweep of sizes. At the latency size, a copy of \
+         `{:.2} × L × P` bytes takes {:.0}% longer than `L`, the spread at which rounds are \
+         flagged as disagreeing. At break-even the bytes cost as much as the fixed cost and the \
+         copy takes `2 × L`: smaller copies are latency-bound, larger ones bandwidth-bound. `P` \
+         is the rate `napkin estimate` charges, with the basis in the first table.",
+        SPREAD_FLAG,
+        SPREAD_FLAG * 100.0,
+    );
 }
 
 fn append_measured_table(out: &mut String, profiles: &[Profile]) {
@@ -1160,6 +1341,55 @@ mod tests {
             "{table}"
         );
         assert!(table.contains("Board limits: 700 W"), "{table}");
+    }
+
+    #[test]
+    fn network_row_is_labelled_datasheet_and_explained() {
+        let table = numbers(&h100_with(&[], None), false).unwrap();
+        assert!(
+            table.contains(
+                "| GPU ↔ GPU across machines, RDMA one-way (400 Gbit/s NIC per GPU) | 5 μs | 50 GB/s | 20 μs | 20 ms | datasheet line rate |"
+            ),
+            "{table}"
+        );
+        assert!(table.contains("The RDMA row is not measured"), "{table}");
+        assert!(
+            table.contains(
+                "400 Gbit/s / 8 = 50 GB/s per GPU in each direction, with 8 GPUs per machine"
+            ),
+            "{table}"
+        );
+
+        let mut without = h100_with(&[], None);
+        without.ceiling.network = None;
+        let table = numbers(&without, false).unwrap();
+        assert!(!table.contains("RDMA"), "{table}");
+    }
+
+    #[test]
+    fn copy_sizes_follow_latency_times_bandwidth() {
+        let mut profile = h100_with(&[], None);
+        profile.nvbandwidth = None;
+        let measured = profile.measured.as_mut().unwrap();
+        measured.h2d_latency_us = Some(10.0);
+        measured.h2d_gbps = 50.0;
+        measured.d2h_latency_us = None;
+        measured.g2g_latency_us = None;
+        let table = compare(&[profile.clone()], false);
+        assert!(
+            table.contains("| H100 SXM 80GB | H2D | 10 μs | 50 GB/s | 25 KB | 500 KB |"),
+            "{table}"
+        );
+        assert!(!table.contains("| H100 SXM 80GB | D2H |"), "{table}");
+        assert!(!table.contains("| GPU ↔ GPU |"), "{table}");
+        assert!(
+            table.contains("`0.05 × L × P` bytes takes 5% longer"),
+            "{table}"
+        );
+
+        profile.measured.as_mut().unwrap().h2d_latency_us = None;
+        let table = compare(&[profile], false);
+        assert!(!table.contains("Break-even"), "{table}");
     }
 
     #[test]
