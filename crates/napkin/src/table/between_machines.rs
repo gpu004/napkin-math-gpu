@@ -163,7 +163,8 @@ fn short_uuids(host: &Host) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::table::tests::{h100_with, repeat_with_hbm, table_rows};
+    use crate::table::test_support::{repeat_with_hbm, table_rows};
+    use crate::table::tests::h100_with;
 
     #[test]
     fn variation_without_repeats_says_how_to_record_them() {

@@ -258,7 +258,8 @@ fn largest_nvlink_all_reduce<'a>(
 mod tests {
     use super::*;
     use crate::profile::find;
-    use crate::table::tests::{h100_with, repeat_with_hbm, table_rows};
+    use crate::table::test_support::{repeat_with_hbm, table_rows};
+    use crate::table::tests::h100_with;
 
     #[test]
     fn summary_has_one_latency_and_one_throughput_per_row() {

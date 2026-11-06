@@ -119,7 +119,8 @@ pub fn unit_costs(profiles: &[Profile], records: &[PriceRecord]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::table::tests::{h100_with, table_rows};
+    use crate::table::test_support::table_rows;
+    use crate::table::tests::h100_with;
 
     #[test]
     fn unit_costs_multiply_one_gpus_time_by_gpus_billed_and_price() {
