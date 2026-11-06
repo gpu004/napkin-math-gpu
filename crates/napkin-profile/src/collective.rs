@@ -61,13 +61,17 @@ impl fmt::Display for Collective {
 /// The measured communication path used by NCCL.
 ///
 /// `nvlink` means one node where NCCL built every ring over `NVLink` and moved
-/// data GPU-to-GPU via P2P, without host memory or a network. `pcie` is
-/// available as a name, but estimates require matching measurement evidence.
+/// data GPU-to-GPU via P2P, without host memory or a network. `rdma` means
+/// several machines, `NVLink` inside each, where NCCL's log shows the rings
+/// crossing between machines over its IB transport (`InfiniBand` or `RoCE`),
+/// never TCP sockets. `pcie` is available as a name, but estimates require
+/// matching measurement evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Topology {
     Nvlink,
     Pcie,
+    Rdma,
 }
 
 impl fmt::Display for Topology {
@@ -75,6 +79,7 @@ impl fmt::Display for Topology {
         f.write_str(match self {
             Self::Nvlink => "nvlink",
             Self::Pcie => "pcie",
+            Self::Rdma => "rdma",
         })
     }
 }
@@ -186,6 +191,7 @@ fn bandwidth_matches(actual: f64, expected: f64) -> bool {
 fn validate_test_json(
     collective: Collective,
     ranks: u32,
+    processes: u32,
     document: &TestJson,
 ) -> Result<(), String> {
     if !document
@@ -211,9 +217,12 @@ fn validate_test_json(
             collective.binary()
         ));
     }
-    if u64::from(document.config.ngpus) * u64::from(document.config.nthreads) != u64::from(ranks) {
+    // The JSON describes only MPI rank 0's process: two machines running
+    // `-g 8` each report ngpus 8, nthreads 1 for 16 ranks.
+    let per_process = u64::from(document.config.ngpus) * u64::from(document.config.nthreads);
+    if per_process * u64::from(processes) != u64::from(ranks) {
         return Err(format!(
-            "{} rank mismatch: {} GPUs × {} threads does not match {ranks} ranks",
+            "{} rank mismatch: {} GPUs × {} threads × {processes} processes does not match {ranks} ranks",
             collective.binary(),
             document.config.ngpus,
             document.config.nthreads
@@ -286,19 +295,23 @@ fn parse_point(
 
 /// Parses and validates one NCCL Tests JSON curve.
 ///
+/// `ranks` counts every GPU in the collective; `processes` counts the MPI
+/// processes that shared them (1 without MPI).
+///
 /// # Errors
 /// Returns a description of invalid arguments, validation evidence, rows, or
 /// size/bandwidth conventions.
 pub fn parse_curve(
     collective: Collective,
     ranks: u32,
+    processes: u32,
     dtype: Dtype,
     json: &str,
 ) -> Result<Vec<CurvePoint>, String> {
     let expected_type = dtype_nccl_name(dtype)?;
     let document: TestJson = serde_json::from_str(json)
         .map_err(|error| format!("invalid {} JSON: {error}", collective.binary()))?;
-    validate_test_json(collective, ranks, &document)?;
+    validate_test_json(collective, ranks, processes, &document)?;
 
     let expected_redop = match collective {
         Collective::AllGather => "none",
@@ -333,6 +346,8 @@ struct RunJson {
     captured_at: String,
     modal_request: String,
     gpu_count: u32,
+    #[serde(default = "one_process")]
+    processes: u32,
     rank_layout: String,
     topology: Topology,
     dtype: String,
@@ -340,6 +355,10 @@ struct RunJson {
     nccl_tests: NcclTests,
     nvidia_smi: Vec<String>,
     commands: std::collections::BTreeMap<String, String>,
+}
+
+const fn one_process() -> u32 {
+    1
 }
 
 #[derive(Deserialize)]
@@ -458,7 +477,7 @@ pub fn parse_evidence(
                 format_nccl_version(curve_version)
             ));
         }
-        let points = parse_curve(collective, run.gpu_count, dtype, json)
+        let points = parse_curve(collective, run.gpu_count, run.processes, dtype, json)
             .map_err(|error| format!("invalid {} evidence: {error}", collective.binary()))?;
         let command = run
             .commands
@@ -505,7 +524,7 @@ mod tests {
     const SCATTER: &str = include_str!("../fixtures/nccl-tests/h100x2/reduce_scatter_perf.json");
 
     fn parse(collective: Collective, json: &str) -> Result<Vec<CurvePoint>, String> {
-        parse_curve(collective, 2, Dtype::Bf16, json)
+        parse_curve(collective, 2, 1, Dtype::Bf16, json)
     }
 
     #[test]
@@ -549,10 +568,36 @@ mod tests {
         assert!(parse(Collective::AllReduce, &validation).is_err());
         assert!(parse(Collective::AllReduce, &bounds).is_err());
         assert!(parse(Collective::AllReduce, &binary).is_err());
-        assert!(parse_curve(Collective::AllReduce, 4, Dtype::Bf16, REDUCE).is_err());
+        assert!(parse_curve(Collective::AllReduce, 4, 1, Dtype::Bf16, REDUCE).is_err());
         assert!(parse(Collective::AllReduce, &redop).is_err());
         assert!(parse(Collective::AllReduce, &busbw).is_err());
-        assert!(parse_curve(Collective::AllReduce, 2, Dtype::Fp8, REDUCE).is_err());
+        assert!(parse_curve(Collective::AllReduce, 2, 1, Dtype::Fp8, REDUCE).is_err());
+    }
+
+    #[test]
+    fn counts_ranks_across_mpi_processes() -> Result<(), String> {
+        // `mpirun -np 2 all_reduce_perf -g 8` across two machines: rank 0's
+        // JSON says 8 GPUs, 1 thread, yet the ring spans 16 GPUs.
+        let document: TestJson =
+            serde_json::from_str(&REDUCE.replace(r#""ngpus": 2"#, r#""ngpus": 8"#))
+                .map_err(|error| error.to_string())?;
+        validate_test_json(Collective::AllReduce, 16, 2, &document)?;
+        assert!(validate_test_json(Collective::AllReduce, 16, 1, &document).is_err());
+        assert!(validate_test_json(Collective::AllReduce, 8, 2, &document).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn reads_processes_and_rdma_topology_from_run_json() -> Result<(), String> {
+        let run = RUN
+            .replace(r#""topology": "nvlink""#, r#""topology": "rdma""#)
+            .replacen('{', r#"{"processes": 2,"#, 1);
+        let parsed: RunJson = serde_json::from_str(&run).map_err(|error| error.to_string())?;
+        assert_eq!(parsed.processes, 2);
+        assert_eq!(parsed.topology, Topology::Rdma);
+        let single: RunJson = serde_json::from_str(RUN).map_err(|error| error.to_string())?;
+        assert_eq!(single.processes, 1);
+        Ok(())
     }
 
     #[test]

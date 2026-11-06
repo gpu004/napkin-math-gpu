@@ -924,6 +924,7 @@ fn topology_literal(topology: Topology) -> &'static str {
     match topology {
         Topology::Nvlink => "Topology::Nvlink",
         Topology::Pcie => "Topology::Pcie",
+        Topology::Rdma => "Topology::Rdma",
     }
 }
 
