@@ -114,6 +114,37 @@ pub struct Profile {
     pub measured: Option<Measured>,
     #[serde(skip)]
     pub nvbandwidth: Option<Nvbandwidth>,
+    /// Full runs repeated on other machines or days, attached from
+    /// `profiles/repeats/<id>/*.json` in capture order. They never replace
+    /// `measured`; they show how far its numbers move between machines.
+    #[serde(skip)]
+    pub repeats: Vec<Repeat>,
+}
+
+/// One repeated full `napkin-bench` run and the machine it ran on.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Repeat {
+    pub host: Host,
+    pub measured: Measured,
+}
+
+/// What identifies the machine behind a Modal run. Modal exposes no machine
+/// ID inside a container, so this is the strongest evidence available: GPU
+/// UUIDs are unique per physical GPU, so runs with disjoint UUIDs used
+/// different GPUs, while two 2-GPU containers can still share one 8-GPU node
+/// unless their provider or region differs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Host {
+    /// `MODAL_CLOUD_PROVIDER`, e.g. `"CLOUD_PROVIDER_OCI"`.
+    pub cloud_provider: String,
+    /// `MODAL_REGION`, e.g. `"us-central"`.
+    pub region: String,
+    /// `MODAL_TASK_ID` of the container, for finding the run in Modal.
+    pub task_id: String,
+    /// `nvidia-smi --query-gpu=uuid`, sorted.
+    pub gpu_uuids: Vec<String>,
 }
 
 impl Profile {

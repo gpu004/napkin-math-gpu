@@ -145,10 +145,16 @@ pub fn parse_duration(s: &str) -> Result<f64, ParseError> {
 /// Formats a price to three significant digits.
 #[must_use]
 pub fn fmt_money(value: f64, currency: &str) -> String {
+    fmt_money_sig(value, currency, 3)
+}
+
+/// Formats a currency amount at `sig` significant digits.
+#[must_use]
+pub fn fmt_money_sig(value: f64, currency: &str, sig: u32) -> String {
     if currency == "USD" {
-        format!("${}", fmt_sig(value, 3))
+        format!("${}", fmt_sig(value, sig))
     } else {
-        format!("{} {currency}", fmt_sig(value, 3))
+        format!("{} {currency}", fmt_sig(value, sig))
     }
 }
 

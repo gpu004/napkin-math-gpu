@@ -4,10 +4,17 @@ Usage:
     modal run modal/bench.py --gpu h100
     modal run modal/bench.py --gpu a100 --quick
 
+    modal run modal/bench.py --gpu h100 --repeat 3
+
 Full runs write profiles/<gpu>.measured.json. Quick runs print to stdout only.
 Full --merge-shapes runs preserve scalar profile data and write target/modal/<gpu>.run.json.
+--repeat N starts N full runs at once, one per container (max_inputs=1, or Modal
+may feed every run to one container and so one machine), and writes each to
+profiles/repeats/<gpu>/ with the host it ran on; the canonical profile is left
+alone.
 """
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -47,24 +54,73 @@ def _run(quick: bool, gpu_request: str) -> str:
     return out.stdout
 
 
-FUNCS = {
-    name: app.function(
+def _run_on_host(gpu_request: str) -> dict:
+    """A full run plus what identifies the machine it ran on.
+
+    Modal exposes no machine ID inside a container. GPU UUIDs are unique per
+    physical GPU, so two runs with different UUIDs used different GPUs; two
+    2-GPU containers can still share one 8-GPU node unless the provider or
+    region differs.
+    """
+    import os
+
+    measured = json.loads(_run(False, gpu_request))
+    smi = subprocess.run(
+        ["nvidia-smi", "--query-gpu=uuid", "--format=csv,noheader"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    host = {
+        "cloud_provider": os.environ["MODAL_CLOUD_PROVIDER"],
+        "region": os.environ["MODAL_REGION"],
+        "task_id": os.environ["MODAL_TASK_ID"],
+        "gpu_uuids": sorted(line.strip() for line in smi.stdout.splitlines() if line.strip()),
+    }
+    return {"host": host, "measured": measured}
+
+
+def _function(name: str, request: str, body, **options):
+    return app.function(
         gpu=request,
         cpu=8.0,
         memory=8192,
         timeout=20 * 60,
-        name=f"bench_{name}",
-    )(_run)
+        name=name,
+        **options,
+    )(body)
+
+
+FUNCS = {name: _function(f"bench_{name}", request, _run) for name, request in GPUS.items()}
+REPEAT_FUNCS = {
+    name: _function(f"repeat_{name}", request, _run_on_host, max_inputs=1)
     for name, request in GPUS.items()
 }
 
 
+def _write_repeats(gpu: str, repeats: int) -> None:
+    out_dir = ROOT / "profiles" / "repeats" / gpu
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for run in REPEAT_FUNCS[gpu].map([GPUS[gpu]] * repeats):
+        stamp = run["measured"]["captured_at"].replace(":", "")
+        out = out_dir / f"{stamp}-{run['host']['task_id']}.json"
+        out.write_text(json.dumps(run, indent=2) + "\n")
+        print(f"Wrote {out}")
+
+
 @app.local_entrypoint()
-def main(gpu: str = "h100", quick: bool = False, merge_shapes: bool = False) -> None:
+def main(
+    gpu: str = "h100", quick: bool = False, merge_shapes: bool = False, repeat: int = 0
+) -> None:
     if gpu not in FUNCS:
         raise ValueError(f"--gpu must be one of: {sorted(FUNCS)}")
     if quick and merge_shapes:
         raise ValueError("--merge-shapes cannot be used with --quick")
+    if repeat:
+        if quick or merge_shapes:
+            raise ValueError("--repeat records full runs; drop --quick and --merge-shapes")
+        _write_repeats(gpu, repeat)
+        return
     result = FUNCS[gpu].remote(quick, GPUS[gpu])
     if quick:
         print(result)

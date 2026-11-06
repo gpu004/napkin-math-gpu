@@ -13,6 +13,16 @@ use crate::units::{
     fmt_bytes, fmt_duration, fmt_gbps, fmt_intensity, fmt_money, fmt_sig, fmt_tflops, round_sig,
 };
 
+mod between_machines;
+mod summary;
+#[cfg(test)]
+mod test_support;
+mod unit_costs;
+
+pub use between_machines::variation;
+pub use summary::summary;
+pub use unit_costs::unit_costs;
+
 const SIG: u32 = 1;
 
 /// A cell gets a † when the rounds behind it disagree by more than this
@@ -278,6 +288,10 @@ pub fn numbers(profile: &Profile, exact: bool) -> Option<String> {
         gpu_state_table(&mut out, state);
     }
     Some(out)
+}
+
+fn emit_owned(out: &mut String, cells: &[String]) {
+    emit(out, &cells.iter().map(String::as_str).collect::<Vec<_>>());
 }
 
 fn append_operation_table(
@@ -1052,7 +1066,7 @@ mod tests {
     use super::*;
     use crate::profile::find;
 
-    fn h100_with(samples: &[(&str, Vec<f64>)], gpu_state: Option<GpuState>) -> Profile {
+    pub(super) fn h100_with(samples: &[(&str, Vec<f64>)], gpu_state: Option<GpuState>) -> Profile {
         let mut profile = find("h100").cloned().unwrap();
         let measured = profile.measured.as_mut().unwrap();
         measured.samples_ms = samples
@@ -1061,6 +1075,7 @@ mod tests {
             .collect();
         measured.gpu_state = gpu_state;
         measured.gemm_shapes = None;
+        profile.repeats.clear();
         profile
     }
 

@@ -236,6 +236,41 @@ fn compare_prints_table() {
 }
 
 #[test]
+fn summary_prints_memorization_table() {
+    let (stdout, _, code) = napkin(&["summary", "--gpu", "h100"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.starts_with("| Operation | Latency | Throughput |"),
+        "{stdout}"
+    );
+    let (_, stderr, code) = napkin(&["summary", "--gpu", "t4"]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("unknown GPU"), "{stderr}");
+}
+
+#[test]
+fn unit_costs_prints_one_column_per_price_record() {
+    let (stdout, _, code) = napkin(&["unit-costs"]);
+    assert_eq!(code, 0);
+    let header = stdout.lines().next().unwrap_or("");
+    assert!(header.starts_with("| Work |"), "{stdout}");
+    for id in [
+        "aws-h100",
+        "azure-h100",
+        "gcp-h100",
+        "modal-a100",
+        "modal-h100",
+        "modal-b200",
+        "modal-b300",
+    ] {
+        assert!(
+            header.contains(&format!("`{id}`")),
+            "{id} missing from {header}"
+        );
+    }
+}
+
+#[test]
 fn collective_across_machines_refuses_and_names_the_datasheet_link() {
     let (stdout, stderr, code) = napkin(&[
         "collective",
