@@ -447,8 +447,11 @@ it has no curve for (`--count 4` is an error) rather than scaling a curve.
 
 ### Across machines: a datasheet RDMA link
 
-Every NCCL Tests curve above was measured on one machine. Modal offers
-multi-node clusters in beta, but no run here has used one, so the link between
+Every NCCL Tests curve above was measured on one machine. Modal's
+[multi-node clusters](https://modal.com/docs/guide/multi-node-clusters)
+(checked 2026-11-05) advertise 3,200 Gbps of RDMA per H100 machine, the same
+8 × 400 Gbit/s, and `modal run modal/nccl.py --gpu h100 --count 16` is ready
+to measure it, but no run here has used one yet. Until then the link between
 machines is a datasheet row, the last row of the H100 table:
 
 ```text
@@ -891,7 +894,8 @@ napkin readme --write README.md PROBLEMS.md  # refreshes the tables
 Collective curves come from NVIDIA NCCL Tests, also run on Modal:
 
 ```sh
-modal run modal/nccl.py --gpu h100 --count 2   # writes profiles/nccl-tests/h100x2/
+modal run modal/nccl.py --gpu h100 --count 2    # writes profiles/nccl-tests/h100x2/
+modal run modal/nccl.py --gpu h100 --count 16   # two machines over RDMA: profiles/nccl-tests/h100x16/
 ```
 
 See [BENCHMARKS.md](BENCHMARKS.md#nccl-tests) for what is recorded and how

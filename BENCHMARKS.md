@@ -143,6 +143,29 @@ directory per GPU and count, `profiles/nccl-tests/<id>x<count>/`:
   type `NVL`) and every channel is `via P2P`; the launcher refuses to label a
   run `nvlink` otherwise.
 
+`modal run modal/nccl.py --gpu h100 --count 16` measures two machines instead.
+It asks for a [Modal cluster](https://modal.com/docs/guide/multi-node-clusters)
+(`modal.clustered(size=2, rdma=True)`, `H100!:8` per machine). The image adds
+OpenMPI 4.1.6, sshd and the verbs libraries (`libibverbs1`,
+`ibverbs-providers`), and builds the same NCCL Tests commit with `MPI=1`. Rank
+0 hands rank 1 an ssh key through an ephemeral `modal.Dict`, then `mpirun -np
+2 --map-by ppr:1:node` starts one process per machine, each running `-g 8`.
+So the 16 ranks are GPUs 0–7 on machine 0 and 8–15 on machine 1, and
+`run.json` records `"processes": 2`. The parser needs that field, because the
+`-J` JSON comes from MPI rank 0 alone and reports only its own 8 GPUs. Three
+details differ from one machine:
+
+- Modal gives every container in a cluster the same `NCCL_HOSTID`, so each
+  process sets `NCCL_HOSTID=napkin-node-<MPI rank>`. Otherwise NCCL would see
+  GPU 0 on both machines as one device.
+- OpenMPI and NCCL's bootstrap use TCP over the cluster's IPv6 interface
+  (`NCCL_SOCKET_FAMILY=AF_INET6`, `NCCL_SOCKET_IFNAME`). Only NCCL's data
+  moves over the RDMA NICs.
+- The `rdma` label requires NCCL's log to say `Using network IB` and to route
+  channels between machines `via NET/IB`, never `NET/Socket`. Otherwise the
+  launcher refuses the run, which would have measured Ethernet. An EFA cluster
+  needs the `aws-ofi-nccl` plugin and a label of its own.
+
 `crates/napkin/build.rs` parses these files at build time and rejects any run
 whose correctness checks failed or were off, whose `algbw` does not equal
 `size / time` or whose `busbw` does not equal `algbw` times the
@@ -230,12 +253,12 @@ notes. Measured calibrations live in `profiles/<id>.measured.json`, produced by
   [the H100 profile](profiles/h100.json). It records the DGX H100's one
   400 Gbit/s ConnectX-7 per GPU and eight GPUs per machine, plus the 5 μs
   latency from Simon Eskildsen's napkin-math table, since NVIDIA publishes no
-  end-to-end figure. No NCCL Tests curve spans two machines: Modal's multi-node
-  clusters (`@modal.experimental.clustered(size=2, rdma=True)`) are a private
-  beta that no run here has had access to. `napkin collective` therefore
-  refuses more GPUs than one machine holds and names the datasheet link instead.
-  Once a two-node run exists, it should land as `profiles/nccl-tests/h100x16/`
-  with its own topology label.
+  end-to-end figure. No NCCL Tests curve spans two machines yet. The
+  two-machine launcher above is ready, but it has only been rehearsed on one
+  CPU host with stub binaries, never on a Modal cluster. `napkin collective`
+  therefore refuses more GPUs than one machine holds and names the datasheet
+  link instead. A real run lands as `profiles/nccl-tests/h100x16/` with
+  topology `rdma`.
 
 NVBandwidth v0.10.0 evidence is ingested with per-metric provenance from
 `profiles/nvbandwidth/<gpu>x2/`: verbatim `nvbandwidth.json`, `run.json`
