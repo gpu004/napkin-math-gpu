@@ -72,9 +72,9 @@ def _run_on_host(gpu_request: str) -> dict:
         check=True,
     )
     host = {
-        "cloud_provider": os.environ.get("MODAL_CLOUD_PROVIDER", "unknown"),
-        "region": os.environ.get("MODAL_REGION", "unknown"),
-        "task_id": os.environ.get("MODAL_TASK_ID", "unknown"),
+        "cloud_provider": os.environ["MODAL_CLOUD_PROVIDER"],
+        "region": os.environ["MODAL_REGION"],
+        "task_id": os.environ["MODAL_TASK_ID"],
         "gpu_uuids": sorted(line.strip() for line in smi.stdout.splitlines() if line.strip()),
     }
     return {"host": host, "measured": measured}
