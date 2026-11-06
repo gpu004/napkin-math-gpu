@@ -605,26 +605,18 @@ fn attach_repeats(mut profiles: Vec<Profile>, repeats_dir: &Path) -> Result<Vec<
             let repeat: Repeat = serde_json::from_str(&json)
                 .map_err(|error| format!("invalid repeat JSON in {}: {error}", path.display()))?;
             validate_measured(id, &repeat.measured)?;
-            let mismatch = [
-                (
-                    "gpu_request",
-                    &repeat.measured.gpu_request,
-                    &canonical.gpu_request,
-                ),
-                (
-                    "device_name",
-                    &repeat.measured.device_name,
-                    &canonical.device_name,
-                ),
-            ]
-            .into_iter()
-            .find(|(_, repeat, canonical)| repeat != canonical);
-            if let Some((field, repeat, canonical)) = mismatch {
-                return Err(format!(
-                    "{}: {field} {repeat:?} differs from the canonical profile's {canonical:?}",
-                    path.display()
-                ));
-            }
+            require_same(
+                &path,
+                "gpu_request",
+                &repeat.measured.gpu_request,
+                &canonical.gpu_request,
+            )?;
+            require_same(
+                &path,
+                "device_name",
+                &repeat.measured.device_name,
+                &canonical.device_name,
+            )?;
             if usize::try_from(repeat.measured.device_count).ok()
                 != Some(repeat.host.gpu_uuids.len())
             {
@@ -642,6 +634,16 @@ fn attach_repeats(mut profiles: Vec<Profile>, repeats_dir: &Path) -> Result<Vec<
             .sort_by(|left, right| left.measured.captured_at.cmp(&right.measured.captured_at));
     }
     Ok(profiles)
+}
+
+fn require_same(path: &Path, field: &str, repeat: &str, canonical: &str) -> Result<(), String> {
+    if repeat == canonical {
+        return Ok(());
+    }
+    Err(format!(
+        "{}: {field} {repeat:?} differs from the canonical profile's {canonical:?}",
+        path.display()
+    ))
 }
 
 fn validate_transfer_cross_checks(profiles: &[Profile]) -> Result<(), String> {
@@ -1058,7 +1060,7 @@ fn emit_profile(profile: &Profile, generated: &mut String) {
         .as_ref()
         .map_or_else(|| "None".to_owned(), emit_nvbandwidth);
     emit_field(generated, "        ", "nvbandwidth", &nvbandwidth);
-    let repeats = (0..repeats.len())
+    let repeat_calls = (0..repeats.len())
         .map(|index| format!("generated_repeat_{id}_{index}()"))
         .collect::<Vec<_>>()
         .join(", ");
@@ -1066,10 +1068,10 @@ fn emit_profile(profile: &Profile, generated: &mut String) {
         generated,
         "        ",
         "repeats",
-        &format!("vec![{repeats}]"),
+        &format!("vec![{repeat_calls}]"),
     );
     generated.push_str("    }\n}\n");
-    for (index, repeat) in profile.repeats.iter().enumerate() {
+    for (index, repeat) in repeats.iter().enumerate() {
         let _ = writeln!(
             generated,
             "#[expect(clippy::unreadable_literal, reason = \"preserve source profile precision\")]\n\

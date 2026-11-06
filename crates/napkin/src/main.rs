@@ -298,7 +298,7 @@ fn dispatch(command: &Command) -> Result<String, String> {
         Command::Table { gpu, exact } => cmd_table(gpu, *exact),
         Command::Summary { gpu } => cmd_summary(gpu),
         Command::UnitCosts => Ok(cmd_unit_costs()),
-        Command::Variation => Ok(napkin::table::variation(profile::builtin())),
+        Command::Variation => Ok(cmd_variation()),
         Command::Compare { exact } => Ok(cmd_compare(*exact)),
         Command::Estimate {
             gpu,
@@ -549,6 +549,10 @@ fn cmd_summary(gpu: &str) -> Result<String, String> {
 
 fn cmd_unit_costs() -> String {
     napkin::table::unit_costs(profile::builtin(), price::builtin())
+}
+
+fn cmd_variation() -> String {
+    napkin::table::variation(profile::builtin())
 }
 
 fn cmd_compare(exact: bool) -> String {
@@ -1430,7 +1434,7 @@ fn render_marker(command: &str) -> Result<String, String> {
         ["table", "--gpu", gpu] => cmd_table(gpu, false),
         ["summary", "--gpu", gpu] => cmd_summary(gpu),
         ["unit-costs"] => Ok(cmd_unit_costs()),
-        ["variation"] => Ok(napkin::table::variation(profile::builtin())),
+        ["variation"] => Ok(cmd_variation()),
         ["compare"] => Ok(cmd_compare(false)),
         ["prices"] => Ok(napkin::table::prices(price::builtin())),
         ["example", args @ ..] => {
