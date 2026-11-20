@@ -13,6 +13,7 @@ pub mod profile;
 pub mod table;
 pub mod units;
 pub mod validation;
+pub mod variation;
 
 /// Merge a successful benchmark run's GEMM shape suite into an existing
 /// measured profile without replacing its scalar measurements.

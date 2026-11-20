@@ -5,6 +5,7 @@
 - Commits are conventional: `type(scope): Capitalized summary`.
 - GPU runs happen only on Modal, never locally: `modal run modal/bench.py --gpu h100`.
 - Canonical runs pin GPUs with `!` where needed (`H100!`); never commit `--quick` output.
+- `--repeat N` runs go in `profiles/repeats/<gpu>/` and never replace the canonical profile; they feed `napkin variation` and the summary's ‡ marks.
 - `napkin-profile` is the shared profile contract; `napkin-bench` may import only
   `Measured`, `Dtype`, `GemmShape`, `GemmAlgo`, `GemmCheck`, `tflops`, and the
   GPU-state types `Measured` contains (`GpuState`, `RoundState`, `Span`).
