@@ -141,8 +141,11 @@ impl Monitor {
     }
 }
 
-/// Summarizes the polls that fall inside each window.
+/// Summarizes the polls that fall inside each window. `polls` is everything
+/// one `Monitor::watch` collected, warm-up included, so the energy counter's
+/// update period can be measured over the whole watch.
 pub(crate) fn round_states(polls: &[Poll], windows: &[Window]) -> Vec<RoundState> {
+    let period = counter_period(polls);
     windows
         .iter()
         .map(|w| {
@@ -150,7 +153,7 @@ pub(crate) fn round_states(polls: &[Poll], windows: &[Window]) -> Vec<RoundState
                 .iter()
                 .filter(|p| p.at >= w.start && p.at <= w.end)
                 .collect();
-            let power_w = average_power(&inside);
+            let power_w = period.and_then(|period| average_power(&inside, period));
             let mut clock_limit_reasons = BTreeMap::new();
             for p in &inside {
                 for (name, _) in p.reasons.iter_names() {
@@ -172,25 +175,48 @@ pub(crate) fn round_states(polls: &[Poll], windows: &[Window]) -> Vec<RoundState
         .collect()
 }
 
-/// Average power over a round from NVML's energy counter. The counter only
-/// ticks every few tens of milliseconds on an H100, so two polls 5 ms apart
-/// often read the same value and a naive delta would claim 0 W, or a huge
-/// wattage when one tick lands between them. Measuring from the first poll
-/// that saw a new value to the last one spans whole ticks only. None when the
-/// counter ticked fewer than two times inside the round.
+/// Polls that saw the energy counter change since the poll before them.
+fn ticks<'a>(polls: impl IntoIterator<Item = &'a Poll>) -> Vec<&'a Poll> {
+    let polls: Vec<&Poll> = polls.into_iter().collect();
+    polls
+        .windows(2)
+        .filter(|pair| pair[1].energy_mj != pair[0].energy_mj)
+        .map(|pair| pair[1])
+        .collect()
+}
+
+/// Mean time between energy-counter updates over one whole watch. Each
+/// update is seen up to one poll gap late, but that error falls only on the
+/// first and last update, so over a watch of a few seconds it is a percent or
+/// two. None when the counter changed fewer than two times.
+fn counter_period(polls: &[Poll]) -> Option<Duration> {
+    let ticks = ticks(polls);
+    let (first, last) = (ticks.first()?, ticks.last()?);
+    let intervals = u32::try_from(ticks.len() - 1).ok()?;
+    (intervals > 0).then(|| (last.at - first.at) / intervals)
+}
+
+/// Average power over a round from NVML's energy counter. On an H100 the
+/// counter advances about every 100 ms, while a poll lands every 9–25 ms
+/// because reading the counter alone takes 4–35 ms (#31). The energy between
+/// the first and last update seen inside a ~200 ms round is exact, a whole
+/// number of counter periods, but the time between the two polls that saw
+/// those updates is off by up to a poll gap at each end. Dividing by that time
+/// swung single rounds ±35% and above the board's power limit, so this
+/// divides by the whole periods between the two updates instead, at the
+/// `period` measured over the whole watch. When the counter updates on every
+/// poll, the period is about one poll gap and the rounding changes little.
+/// None when the counter changed fewer than two times inside the round.
 #[expect(
     clippy::cast_precision_loss,
     reason = "one round's energy delta in millijoules is far below 2^52"
 )]
-fn average_power(polls: &[&Poll]) -> Option<f64> {
-    let ticks: Vec<&Poll> = polls
-        .windows(2)
-        .filter(|pair| pair[1].energy_mj != pair[0].energy_mj)
-        .map(|pair| pair[1])
-        .collect();
+fn average_power(polls: &[&Poll], period: Duration) -> Option<f64> {
+    let ticks = ticks(polls.iter().copied());
     let (first, last) = (ticks.first()?, ticks.last()?);
-    (last.at > first.at && last.energy_mj > first.energy_mj).then(|| {
-        (last.energy_mj - first.energy_mj) as f64 / 1e3 / (last.at - first.at).as_secs_f64()
+    let periods = ((last.at - first.at).as_secs_f64() / period.as_secs_f64()).round();
+    (periods >= 1.0 && last.energy_mj > first.energy_mj).then(|| {
+        (last.energy_mj - first.energy_mj) as f64 / 1e3 / (periods * period.as_secs_f64())
     })
 }
 
@@ -203,4 +229,83 @@ fn span(values: impl Iterator<Item = f64>) -> Option<Span> {
         median: median(&mut values),
         max,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Gaps between polls, cycled, in the 9–25 ms range #31 measured on an
+    /// H100 where reading the energy counter took 4–35 ms.
+    const POLL_GAPS_MS: [u64; 8] = [9, 25, 13, 11, 24, 10, 14, 19];
+    const WATCH_MS: u64 = 2_000;
+    const POWER_W: f64 = 660.0;
+
+    /// Polls over one watch of a steady `POWER_W` load, reading a counter
+    /// that advances every `update_ms`, plus seven back-to-back 200 ms
+    /// rounds after a 350 ms warm-up, as `sustained_rounds` times them. With
+    /// 100 ms updates each round then holds the updates at its 50 ms and
+    /// 150 ms marks, the shortest span that yields a power.
+    fn watch(update_ms: u64) -> (Vec<Poll>, Vec<Window>) {
+        let start = Instant::now();
+        let energy_mj = |t_ms: u64| {
+            let updates = t_ms / update_ms;
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "whole millijoules of a positive power over at most two seconds"
+            )]
+            let mj_per_update = (POWER_W * update_ms as f64) as u64;
+            updates * mj_per_update
+        };
+        let mut polls = Vec::new();
+        let mut t_ms = 0;
+        for gap in POLL_GAPS_MS.iter().cycle() {
+            if t_ms > WATCH_MS {
+                break;
+            }
+            polls.push(Poll {
+                at: start + Duration::from_millis(t_ms),
+                sm_mhz: 1_980,
+                mem_mhz: 2_619,
+                temperature_c: 60,
+                energy_mj: energy_mj(t_ms),
+                reasons: ThrottleReasons::empty(),
+            });
+            t_ms += gap;
+        }
+        let windows = (0..7)
+            .map(|round| Window {
+                start: start + Duration::from_millis(350 + 200 * round),
+                end: start + Duration::from_millis(550 + 200 * round),
+            })
+            .collect();
+        (polls, windows)
+    }
+
+    fn powers(update_ms: u64) -> Vec<f64> {
+        let (polls, windows) = watch(update_ms);
+        round_states(&polls, &windows)
+            .iter()
+            .filter_map(|round| round.power_w)
+            .collect()
+    }
+
+    #[test]
+    fn slow_counter_reads_the_steady_power_in_every_round() {
+        let powers = powers(100);
+        assert_eq!(powers.len(), 7, "{powers:?}");
+        for power in &powers {
+            assert!((power / POWER_W - 1.0).abs() < 0.02, "{powers:?}");
+        }
+    }
+
+    #[test]
+    fn counter_that_updates_every_poll_still_reads_the_steady_power() {
+        let powers = powers(1);
+        assert_eq!(powers.len(), 7, "{powers:?}");
+        for power in &powers {
+            assert!((power / POWER_W - 1.0).abs() < 0.05, "{powers:?}");
+        }
+    }
 }
