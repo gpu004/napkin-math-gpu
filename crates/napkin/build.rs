@@ -538,7 +538,7 @@ fn load_profiles(
                     measured_path.display()
                 )
             })?;
-            validate_measured(id, &measured)?;
+            validate_measured(id, &profile.modal_gpu, &measured)?;
             profile.measured = Some(measured);
         }
         profiles.push(profile);
@@ -649,12 +649,17 @@ fn validate_network(id: &str, network: &Network) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_measured(id: &str, measured: &Measured) -> Result<(), String> {
+fn validate_measured(id: &str, modal_gpu: &str, measured: &Measured) -> Result<(), String> {
     if let Some((name, _)) = measured.checks.iter().find(|(_, passed)| !**passed) {
         return Err(format!(
             "measured profile {id:?} has failing check {name:?}"
         ));
     }
+    measured.check_canonical(modal_gpu).map_err(|error| {
+        format!(
+            "measured profile {id:?} cannot be committed: {error}; replace it with a full run of `modal run modal/bench.py --gpu {id}`"
+        )
+    })?;
     if let Some(suite) = &measured.gemm_shapes {
         validate_gemm_shape_suite(id, measured, suite)?;
     }
@@ -1171,6 +1176,7 @@ fn emit_measured(measured: &Measured) -> String {
     let Measured {
         captured_at,
         gpu_request,
+        mode,
         device_name,
         device_count,
         compute_capability,
@@ -1208,6 +1214,10 @@ fn emit_measured(measured: &Measured) -> String {
     let fields = [
         ("captured_at", string_literal(captured_at)),
         ("gpu_request", string_literal(gpu_request)),
+        (
+            "mode",
+            format!("RunMode::{mode:?}"),
+        ),
         ("device_name", string_literal(device_name)),
         ("device_count", format!("{device_count}_u32")),
         ("compute_capability", string_literal(compute_capability)),

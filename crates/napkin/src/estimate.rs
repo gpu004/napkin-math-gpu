@@ -579,7 +579,7 @@ mod tests {
     use hegel::generators as gs;
 
     use super::*;
-    use crate::profile::{Ceiling, Measured};
+    use crate::profile::{Ceiling, Measured, RunMode};
 
     fn near(actual: f64, expected: f64) {
         let difference = (actual - expected).abs();
@@ -670,6 +670,7 @@ mod tests {
             measured: Some(Measured {
                 captured_at: "2026-08-08T00:00:00+00:00".to_owned(),
                 gpu_request: "TEST!:2".to_owned(),
+                mode: RunMode::Full,
                 device_name: "Test GPU".to_owned(),
                 device_count: 2,
                 compute_capability: "9.0".to_owned(),

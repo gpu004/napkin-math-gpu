@@ -21,7 +21,7 @@ use cudarc::driver::sys as dsys;
 use cudarc::nvrtc::compile_ptx;
 use half::{bf16, f16};
 use napkin_profile::{Dtype, GemmAlgo, GemmCheck, GemmShape, GemmShapeSuite};
-use napkin_profile::{Measured, RoundState, tflops};
+use napkin_profile::{Measured, RoundState, RunMode, tflops};
 
 use crate::gpu_state::{Monitor, Window, round_states};
 
@@ -70,7 +70,7 @@ pub(crate) struct Config {
     chase_steps: u64,
     iterations_bw: u32,
     iterations_launch: u32,
-    quick: bool,
+    mode: RunMode,
 }
 
 impl Config {
@@ -87,7 +87,7 @@ impl Config {
             chase_steps: 1_000_000,
             iterations_bw: 20,
             iterations_launch: 1_000,
-            quick: false,
+            mode: RunMode::Full,
         }
     }
 
@@ -104,7 +104,7 @@ impl Config {
             chase_steps: 100_000,
             iterations_bw: 5,
             iterations_launch: 100,
-            quick: true,
+            mode: RunMode::Quick,
         }
     }
 }
@@ -1631,11 +1631,7 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
     let sm_count =
         ctx0.attribute(dsys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)?;
     let captured_at = crate::iso_now();
-    let gpu_request = if cfg.quick {
-        format!("{gpu_request} --quick")
-    } else {
-        gpu_request.to_owned()
-    };
+    let gpu_request = gpu_request.to_owned();
     let device_name = ctx0.name()?;
     let driver_version = driver_version_string();
     let all_ok = checks.values().all(|v| *v) && gemm_shape_checks.values().all(|v| *v);
@@ -1643,6 +1639,7 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
     Ok(Measured {
         captured_at: captured_at.clone(),
         gpu_request: gpu_request.clone(),
+        mode: cfg.mode,
         device_name: device_name.clone(),
         device_count,
         compute_capability: format!("{cc_major}.{cc_minor}"),

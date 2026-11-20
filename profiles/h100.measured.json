@@ -1,6 +1,7 @@
 {
   "captured_at": "2026-10-12T22:23:05Z",
   "gpu_request": "H100!:2",
+  "mode": "full",
   "device_name": "NVIDIA H100 80GB HBM3",
   "device_count": 2,
   "compute_capability": "9.0",

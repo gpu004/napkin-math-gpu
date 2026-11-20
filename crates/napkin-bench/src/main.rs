@@ -35,6 +35,16 @@ fn main() -> ExitCode {
         }
         i += 1;
     }
+    // Canonical profiles must come from the Modal GPUs named in
+    // `modal/bench.py`, so a run on someone's workstation must not produce
+    // a profile that looks like one. Modal sets `MODAL_TASK_ID` in every
+    // container it starts, and nowhere else.
+    if std::env::var_os("MODAL_TASK_ID").is_none() {
+        eprintln!(
+            "napkin-bench: MODAL_TASK_ID is not set; run it on Modal with `modal run modal/bench.py --gpu h100`"
+        );
+        return ExitCode::from(2);
+    }
     let cfg = if quick {
         cuda::Config::quick()
     } else {

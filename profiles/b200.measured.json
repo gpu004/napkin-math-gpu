@@ -1,6 +1,7 @@
 {
   "captured_at": "2026-10-12T22:33:57Z",
   "gpu_request": "B200:2",
+  "mode": "full",
   "device_name": "NVIDIA B200",
   "device_count": 2,
   "compute_capability": "10.0",

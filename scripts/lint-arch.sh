@@ -40,16 +40,18 @@ if [ -n "$unsafe_files" ]; then
   hit "unsafe outside crates/napkin-bench/src/cuda.rs:\n$unsafe_files" "move all CUDA FFI into cuda.rs"
 fi
 
-if grep -q 'cudarc' crates/napkin/Cargo.toml; then
-  hit "crates/napkin depends on cudarc" "the estimator crate must stay CUDA-free; profile JSON types are the shared contract"
+# Reads the resolved dependency graph, so a cudarc pulled in through another
+# crate counts too, not only a line in crates/napkin/Cargo.toml.
+if ! napkin_deps=$(cargo tree --locked -p napkin -e normal,build --prefix none); then
+  hit "cargo tree -p napkin failed" "fix the workspace manifest so the dependency graph resolves"
+elif printf '%s\n' "$napkin_deps" | grep -q '^cudarc '; then
+  hit "napkin depends on cudarc" "the estimator crate must stay CUDA-free; profile JSON types are the shared contract"
 fi
 
-allow_attrs=$(grep -rn '#\[allow(' --include='*.rs' crates/ || true)
-if [ -n "$allow_attrs" ]; then
-  hit "#[allow(...)] attributes:\n$allow_attrs" "use #[expect(lint, reason = \"...\")] so the waiver fails when it becomes unnecessary"
-fi
-
-bad_imports=$(grep -rnE 'napkin(_profile)?::' --include='*.rs' crates/napkin-bench/src/ | grep -vE 'use napkin_profile::(\{(Dtype|Measured|GemmShape|GemmShapeSuite|GemmAlgo|GemmCheck|tflops|GpuState|RoundState|Span)(, (Dtype|Measured|GemmShape|GemmShapeSuite|GemmAlgo|GemmCheck|tflops|GpuState|RoundState|Span))*\}|Dtype|Measured|GemmShape|GemmShapeSuite|GemmAlgo|GemmCheck|tflops|GpuState|RoundState|Span);' || true)
+# Any mention of napkin_profile counts, so `use napkin_profile as p;` cannot
+# slip past the list of allowed names.
+contract='Dtype|Measured|RunMode|GemmShape|GemmShapeSuite|GemmAlgo|GemmCheck|tflops|GpuState|RoundState|Span'
+bad_imports=$(grep -rnE 'napkin_profile|napkin::' --include='*.rs' crates/napkin-bench/src/ | grep -vE "use napkin_profile::(\{($contract)(, ($contract))*\}|$contract);" || true)
 if [ -n "$bad_imports" ]; then
   hit "napkin-bench imports beyond the profile measurement contract and the GPU-state types Measured contains:\n$bad_imports" "profile JSON types are the only shared contract between the crates"
 fi

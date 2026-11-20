@@ -53,6 +53,7 @@ impl fmt::Display for Dtype {
 
 /// Datasheet numbers, always dense.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Ceiling {
     /// Theoretical HBM bandwidth, GB/s (10^9 bytes/s).
     pub hbm_gbps: f64,
@@ -71,6 +72,7 @@ pub struct Ceiling {
 /// Datasheet RDMA link from one GPU to a GPU in another machine. Nothing here
 /// is measured: no NCCL Tests curve in this repository spans two machines.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Network {
     /// Reference system and NIC, e.g. `"DGX H100, ConnectX-7 InfiniBand"`.
     pub system: String,
@@ -97,6 +99,7 @@ impl Network {
 
 /// One GPU SKU's datasheet profile plus any measured calibration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Profile {
     /// Short identifier, e.g. `"h100"`.
     pub id: String,
@@ -300,12 +303,28 @@ pub struct CrossCheck {
     pub same_link: bool,
 }
 
+/// How much work a `napkin-bench` run did. `modal run modal/bench.py --gpu h100
+/// --quick` gives a `Quick` run: fewer rounds and smaller buffers, enough to
+/// check that the harness works but not to calibrate estimates. Only `Full`
+/// runs may be committed under `profiles/`, so the build rejects the rest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunMode {
+    Full,
+    Quick,
+}
+
 /// Output of `napkin-bench`; all throughputs are decimal
 /// (GB/s = 1e9 B/s, TFLOP/s = 1e12 FLOP/s).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Measured {
     pub captured_at: String,
+    /// Modal `gpu=` request the run landed on, e.g. `"H100!:2"`: the
+    /// profile's `modal_gpu` followed by the device count.
     pub gpu_request: String,
+    /// Required, with no default, so that every committed profile states
+    /// whether it came from a full run.
+    pub mode: RunMode,
     pub device_name: String,
     pub device_count: u32,
     pub compute_capability: String,
@@ -573,7 +592,42 @@ impl Measured {
         if let Some((name, _)) = suite.checks.iter().find(|(_, passed)| !**passed) {
             return Err(format!("shape suite has failing check {name:?}"));
         }
+        if run.mode == RunMode::Quick {
+            return Err("run is a --quick run; rerun without --quick before merging".to_owned());
+        }
         self.gemm_shapes = run.gemm_shapes;
+        Ok(())
+    }
+
+    /// Checks that this run may be committed as `profiles/<id>.measured.json`
+    /// for a datasheet profile whose `modal_gpu` is, e.g., `"H100!"`.
+    ///
+    /// The run must be a full run, and it and its shape suite must have been
+    /// requested as exactly `modal_gpu` plus the device count (`"H100!:2"`).
+    /// The `!` matters: without it Modal may hand out an H200 for an H100
+    /// request, and the profile would silently describe the wrong GPU.
+    ///
+    /// # Errors
+    /// Returns an error naming the first rule the run breaks.
+    pub fn check_canonical(&self, modal_gpu: &str) -> Result<(), String> {
+        if self.mode == RunMode::Quick {
+            return Err("it comes from a --quick run".to_owned());
+        }
+        let expected = format!("{modal_gpu}:{}", self.device_count);
+        if self.gpu_request != expected {
+            return Err(format!(
+                "gpu_request is {:?}, but the datasheet profile pins {expected:?}",
+                self.gpu_request
+            ));
+        }
+        if let Some(suite) = &self.gemm_shapes
+            && suite.gpu_request != expected
+        {
+            return Err(format!(
+                "the GEMM shape suite's gpu_request is {:?}, but the datasheet profile pins {expected:?}",
+                suite.gpu_request
+            ));
+        }
         Ok(())
     }
 }
@@ -736,6 +790,7 @@ mod tests {
         Measured {
             captured_at: "2026-10-14T00:00:00Z".to_owned(),
             gpu_request: "GPU".to_owned(),
+            mode: RunMode::Full,
             device_name: device_name.to_owned(),
             device_count: 1,
             compute_capability: "9.0".to_owned(),
@@ -880,11 +935,85 @@ mod tests {
                 .is_some_and(|error| error.contains("failing check"))
         );
 
+        let mut quick_run = measured("GPU", 1024);
+        quick_run.mode = RunMode::Quick;
+        quick_run.gemm_shapes = Some(shape_suite());
+        assert!(
+            profile
+                .clone()
+                .merge_gemm_shapes(quick_run)
+                .err()
+                .is_some_and(|error| error.contains("--quick"))
+        );
+
         assert!(
             profile
                 .merge_gemm_shapes(measured("GPU", 1024))
                 .err()
                 .is_some_and(|error| error.contains("no GEMM shape suite"))
         );
+    }
+
+    #[test]
+    fn canonical_runs_are_full_and_pinned_to_the_profile_request() {
+        let mut run = measured("GPU", 1024);
+        run.gpu_request = "H100!:1".to_owned();
+        assert!(run.check_canonical("H100!").is_ok());
+
+        let mut unpinned = run.clone();
+        unpinned.gpu_request = "H100:1".to_owned();
+        assert!(
+            unpinned
+                .check_canonical("H100!")
+                .err()
+                .is_some_and(|error| error.contains("\"H100!:1\""))
+        );
+
+        let mut quick = run.clone();
+        quick.mode = RunMode::Quick;
+        assert!(
+            quick
+                .check_canonical("H100!")
+                .err()
+                .is_some_and(|error| error.contains("--quick"))
+        );
+
+        let mut stale_suite = run;
+        let mut suite = shape_suite();
+        suite.gpu_request = "H100:1".to_owned();
+        stale_suite.gemm_shapes = Some(suite);
+        assert!(
+            stale_suite
+                .check_canonical("H100!")
+                .err()
+                .is_some_and(|error| error.contains("GEMM shape suite"))
+        );
+    }
+
+    #[test]
+    fn run_mode_is_required_in_measured_json() {
+        let json = serde_json::to_string(&measured("GPU", 1024)).unwrap();
+        assert!(json.contains(r#""mode":"full""#));
+        let without_mode = json.replace(r#""mode":"full","#, "");
+        assert!(
+            serde_json::from_str::<Measured>(&without_mode)
+                .err()
+                .is_some_and(|error| error.to_string().contains("mode"))
+        );
+    }
+
+    #[test]
+    fn profile_rejects_fields_it_does_not_define() {
+        let json = r#"{"id": "gpu", "name": "GPU", "architecture": "Arch", "modal_gpu": "GPU",
+            "memory_gb": 80, "price_per_hour": 2.5,
+            "ceiling": {"hbm_gbps": 1, "nvlink_gbps": 1, "compute_tflops": {}, "source": "s"}}"#;
+        assert!(
+            serde_json::from_str::<Profile>(json)
+                .err()
+                .is_some_and(|error| error.to_string().contains("price_per_hour"))
+        );
+        let ceiling = r#"{"hbm_gbps": 1, "nvlink_gbps": 1, "compute_tflops": {}, "source": "s",
+            "usd_per_hour": 2.5}"#;
+        assert!(serde_json::from_str::<Ceiling>(ceiling).is_err());
     }
 }

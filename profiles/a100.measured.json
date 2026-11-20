@@ -1,6 +1,7 @@
 {
   "captured_at": "2026-10-12T23:01:23Z",
   "gpu_request": "A100-80GB:2",
+  "mode": "full",
   "device_name": "NVIDIA A100-SXM4-80GB",
   "device_count": 2,
   "compute_capability": "8.0",
