@@ -614,9 +614,11 @@ pub struct RoundState {
     pub sm_clock_mhz: Option<Span>,
     pub mem_clock_mhz: Option<Span>,
     /// Energy-counter delta between the first and last counter update inside
-    /// the round, divided by the whole counter periods between them. The
-    /// period is measured over the whole dtype's run, because the polls that
-    /// see an update can land up to a poll gap after it. NVML's power reading
+    /// the round, divided by the updates between them times the counter
+    /// period, measured over the whole dtype's run, because the polls that
+    /// see an update can land up to a poll gap after it. When the counter can
+    /// advance twice between polls, divided by the time between those polls
+    /// instead. NVML's power reading
     /// is a one-second average on recent GPUs, so it would smear neighbouring
     /// rounds together. None when the counter ticked fewer than two times
     /// inside the round.

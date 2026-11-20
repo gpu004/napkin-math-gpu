@@ -698,15 +698,18 @@ fn gpu_state_table(out: &mut String, state: &GpuState) {
             fmt_sig(state.poll_interval_ms, 2),
         )
     } else {
-        format!("every {} ms", fmt_sig(state.poll_interval_ms, 2))
+        format!(
+            "with a {} ms pause between polls",
+            fmt_sig(state.poll_interval_ms, 2)
+        )
     };
     let _ = write!(
         out,
         "\nRead through {} {cadence} on the GPU that ran the GEMMs, during the timed rounds \
          only. Board limits: {:.0} W, SM clock {} MHz, memory clock {} MHz. Power is the median \
          round's energy-counter change between its first and last counter update, divided by \
-         the whole counter periods between them; the period is measured over that dtype's whole \
-         run, warm-up included, and a round that saw fewer than two updates has no power. Clock \
+         the updates between them times the counter period measured over that dtype's whole \
+         run, warm-up included; a round that saw fewer than two updates has no power. Clock \
          limits give the share of polls that reported each NVML clock-limit reason.\n",
         state.source, state.power_limit_w, state.max_sm_clock_mhz, state.max_mem_clock_mhz,
     );
