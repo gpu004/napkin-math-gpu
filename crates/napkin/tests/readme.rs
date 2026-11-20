@@ -181,7 +181,7 @@ fn readme_unit_cost_ratio_matches_profiles() -> Result<(), Box<dyn std::error::E
         .zip(rates.d2h)
         .map(|(h2d, d2h)| h2d.gbps.min(d2h.gbps))
         .ok_or("h100 has no host link rates")?;
-    let text = "bytes that cross PCIe cost about 50\ntimes as much per terabyte";
+    let text = "On H100, bytes that stay in HBM are almost free; bytes that cross PCIe cost\nabout 50 times as much per terabyte";
     assert!(readme.contains(text), "README no longer says {text:?}");
     assert!(
         (round_sig(rates.hbm_gbps / host, 1) - 50.0).abs() < 1e-9,
@@ -195,9 +195,9 @@ fn readme_unit_cost_ratio_matches_profiles() -> Result<(), Box<dyn std::error::E
 fn readme_between_machines_claims_match_repeats() -> Result<(), Box<dyn std::error::Error>> {
     let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))?;
     for text in [
-        "dense BF16 GEMM stay within 10% on every machine",
-        "Kernel launch and the pinned host RAM copy move more than\n15% on every GPU",
-        "the 4-byte copy latencies do on most",
+        "dense BF16 GEMM held within 10% on every run here",
+        "Kernel\nlaunch and the pinned host RAM copy moved more than 15% on every GPU",
+        "4-byte copy latencies did on most",
     ] {
         assert!(readme.contains(text), "README no longer says {text:?}");
     }

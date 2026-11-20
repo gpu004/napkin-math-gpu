@@ -41,7 +41,7 @@ const UNIT_COSTS: [UnitCost; 4] = [
     // A peer copy needs both GPUs of the pair, as in `modal run ... --gpu
     // H100!:2`, and the rental bills both for the whole copy.
     UnitCost {
-        name: "1 TB GPU → GPU over NVLink, both GPUs billed",
+        name: "1 TB GPU → GPU over NVLink, two GPUs' share billed",
         gpus_billed: 2,
         seconds: |rates| Some(TB / (rates.g2g.gbps * 1e9)),
     },
@@ -109,7 +109,9 @@ pub fn unit_costs(profiles: &[Profile], records: &[PriceRecord]) -> String {
     let _ = writeln!(
         out,
         "\nEach cell is the time one GPU takes at the rates in `napkin table` and `napkin \
-         compare`, times the GPUs billed, times the price record, at one significant digit. It \
+         compare`, times the GPUs billed, times the record's price per GPU-hour, at one \
+         significant digit. A record that rents 8 GPUs at a time is divided by 8: the cell is \
+         the share of the rental this work uses, not a bill for 1 or 2 GPUs alone. It \
          assumes billing covers only that work at full speed: no startup, idle time, or rounding \
          up to the billing increment, which `napkin cost` adds."
     );
@@ -147,7 +149,7 @@ mod tests {
                 // The slower direction, 50 GB/s: 20 s.
                 vec!["1 TB host ↔ device, pinned, slower direction", "$20"],
                 // 1 TB / 500 GB/s = 2 s on each of two billed GPUs.
-                vec!["1 TB GPU → GPU over NVLink, both GPUs billed", "$4"],
+                vec!["1 TB GPU → GPU over NVLink, two GPUs' share billed", "$4"],
                 // 10¹⁸ FLOP / 10¹⁵ FLOP/s = 1000 s.
                 vec!["1 EFLOP of dense BF16 GEMM at the 8192³ rate", "$1000"],
             ]

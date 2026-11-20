@@ -61,8 +61,8 @@ pub fn variation(profiles: &[Profile]) -> String {
     let _ = writeln!(
         out,
         "\nEach cell is the lowest–highest median round over the runs, then the spread: highest \
-         over lowest, minus one. ‡ marks more than {:.0}%, the most sirupsen/napkin-math lets a \
-         number move between machines. Transfers here are napkin-bench's own copies, not \
+         over lowest, minus one. ‡ marks a spread above {:.0}% before rounding, this repo's \
+         threshold for a number that varies by machine. Transfers here are napkin-bench's own copies, not \
          NVBandwidth.\n",
         variation::MACHINE_FLAG * 100.0
     );

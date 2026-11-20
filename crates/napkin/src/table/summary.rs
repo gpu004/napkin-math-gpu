@@ -10,7 +10,7 @@ use napkin_profile::collective::{Collective, CollectiveEvidence, Topology};
 use super::{SIG, emit, transfer_basis};
 use crate::profile::{Dtype, Measured, Profile, Rates};
 use crate::units::{fmt_duration, fmt_gbps, fmt_tflops};
-use crate::variation::{self, Metric, Unit};
+use crate::variation::{self, Metric};
 
 /// Renders the summary for `profile`, or `None` without a measurement.
 #[must_use]
@@ -133,25 +133,14 @@ fn rows(
         latency,
         throughput,
     };
-    let host_latencies = [variation::H2D_LATENCY, variation::D2H_LATENCY];
-    let host_latency = host_latencies
-        .iter()
-        .filter_map(|metric| (metric.value)(m))
-        .reduce(f64::max)
-        .map(|us| Cell::judged(profile, &host_latencies, Unit::Microseconds.format(us, SIG)));
+    let host_latency = measured(variation::HOST_LATENCY);
     let host_throughput = rates
         .h2d
         .into_iter()
         .chain(rates.d2h)
         .map(|rate| rate.gbps)
         .reduce(f64::min)
-        .map(|gbps| {
-            Cell::judged(
-                profile,
-                &[variation::H2D, variation::D2H],
-                fmt_gbps(gbps, SIG),
-            )
-        });
+        .map(|gbps| Cell::judged(profile, &[variation::HOST], fmt_gbps(gbps, SIG)));
     let nvlink_throughput = Cell::judged(profile, &[variation::G2G], fmt_gbps(rates.g2g.gbps, SIG));
     let mut rows = vec![
         row("Kernel launch", measured(variation::KERNEL_LAUNCH), None),
@@ -336,5 +325,26 @@ mod tests {
         );
         assert!(table.contains("| Kernel launch | 2 μs |  |"), "{table}");
         assert!(table.contains("more than 15% between runs"), "{table}");
+    }
+
+    #[test]
+    fn host_row_is_judged_by_its_slower_direction() {
+        let mut profile = h100_with(&[], None);
+        let measured = profile.measured.as_mut().unwrap();
+        measured.h2d_latency_us = Some(14.0);
+        measured.d2h_latency_us = Some(12.0);
+        let mut repeat = repeat_with_hbm(
+            &profile,
+            profile.measured.as_ref().unwrap().hbm_gbps,
+            ["GPU-aaaaaaaa-1", "GPU-bbbbbbbb-2"],
+        );
+        repeat.measured.h2d_latency_us = Some(13.0);
+        repeat.measured.d2h_latency_us = Some(10.0);
+        profile.repeats = vec![repeat];
+        let table = summary(&profile, &[]).unwrap();
+        assert!(
+            table.contains("| Host ↔ device, pinned | 14 μs |"),
+            "D2H moved 20% but the slower H2D moved 8%: {table}"
+        );
     }
 }

@@ -622,9 +622,12 @@ fn attach_repeats(mut profiles: Vec<Profile>, repeats_dir: &Path) -> Result<Vec<
             let repeat = load_repeat(&path, id, canonical)?;
             profile.repeats.push(repeat);
         }
-        profile
-            .repeats
-            .sort_by(|left, right| left.measured.captured_at.cmp(&right.measured.captured_at));
+        // Repeats launched together can share a capture second; the task ID
+        // breaks the tie so the README rows do not follow read_dir order.
+        profile.repeats.sort_by(|left, right| {
+            (&left.measured.captured_at, &left.host.task_id)
+                .cmp(&(&right.measured.captured_at, &right.host.task_id))
+        });
     }
     Ok(profiles)
 }

@@ -117,9 +117,10 @@ The † marks above are spread between rounds within one run on one machine.
 `modal run modal/bench.py --gpu h100 --repeat 3` repeats the full run in
 fresh containers on whatever machines Modal assigns, and records each
 machine's provider, region, and GPU UUIDs. Two B200 runs below predate the
-one-run-per-container rule and share a machine. Simon averages three machine types
-and keeps a latency only if it holds within 15% on every machine he measured;
-this table applies the same rule to every GPU here.
+one-run-per-container rule and share a machine. ‡ marks a number that moves
+more than 15% between runs. The 15% is this repo's threshold, borrowed from an
+earlier rule of Simon's, since dropped, that kept a size only if it held within
+15% on every machine he measured.
 
 <!-- napkin variation -->
 | napkin-bench number | A100 (4 runs) | H100 (4 runs) | B200 (4 runs) | B300 (4 runs) |
@@ -162,11 +163,11 @@ GPU UUIDs are unique per physical GPU, shown by their first 8 hex digits, so run
 <!-- /napkin -->
 
 The repeats split the numbers in two. HBM bandwidth and latency, NVLink
-bandwidth, and dense BF16 GEMM stay within 10% on every machine: they belong
-to the GPU model. Kernel launch and the pinned host RAM copy move more than
-15% on every GPU, and the 4-byte copy latencies do on most. They run through
-the host CPU, its memory, and the driver, so they belong to the machine: read
-them as orders of magnitude. The repeats ran on 2026-11-05, three weeks after
+bandwidth, and dense BF16 GEMM held within 10% on every run here. Kernel
+launch and the pinned host RAM copy moved more than 15% on every GPU, and the
+4-byte copy latencies did on most. Those run through the host CPU, its memory,
+and the driver, which is where these runs differed, so read them as orders of
+magnitude. The repeats ran on 2026-11-05, three weeks after
 the canonical runs, and the A100 and H100 machines had moved from driver
 580.95.05 to 610.57.04 in between, so this spread mixes machine and software.
 
@@ -835,9 +836,9 @@ price per GPU-second above.
 Each cell is the time one GPU takes at the rates in `napkin table` and `napkin compare`, times the GPUs billed, times the price record, at one significant digit. It assumes billing covers only that work at full speed: no startup, idle time, or rounding up to the billing increment, which `napkin cost` adds.
 <!-- /napkin -->
 
-Bytes that stay in HBM are almost free; bytes that cross PCIe cost about 50
-times as much per terabyte, because the host link is about 50 times slower and
-the GPU is billed while it waits.
+On H100, bytes that stay in HBM are almost free; bytes that cross PCIe cost
+about 50 times as much per terabyte, because the host link is about 50 times
+slower and the GPU is billed while it waits.
 
 ### Utilization can reverse a price-performance ranking
 
@@ -1027,12 +1028,13 @@ See [BENCHMARKS.md](BENCHMARKS.md#nccl-tests) for what is recorded and how
   measured/theoretical, software stack — no throughput number is universal.
 - **Sum serial stages; max overlapped ones.** Overlap is a property of the
   workload, not of the GPU.
-- **Weights barely compress, so compression won't speed up loading them.**
+- **Weights barely compress, so compression barely speeds up loading them.**
   As Simon notes, floats that use their full mantissa barely compress, and
   BF16 weights do. Only the 8-bit exponent is predictable:
   [DFloat11](https://arxiv.org/abs/2504.11651) entropy-codes it losslessly and
   saves about 30%. Loading Llama-3-70B's 140 GB over a 56 GB/s host link takes
-  2.5 s; 30% fewer bytes saves under a second and adds a decompression kernel.
+  2.5 s; 30% fewer bytes saves about 0.75 s, a gain only if the decompression
+  kernel adds less than that to the critical path.
   Fewer bits per weight (`napkin llm --weight-bits 4`) cut the bytes 4x, but
   they change the model.
 - **One or two significant digits.** You want order-of-magnitude answers;

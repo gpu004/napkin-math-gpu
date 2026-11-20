@@ -1,9 +1,10 @@
 //! How far headline numbers move between machines: the canonical measured
 //! profile against its repeated runs in `profiles/repeats/<id>/`.
 //!
-//! sirupsen/napkin-math keeps a latency only if it holds within 15% on every
-//! machine measured; `MACHINE_FLAG` applies the same rule here, as the
-//! slowest run over the fastest, minus one.
+//! `MACHINE_FLAG` is this repo's threshold, the slowest run over the fastest,
+//! minus one. Its 15% comes from an earlier sirupsen/napkin-math rule, since
+//! dropped there, that kept a size only if it held within 15% on every
+//! machine measured.
 
 use crate::profile::{Dtype, Measured, Profile};
 use crate::units::{fmt_duration, fmt_gbps, fmt_sig, fmt_tflops};
@@ -96,6 +97,21 @@ pub const D2H: Metric = Metric {
     name: "Device → host",
     unit: Unit::Gbps,
     value: |m| Some(m.d2h_gbps),
+};
+/// The slower of the two 4-byte host copy latencies within each run, which
+/// is what `napkin summary` shows. Taking the slower direction per run before
+/// comparing runs keeps one direction's spread from flagging a row whose
+/// slower direction held steady: A100's H2D copy is slower in every run.
+pub const HOST_LATENCY: Metric = Metric {
+    name: "Host ↔ device latency, slower direction",
+    unit: Unit::Microseconds,
+    value: |m| m.h2d_latency_us.into_iter().chain(m.d2h_latency_us).reduce(f64::max),
+};
+/// The slower host copy direction within each run, like `HOST_LATENCY`.
+pub const HOST: Metric = Metric {
+    name: "Host ↔ device, slower direction",
+    unit: Unit::Gbps,
+    value: |m| Some(m.h2d_gbps.min(m.d2h_gbps)),
 };
 pub const G2G_LATENCY: Metric = Metric {
     name: "GPU ↔ GPU latency",
