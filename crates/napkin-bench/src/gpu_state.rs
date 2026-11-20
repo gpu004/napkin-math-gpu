@@ -189,10 +189,10 @@ fn ticks<'a>(polls: impl IntoIterator<Item = &'a Poll>) -> Vec<&'a Poll> {
 /// polls that read it.
 #[derive(Clone, Copy, Debug)]
 enum Counter {
-    /// The counter advanced less often than the longest gap between polls,
-    /// so no gap held two updates and each poll that saw a change saw exactly
-    /// one. On an H100 it advances about every 100 ms while polls land 9–25
-    /// ms apart (#31). The period is the mean over the whole watch: each
+    /// The counter advanced less often than every second poll gap, so no
+    /// gap held two updates and each poll that saw a change saw exactly one.
+    /// On an H100 it advances about every 100 ms while polls land 9–25 ms
+    /// apart (#31). The period is the mean over the whole watch: each
     /// update is seen up to one poll gap late, but that error falls only on
     /// the first and last update of a watch a few seconds long.
     PerPeriod(Duration),
@@ -209,7 +209,13 @@ impl Counter {
         let intervals = u32::try_from(ticks.len() - 1).ok()?;
         let period = (intervals > 0).then(|| (last.at - first.at) / intervals)?;
         let longest_gap = polls.windows(2).map(|pair| pair[1].at - pair[0].at).max()?;
-        Some(if period > longest_gap {
+        // Two updates can only merge into one change inside a gap longer
+        // than the period, and each merge stretches the mean spacing of the
+        // changes seen. Stretching it past twice every gap would take more
+        // than half the updates merged, which needs gaps longer than the
+        // period, so passing this check rules merges out. A 101 ms gap on a
+        // 100 ms counter fails it and falls back to elapsed time.
+        Some(if period > 2 * longest_gap {
             Self::PerPeriod(period)
         } else {
             Self::Elapsed
@@ -324,6 +330,41 @@ mod tests {
                 "{powers:?}"
             );
         }
+    }
+
+    /// One 101 ms gap swallows the updates at 1000 and 1100 ms, so the
+    /// changes seen undercount the updates and their mean spacing grows to
+    /// about 106 ms. Counting changes would read about 1,250 W.
+    #[test]
+    fn gap_that_holds_two_updates_falls_back_to_elapsed_time() {
+        let start = Instant::now();
+        let at = |t_ms: u64| start + Duration::from_millis(t_ms);
+        let mut times: Vec<u64> = (0..=200)
+            .map(|i| 1 + 10 * i)
+            .filter(|t_ms| !(1_001..=1_091).contains(t_ms))
+            .chain([999, 1_100])
+            .collect();
+        times.sort_unstable();
+        let polls: Vec<Poll> = times
+            .iter()
+            .map(|&t_ms| Poll {
+                at: at(t_ms),
+                sm_mhz: 1_980,
+                mem_mhz: 2_619,
+                temperature_c: 60,
+                energy_mj: t_ms / 100 * 100 * u64::from(POWER_W),
+                reasons: ThrottleReasons::empty(),
+            })
+            .collect();
+        let windows = [Window {
+            start: at(890),
+            end: at(1_100),
+        }];
+        let power = round_states(&polls, &windows)[0].power_w;
+        assert!(
+            power.is_some_and(|power| (power / f64::from(POWER_W) - 1.0).abs() < 0.02),
+            "{power:?}"
+        );
     }
 
     /// A round whose first update is seen 52 ms late and whose last is seen

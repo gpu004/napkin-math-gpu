@@ -709,7 +709,9 @@ fn gpu_state_table(out: &mut String, state: &GpuState) {
          only. Board limits: {:.0} W, SM clock {} MHz, memory clock {} MHz. Power is the median \
          round's energy-counter change between its first and last counter update, divided by \
          the updates between them times the counter period measured over that dtype's whole \
-         run, warm-up included; a round that saw fewer than two updates has no power. Clock \
+         run, warm-up included. When a poll gap could hold two updates it is divided by the time \
+         between the polls that saw them instead. A round that saw fewer than two updates has no \
+         power. Clock \
          limits give the share of polls that reported each NVML clock-limit reason.\n",
         state.source, state.power_limit_w, state.max_sm_clock_mhz, state.max_mem_clock_mhz,
     );
