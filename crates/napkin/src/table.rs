@@ -572,13 +572,12 @@ fn emit_gemm_shape_rows(out: &mut String, m: &Measured, sig: u32, exact: bool) {
         let peak_percent = m
             .compute_tflops
             .get(&shape.dtype)
-            .map(|peak| {
+            .map_or_else(String::new, |peak| {
                 format!(
                     "{}%",
                     fmt_sig(shape.tflops / peak * 100.0, if exact { 3 } else { 2 })
                 )
-            })
-            .unwrap_or_default();
+            });
         let throughput = fmt_tflops(shape.tflops, sig);
         let throughput = if suite
             .round_spread(&key)
