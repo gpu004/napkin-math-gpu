@@ -1,11 +1,11 @@
-//! Estimation from measured NCCL Tests collective curves.
-
 use std::fmt;
 
 use napkin_profile::Dtype;
 use napkin_profile::collective::{Collective, CollectiveEvidence, Curve, CurvePoint, Topology};
 
 use crate::profile;
+
+const LATENCY_REGIME_FLOOR_MULTIPLE: f64 = 2.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Query<'a> {
@@ -170,8 +170,7 @@ pub fn estimate_with<'a>(
         .iter()
         .max_by(|left, right| left.busbw_gbps.total_cmp(&right.busbw_gbps))
         .ok_or_else(|| format!("{} curve is empty", query.collective))?;
-    // Fixed per-call cost is at least half of the time, so bandwidth barely matters.
-    let regime = if time_us < 2.0 * floor_us {
+    let regime = if time_us < LATENCY_REGIME_FLOOR_MULTIPLE * floor_us {
         Regime::Latency
     } else {
         Regime::Bandwidth
@@ -234,9 +233,8 @@ mod tests {
     fn estimates_exact_all_reduce_point() -> Result<(), String> {
         let data = [evidence()?];
         let estimate = estimate_with(&data, &query(Collective::AllReduce, 32_768.0))?;
-        // The measured 32 KiB row is 10.0802 μs, or 32,768 / (10.0802 × 1,000) GB/s.
         assert!((estimate.time_s - 10.0802e-6).abs() < 1e-12);
-        assert!((estimate.algbw_gbps - 3.250_729).abs() < 1e-6);
+        assert!((estimate.algbw_gbps - 32_768.0 / (10.0802 * 1_000.0)).abs() < 1e-6);
         assert_eq!(estimate.lower.bytes, 32_768);
         assert_eq!(estimate.upper.bytes, 32_768);
         Ok(())
@@ -246,8 +244,7 @@ mod tests {
     fn interpolates_all_gather_between_measured_points() -> Result<(), String> {
         let data = [evidence()?];
         let estimate = estimate_with(&data, &query(Collective::AllGather, 49_152.0))?;
-        // 32 KiB and 64 KiB midpoint: (10.3996 + 10.8848) / 2 = 10.6422 μs.
-        assert!((estimate.time_s - 10.6422e-6).abs() < 1e-12);
+        assert!((estimate.time_s - f64::midpoint(10.3996, 10.8848) * 1e-6).abs() < 1e-12);
         assert_eq!(estimate.lower.bytes, 32_768);
         assert_eq!(estimate.upper.bytes, 65_536);
         Ok(())
@@ -256,15 +253,15 @@ mod tests {
     #[test]
     fn uses_reduce_scatter_latency_floor_and_four_gib_peak() -> Result<(), String> {
         let data = [evidence()?];
-        // 16 B is below the 32 B first row, so it inherits that row's 12.73735 μs.
         let small = estimate_with(&data, &query(Collective::ReduceScatter, 16.0))?;
         assert!((small.time_s - 12.73735e-6).abs() < 1e-12);
         assert_eq!(small.regime, Regime::Latency);
 
-        // At 4 GiB the captured bus bandwidth is 527.994545 × (2-1)/2.
         let large = estimate_with(&data, &query(Collective::ReduceScatter, 4_294_967_296.0))?;
         assert!((large.time_s - 8_134.491_8e-6).abs() < 1e-9);
-        assert!((large.busbw_gbps - 263.997_272).abs() < 1e-6);
+        assert!(
+            (large.busbw_gbps - 527.994_545 * Collective::ReduceScatter.bus_factor(2)).abs() < 1e-6
+        );
         assert_eq!(large.peak.bytes, 4_294_967_296);
         assert_eq!(large.regime, Regime::Bandwidth);
         Ok(())

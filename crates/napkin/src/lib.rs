@@ -1,6 +1,3 @@
-//! GPU napkin math: estimate workload performance from datasheet ceilings and
-//! measured GPU profiles, in the spirit of sirupsen/napkin-math.
-
 #![forbid(unsafe_code)]
 
 pub mod collective;

@@ -1,12 +1,8 @@
-//! Dated GPU price records generated from `prices/*.json` by `build.rs`.
-
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Age after which a price record should be re-checked.
 pub const STALE_AFTER_DAYS: i64 = 90;
 
-/// Unit used by a provider's listed price.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Per {
     Second,
@@ -40,7 +36,6 @@ impl fmt::Display for Per {
     }
 }
 
-/// Provider's purchase terms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Terms {
     OnDemand,
@@ -62,7 +57,6 @@ impl fmt::Display for Terms {
     }
 }
 
-/// Calendar date without a time zone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Date {
     pub year: i32,
@@ -120,7 +114,6 @@ impl fmt::Display for Date {
     }
 }
 
-/// One provider price and its dated source.
 #[derive(Clone, Copy, Debug)]
 pub struct PriceRecord {
     pub id: &'static str,
@@ -141,7 +134,6 @@ pub struct PriceRecord {
 }
 
 impl PriceRecord {
-    /// Price formatted with its currency, billing unit, and the GPUs it buys.
     #[must_use]
     pub fn listed_price(&self) -> String {
         let price = if self.currency == "USD" {
@@ -156,7 +148,6 @@ impl PriceRecord {
         }
     }
 
-    /// Terms formatted with any preemptibility qualifier.
     #[must_use]
     pub fn terms_label(&self) -> String {
         if self.preemptible {
@@ -166,7 +157,6 @@ impl PriceRecord {
         }
     }
 
-    /// Price normalized to one GPU-hour.
     #[must_use]
     pub fn per_gpu_hour(&self) -> f64 {
         self.amount * 3600.0 / self.per.seconds() / f64::from(self.gpus)
@@ -178,7 +168,6 @@ impl PriceRecord {
         today.days_since_epoch() - self.date.days_since_epoch()
     }
 
-    /// Whether this record is more than 90 days old.
     #[must_use]
     pub fn is_stale(&self, today: Date) -> bool {
         self.age_days(today) > STALE_AFTER_DAYS
@@ -191,7 +180,6 @@ pub fn builtin() -> &'static [PriceRecord] {
     GENERATED_PRICES
 }
 
-/// Finds a built-in price record by its identifier.
 #[must_use]
 pub fn find(id: &str) -> Option<&'static PriceRecord> {
     builtin().iter().find(|record| record.id == id)

@@ -80,8 +80,6 @@ pub struct Nvbandwidth {
     pub buffer_bytes: u64,
     pub samples: u32,
     pub statistic: Statistic,
-    /// Parsing succeeds only when verification was enabled and every testcase passed.
-    pub verified: bool,
     pub bandwidths: Vec<Bandwidth>,
     pub latencies: Vec<Latency>,
 }
@@ -121,7 +119,6 @@ impl Nvbandwidth {
             buffer_bytes,
             samples,
             statistic,
-            verified: true,
             bandwidths,
             latencies,
         })

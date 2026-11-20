@@ -1,18 +1,15 @@
-//! Small statistics helpers.
-
-/// Median of a non-empty sample set.
 #[must_use]
-pub(crate) fn median(samples: &mut [f64]) -> f64 {
+pub(crate) fn median(samples: &mut [f64]) -> Option<f64> {
     samples.sort_by(f64::total_cmp);
     let n = samples.len();
+    let upper = *samples.get(n / 2)?;
     if n % 2 == 1 {
-        samples[n / 2]
+        Some(upper)
     } else {
-        f64::midpoint(samples[n / 2 - 1], samples[n / 2])
+        Some(f64::midpoint(*samples.get(n / 2 - 1)?, upper))
     }
 }
 
-/// Deterministic xorshift64* for benchmark inputs.
 #[derive(Debug)]
 pub(crate) struct XorShift(u64);
 
@@ -34,5 +31,21 @@ impl XorShift {
         #[expect(clippy::cast_possible_truncation, reason = "the value is in [-1, 1]")]
         let v = (f64::from(bits) / f64::from(1u32 << 24) * 2.0 - 1.0) as f32;
         v
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::median;
+
+    #[test]
+    fn median_of_no_samples_is_none() {
+        assert_eq!(median(&mut []), None);
+    }
+
+    #[test]
+    fn median_picks_the_middle_or_averages_the_two_middles() {
+        assert_eq!(median(&mut [3.0, 1.0, 2.0]), Some(2.0));
+        assert_eq!(median(&mut [4.0, 1.0, 3.0, 2.0]), Some(2.5));
     }
 }

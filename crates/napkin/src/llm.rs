@@ -1,5 +1,3 @@
-//! First-principles memory and operation counts for decoder-only transformer serving.
-
 use std::fmt;
 use std::num::NonZeroU64;
 
@@ -226,11 +224,13 @@ mod tests {
 
     use super::*;
 
+    const RELATIVE_TOLERANCE: f64 = 1e-9;
+
     fn near(actual: f64, expected: f64) {
         let difference = (actual - expected).abs();
         let scale = actual.abs().max(expected.abs()).max(1e-12);
         assert!(
-            difference <= 1e-9 * scale,
+            difference <= RELATIVE_TOLERANCE * scale,
             "{actual} differs from {expected} by {difference}"
         );
     }
@@ -239,9 +239,6 @@ mod tests {
         NonZeroU64::new(value).unwrap()
     }
 
-    // Every dimension is a small integer, at most a few hundred, and `params`
-    // is at most `1e5`. Products such as `2 × L × H × dh × B × S²` then stay
-    // under `2^53`, so the f64 formulas are exact integer arithmetic.
     fn draw_model(tc: &TestCase) -> (Model, Workload) {
         let layers = tc.draw(gs::integers::<u64>().min_value(1).max_value(32));
         let kv_heads = tc.draw(gs::integers::<u64>().min_value(1).max_value(8));
@@ -465,8 +462,6 @@ mod tests {
         );
     }
 
-    // `heads = groups × kv_heads + remainder`, with `remainder` in
-    // `1..kv_heads`, so the GQA group count is never an integer.
     #[hegel::test]
     fn non_integral_gqa_groups_are_rejected(tc: TestCase) {
         let (mut model, workload) = draw_model(&tc);

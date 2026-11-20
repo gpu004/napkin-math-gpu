@@ -1,6 +1,4 @@
 #!/bin/sh
-# Custom architecture lints. Each violation prints what is wrong and how to
-# fix it; exits 1 when anything is found.
 cd "$(dirname "$0")/.." || exit 1
 fail=0
 

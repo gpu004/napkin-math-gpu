@@ -1,6 +1,3 @@
-//! All CUDA calls live here: kernel launches, cuBLAS `GemmEx`, pinned
-//! allocations, and peer copies. Nothing in this crate calls `unsafe`
-//! anywhere else.
 #![expect(unsafe_code, reason = "CUDA driver and cuBLAS calls are FFI-unsafe")]
 
 use std::collections::BTreeMap;
@@ -25,7 +22,6 @@ use napkin_profile::{Measured, RoundState, tflops};
 
 use crate::gpu_state::{Monitor, Window, round_states};
 
-/// Anything the harness can fail with.
 #[derive(Debug)]
 pub(crate) struct BenchError(String);
 
@@ -57,7 +53,6 @@ impl From<cudarc::nvrtc::CompileError> for BenchError {
 
 const MIB: usize = 1 << 20;
 
-/// Tunables for a full or `--quick` run.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Config {
     rounds: u32,
@@ -109,9 +104,7 @@ impl Config {
     }
 }
 
-/// Event-timed rounds; each round records `iterations` calls of `op` and
-/// stores per-iteration milliseconds.
-fn cuda_samples(
+fn cuda_samples_ms(
     ctx: &Arc<CudaContext>,
     stream: &Arc<CudaStream>,
     warmups: u32,
@@ -119,17 +112,15 @@ fn cuda_samples(
     rounds: u32,
     op: impl FnMut() -> Result<(), BenchError>,
 ) -> Result<Vec<f64>, BenchError> {
-    Ok(cuda_rounds(ctx, stream, warmups, iterations, rounds, op)?
-        .into_iter()
-        .map(|(ms, _)| ms)
-        .collect())
+    Ok(
+        cuda_rounds_ms(ctx, stream, warmups, iterations, rounds, op)?
+            .into_iter()
+            .map(|(ms, _)| ms)
+            .collect(),
+    )
 }
 
-/// `cuda_samples` plus the host-clock window of each round, so NVML polls can
-/// be matched to it. The stream is idle when a round starts, so its first
-/// call begins on the GPU right after `start` is taken, and `end` is taken
-/// once the last call has finished.
-fn cuda_rounds(
+fn cuda_rounds_ms(
     ctx: &Arc<CudaContext>,
     stream: &Arc<CudaStream>,
     warmups: u32,
@@ -163,7 +154,7 @@ fn cuda_rounds(
     Ok(samples)
 }
 
-/// `cuda_rounds` for work that heats the GPU enough for its power controller
+/// `cuda_rounds_ms` for work that heats the GPU enough for its power controller
 /// to lower clocks, like an 8192³ fp16 GEMM on a 700 W H100. Such a GPU runs
 /// the first ~100 ms at its maximum SM clock and then settles lower once the
 /// software power cap engages, so rounds timed right after a short warm-up
@@ -202,7 +193,7 @@ fn sustained_rounds(
         .as_nanos()
         .div_ceil(per_call.as_nanos().max(1))
         .max(u128::from(BATCH));
-    cuda_rounds(
+    cuda_rounds_ms(
         ctx,
         stream,
         0,
@@ -212,7 +203,6 @@ fn sustained_rounds(
     )
 }
 
-/// NVML-style PCI bus ID of `ctx`'s device, e.g. `"00000000:18:00.0"`.
 fn pci_bus_id(ctx: &Arc<CudaContext>) -> Result<String, BenchError> {
     let attr = |a| ctx.attribute(a).map(i32::cast_unsigned);
     Ok(format!(
@@ -223,7 +213,6 @@ fn pci_bus_id(ctx: &Arc<CudaContext>) -> Result<String, BenchError> {
     ))
 }
 
-/// Wall-clock median for latency-style metrics.
 fn wall_samples(
     warmups: u32,
     iterations: u32,
@@ -969,7 +958,8 @@ fn measure_gemm_shape(
         &buffers.b_host,
         &read_as_f32(stream, &buffers.d, spec)?,
     );
-    let median_ms = crate::stats::median(&mut rounds.clone());
+    let median_ms = crate::stats::median(&mut rounds.clone())
+        .ok_or_else(|| BenchError(format!("{}: no timed rounds", shape.name)))?;
     let result = GemmShape {
         name: shape.name.to_owned(),
         m: shape.m,
@@ -1049,7 +1039,6 @@ impl Drop for PeerBuffer {
     }
 }
 
-/// `PCIe` link details reported by nvidia-smi for GPU 0.
 #[derive(Clone, Copy, Debug, Default)]
 struct PcieLink {
     r#gen: Option<u8>,
@@ -1105,10 +1094,6 @@ fn driver_version_string() -> String {
     format!("{}.{}", v / 1000, (v % 1000) / 10)
 }
 
-/// Runs the whole suite and returns the `Measured` payload.
-///
-/// # Errors
-/// Returns `BenchError` on any CUDA, NVRTC, or cuBLAS failure.
 #[expect(clippy::too_many_lines, reason = "sequential benchmark orchestration")]
 #[expect(
     clippy::cast_precision_loss,
@@ -1127,9 +1112,10 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
     let mut record = |name: &str, samples: &[f64]| {
         samples_ms.insert(name.to_owned(), samples.to_vec());
         crate::stats::median(&mut samples.to_vec())
+            .ok_or_else(|| BenchError(format!("{name}: no timed samples")))
     };
 
-    let launch_samples = cuda_samples(
+    let launch_samples = cuda_samples_ms(
         &ctx0,
         &stream0,
         20,
@@ -1137,7 +1123,7 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         cfg.rounds,
         || launch_noop(&stream0, &kernels.noop),
     )?;
-    let launch_us = record("launch_us", &launch_samples) * 1e3;
+    let launch_us = record("launch_us", &launch_samples)? * 1e3;
     progress("launch", &format!("{launch_us:.2} μs"));
 
     let sync_samples = wall_samples(10, 50, cfg.rounds, || {
@@ -1145,7 +1131,7 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         stream0.synchronize()?;
         Ok(())
     })?;
-    let sync_us = record("sync_us", &sync_samples) * 1e3;
+    let sync_us = record("sync_us", &sync_samples)? * 1e3;
     progress("launch+sync", &format!("{sync_us:.2} μs"));
 
     let threads = std::thread::available_parallelism()
@@ -1184,7 +1170,7 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         });
         Ok(())
     })?;
-    let host_ms = record("host_copy_gbps", &host_samples);
+    let host_ms = record("host_copy_gbps", &host_samples)?;
     let host_copy_gbps = (2 * host_elems) as f64 / (host_ms / 1e3) / 1e9;
     progress(
         "host_copy",
@@ -1207,29 +1193,25 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
     }
     let mut dev_a = stream0.alloc_zeros::<f32>(copy_elems)?;
 
-    let h2d_samples = cuda_samples(&ctx0, &stream0, 5, cfg.iterations_bw, cfg.rounds, || {
+    let h2d_samples = cuda_samples_ms(&ctx0, &stream0, 5, cfg.iterations_bw, cfg.rounds, || {
         let pinned = unsafe { std::slice::from_raw_parts(pinned_a.as_ptr()?, copy_elems) };
         stream0.memcpy_htod(pinned, &mut dev_a)?;
         Ok(())
     })?;
-    let h2d_ms = record("h2d_gbps", &h2d_samples);
+    let h2d_ms = record("h2d_gbps", &h2d_samples)?;
     let copy_bytes = (copy_elems * 4) as f64;
     let h2d_gbps = copy_bytes / (h2d_ms / 1e3) / 1e9;
     progress("h2d", &format!("{h2d_gbps:.0} GB/s"));
 
-    let d2h_samples = cuda_samples(&ctx0, &stream0, 5, cfg.iterations_bw, cfg.rounds, || {
+    let d2h_samples = cuda_samples_ms(&ctx0, &stream0, 5, cfg.iterations_bw, cfg.rounds, || {
         let pinned = unsafe { std::slice::from_raw_parts_mut(pinned_b.as_mut_ptr()?, copy_elems) };
         stream0.memcpy_dtoh(&dev_a, pinned)?;
         Ok(())
     })?;
-    let d2h_ms = record("d2h_gbps", &d2h_samples);
+    let d2h_ms = record("d2h_gbps", &d2h_samples)?;
     let d2h_gbps = copy_bytes / (d2h_ms / 1e3) / 1e9;
     progress("d2h", &format!("{d2h_gbps:.0} GB/s"));
 
-    // Allocate the destination once, outside the timed loop: allocating it
-    // per copy adds a cuMemAllocAsync and a cuMemFreeAsync to every sample.
-    // On `H100!:2` that read 8.9 μs against 6.0 μs for the copy and
-    // synchronize alone (#32).
     let mut h2d_dst = stream0.alloc_zeros::<f32>(1)?;
     let h2d_lat = wall_samples(5, 20, cfg.rounds, || {
         let one = [1.0f32];
@@ -1237,14 +1219,14 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         stream0.synchronize()?;
         Ok(())
     })?;
-    let h2d_latency_us = record("h2d_latency_us", &h2d_lat) * 1e3;
+    let h2d_latency_us = record("h2d_latency_us", &h2d_lat)? * 1e3;
     let d2h_lat = wall_samples(5, 20, cfg.rounds, || {
         let mut one = [0.0f32];
         stream0.memcpy_dtoh(&dev_a.slice(0..1), &mut one)?;
         stream0.synchronize()?;
         Ok(())
     })?;
-    let d2h_latency_us = record("d2h_latency_us", &d2h_lat) * 1e3;
+    let d2h_latency_us = record("d2h_latency_us", &d2h_lat)? * 1e3;
     progress(
         "h2d/d2h latency",
         &format!("{h2d_latency_us:.1}/{d2h_latency_us:.1} μs"),
@@ -1292,11 +1274,11 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         stream0.memcpy_htod(&pattern, &mut dev_src)?;
     }
     let mut dev_dst = stream0.alloc_zeros::<f32>(copy_elems)?;
-    let hbm_samples = cuda_samples(&ctx0, &stream0, 5, cfg.iterations_bw, cfg.rounds, || {
+    let hbm_samples = cuda_samples_ms(&ctx0, &stream0, 5, cfg.iterations_bw, cfg.rounds, || {
         stream0.memcpy_dtod(&dev_src, &mut dev_dst)?;
         Ok(())
     })?;
-    let hbm_ms = record("hbm_gbps", &hbm_samples);
+    let hbm_ms = record("hbm_gbps", &hbm_samples)?;
     let hbm_gbps = (2.0 * copy_bytes) / (hbm_ms / 1e3) / 1e9;
     progress("hbm_copy", &format!("{hbm_gbps:.0} GB/s"));
     {
@@ -1325,7 +1307,7 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         block_dim: (256, 1, 1),
         shared_mem_bytes: 0,
     };
-    let ew_samples = cuda_samples(&ctx0, &stream0, 5, cfg.iterations_bw, cfg.rounds, || {
+    let ew_samples = cuda_samples_ms(&ctx0, &stream0, 5, cfg.iterations_bw, cfg.rounds, || {
         unsafe {
             stream0
                 .launch_builder(&kernels.addf)
@@ -1337,7 +1319,7 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         }
         Ok(())
     })?;
-    let ew_ms = record("elementwise_gbps", &ew_samples);
+    let ew_ms = record("elementwise_gbps", &ew_samples)?;
     let elementwise_gbps = (3 * ew_elems * 4) as f64 / (ew_ms / 1e3) / 1e9;
     progress("elementwise_add", &format!("{elementwise_gbps:.0} GB/s"));
     {
@@ -1354,7 +1336,7 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
     let perm = sattolo_cycle(chase_elems, 0xDEAD_BEEF);
     let dev_perm = stream0.clone_htod(&perm)?;
     let mut dev_out = stream0.alloc_zeros::<u32>(1)?;
-    let chase_samples = cuda_samples(&ctx0, &stream0, 3, 3, cfg.rounds, || {
+    let chase_samples = cuda_samples_ms(&ctx0, &stream0, 3, 3, cfg.rounds, || {
         let start: u64 = 0;
         let steps = cfg.chase_steps;
         unsafe {
@@ -1372,7 +1354,7 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         }
         Ok(())
     })?;
-    let chase_ms = record("hbm_latency_ns", &chase_samples);
+    let chase_ms = record("hbm_latency_ns", &chase_samples)?;
     let hbm_latency_ns = chase_ms * 1e6 / cfg.chase_steps as f64;
     progress("hbm_latency", &format!("{hbm_latency_ns:.0} ns/load"));
     {
@@ -1405,10 +1387,6 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         if peer_supported(&ctx0, &ctx1)? && peer_supported(&ctx1, &ctx0)? {
             enable_peer(&ctx0, &ctx1)?;
             enable_peer(&ctx1, &ctx0)?;
-            // Peer copies must use cuMemAlloc memory, not stream-ordered pool
-            // allocations: cuCtxEnablePeerAccess does not cover pool memory, so
-            // cuMemcpyPeerAsync on pool buffers is silently staged through the
-            // host at roughly PCIe speed (~37 GB/s measured instead of ~400).
             let peer_bytes = cfg.copy_mib * MIB;
             let peer_elems = peer_bytes / 4;
             let pattern = random_f32(peer_elems, 0xFEED);
@@ -1436,7 +1414,7 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
             }
             stream0.synchronize()?;
             stream1.synchronize()?;
-            let fwd = cuda_samples(&ctx1, &stream1, 5, cfg.iterations_bw, cfg.rounds, || {
+            let fwd = cuda_samples_ms(&ctx1, &stream1, 5, cfg.iterations_bw, cfg.rounds, || {
                 unsafe {
                     dsys::cuMemcpyPeerAsync(
                         dst1.ptr,
@@ -1451,7 +1429,7 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
                 }
                 Ok(())
             })?;
-            let rev = cuda_samples(&ctx0, &stream0, 5, cfg.iterations_bw, cfg.rounds, || {
+            let rev = cuda_samples_ms(&ctx0, &stream0, 5, cfg.iterations_bw, cfg.rounds, || {
                 unsafe {
                     dsys::cuMemcpyPeerAsync(
                         dst0.ptr,
@@ -1466,8 +1444,8 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
                 }
                 Ok(())
             })?;
-            let fwd_gbps = copy_bytes / (record("g2g_forward_gbps", &fwd) / 1e3) / 1e9;
-            let rev_gbps = copy_bytes / (record("g2g_reverse_gbps", &rev) / 1e3) / 1e9;
+            let fwd_gbps = copy_bytes / (record("g2g_forward_gbps", &fwd)? / 1e3) / 1e9;
+            let rev_gbps = copy_bytes / (record("g2g_reverse_gbps", &rev)? / 1e3) / 1e9;
             g2g_forward = Some(fwd_gbps);
             g2g_reverse = Some(rev_gbps);
             g2g_gbps = Some(fwd_gbps.min(rev_gbps));
@@ -1488,7 +1466,7 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
                 stream1.synchronize()?;
                 Ok(())
             })?;
-            g2g_latency = Some(record("g2g_latency_us", &lat) * 1e3);
+            g2g_latency = Some(record("g2g_latency_us", &lat)? * 1e3);
             let check_fwd = {
                 let mut out = vec![0.0f32; peer_elems];
                 unsafe {
@@ -1572,7 +1550,7 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
         let (gemm_samples, windows): (Vec<f64>, Vec<Window>) = gemm_rounds?.into_iter().unzip();
         let key = format!("gemm_{}", spec.dtype);
         gemm_states.insert(key.clone(), round_states(&polls, &windows));
-        let ms = record(&key, &gemm_samples);
+        let ms = record(&key, &gemm_samples)?;
         let flops = 2.0 * (n as f64).powi(3);
         let peak_tflops = tflops(flops, ms);
         compute_tflops.insert(spec.dtype, peak_tflops);
@@ -1612,7 +1590,8 @@ pub(crate) fn run(cfg: &Config, gpu_request: &str) -> Result<Measured, BenchErro
                 cfg,
             )?;
             let key = measurement.samples_key();
-            let median_ms = crate::stats::median(&mut samples.clone());
+            let median_ms = crate::stats::median(&mut samples.clone())
+                .ok_or_else(|| BenchError(format!("{key}: no timed rounds")))?;
             gemm_shape_samples.insert(key.clone(), samples);
             gemm_shape_states.insert(key.clone(), states);
             gemm_shape_checks.insert(format!("{key}_check"), measurement.check.passed);

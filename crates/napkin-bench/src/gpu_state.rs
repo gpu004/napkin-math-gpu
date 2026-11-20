@@ -1,8 +1,3 @@
-//! Clocks, power, temperature and clock-limit reasons of the GPU running the
-//! timed GEMM rounds, read through NVML. nvml-wrapper loads
-//! `libnvidia-ml.so.1` at run time, the same way cudarc loads the CUDA
-//! libraries, so the harness still builds on machines without a driver.
-
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -17,7 +12,6 @@ use crate::stats::median;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
-/// One NVML reading.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Poll {
     at: Instant,
@@ -52,14 +46,12 @@ impl Poll {
     }
 }
 
-/// Host-clock interval in which one timed round ran on the GPU.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Window {
     pub(crate) start: Instant,
     pub(crate) end: Instant,
 }
 
-/// NVML handle for the GPU the GEMM rounds run on.
 pub(crate) struct Monitor {
     nvml: Nvml,
     pci_bus_id: String,
@@ -106,8 +98,6 @@ impl Monitor {
         })
     }
 
-    /// Board-level facts plus one `RoundState` per window, keyed like
-    /// `Measured::samples_ms`.
     pub(crate) fn state(
         &self,
         warmup: Duration,
@@ -141,7 +131,6 @@ impl Monitor {
     }
 }
 
-/// Summarizes the polls that fall inside each window.
 pub(crate) fn round_states(polls: &[Poll], windows: &[Window]) -> Vec<RoundState> {
     windows
         .iter()
@@ -200,7 +189,7 @@ fn span(values: impl Iterator<Item = f64>) -> Option<Span> {
     let max = values.iter().copied().reduce(f64::max)?;
     Some(Span {
         min,
-        median: median(&mut values),
+        median: median(&mut values)?,
         max,
     })
 }
