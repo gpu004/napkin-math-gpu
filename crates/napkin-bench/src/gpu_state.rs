@@ -215,9 +215,8 @@ fn average_power(polls: &[&Poll], period: Duration) -> Option<f64> {
     let ticks = ticks(polls.iter().copied());
     let (first, last) = (ticks.first()?, ticks.last()?);
     let periods = ((last.at - first.at).as_secs_f64() / period.as_secs_f64()).round();
-    (periods >= 1.0 && last.energy_mj > first.energy_mj).then(|| {
-        (last.energy_mj - first.energy_mj) as f64 / 1e3 / (periods * period.as_secs_f64())
-    })
+    (periods >= 1.0 && last.energy_mj > first.energy_mj)
+        .then(|| (last.energy_mj - first.energy_mj) as f64 / 1e3 / (periods * period.as_secs_f64()))
 }
 
 fn span(values: impl Iterator<Item = f64>) -> Option<Span> {
@@ -287,7 +286,10 @@ mod tests {
         let powers = powers(100);
         assert_eq!(powers.len(), 7, "{powers:?}");
         for power in &powers {
-            assert!((power / f64::from(POWER_W) - 1.0).abs() < 0.02, "{powers:?}");
+            assert!(
+                (power / f64::from(POWER_W) - 1.0).abs() < 0.02,
+                "{powers:?}"
+            );
         }
     }
 
@@ -296,7 +298,10 @@ mod tests {
         let powers = powers(1);
         assert_eq!(powers.len(), 7, "{powers:?}");
         for power in &powers {
-            assert!((power / f64::from(POWER_W) - 1.0).abs() < 0.05, "{powers:?}");
+            assert!(
+                (power / f64::from(POWER_W) - 1.0).abs() < 0.05,
+                "{powers:?}"
+            );
         }
     }
 }

@@ -708,10 +708,7 @@ fn gpu_state_table(out: &mut String, state: &GpuState) {
          the whole counter periods between them; the period is measured over that dtype's whole \
          run, warm-up included, and a round that saw fewer than two updates has no power. Clock \
          limits give the share of polls that reported each NVML clock-limit reason.\n",
-        state.source,
-        state.power_limit_w,
-        state.max_sm_clock_mhz,
-        state.max_mem_clock_mhz,
+        state.source, state.power_limit_w, state.max_sm_clock_mhz, state.max_mem_clock_mhz,
     );
 }
 
