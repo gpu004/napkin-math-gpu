@@ -239,7 +239,7 @@ mod tests {
     /// H100 where reading the energy counter took 4–35 ms.
     const POLL_GAPS_MS: [u64; 8] = [9, 25, 13, 11, 24, 10, 14, 19];
     const WATCH_MS: u64 = 2_000;
-    const POWER_W: f64 = 660.0;
+    const POWER_W: u32 = 660;
 
     /// Polls over one watch of a steady `POWER_W` load, reading a counter
     /// that advances every `update_ms`, plus seven back-to-back 200 ms
@@ -248,16 +248,7 @@ mod tests {
     /// 150 ms marks, the shortest span that yields a power.
     fn watch(update_ms: u64) -> (Vec<Poll>, Vec<Window>) {
         let start = Instant::now();
-        let energy_mj = |t_ms: u64| {
-            let updates = t_ms / update_ms;
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "whole millijoules of a positive power over at most two seconds"
-            )]
-            let mj_per_update = (POWER_W * update_ms as f64) as u64;
-            updates * mj_per_update
-        };
+        let energy_mj = |t_ms: u64| t_ms / update_ms * update_ms * u64::from(POWER_W);
         let mut polls = Vec::new();
         let mut t_ms = 0;
         for gap in POLL_GAPS_MS.iter().cycle() {
@@ -296,7 +287,7 @@ mod tests {
         let powers = powers(100);
         assert_eq!(powers.len(), 7, "{powers:?}");
         for power in &powers {
-            assert!((power / POWER_W - 1.0).abs() < 0.02, "{powers:?}");
+            assert!((power / f64::from(POWER_W) - 1.0).abs() < 0.02, "{powers:?}");
         }
     }
 
@@ -305,7 +296,7 @@ mod tests {
         let powers = powers(1);
         assert_eq!(powers.len(), 7, "{powers:?}");
         for power in &powers {
-            assert!((power / POWER_W - 1.0).abs() < 0.05, "{powers:?}");
+            assert!((power / f64::from(POWER_W) - 1.0).abs() < 0.05, "{powers:?}");
         }
     }
 }
