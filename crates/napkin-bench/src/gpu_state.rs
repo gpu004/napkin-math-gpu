@@ -208,10 +208,7 @@ impl Counter {
         let (first, last) = (ticks.first()?, ticks.last()?);
         let intervals = u32::try_from(ticks.len() - 1).ok()?;
         let period = (intervals > 0).then(|| (last.at - first.at) / intervals)?;
-        let longest_gap = polls
-            .windows(2)
-            .map(|pair| pair[1].at - pair[0].at)
-            .max()?;
+        let longest_gap = polls.windows(2).map(|pair| pair[1].at - pair[0].at).max()?;
         Some(if period > longest_gap {
             Self::PerPeriod(period)
         } else {

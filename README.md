@@ -77,7 +77,7 @@ Shape suite: cuBLASLt 120901 (cublasLtGetVersion) captured 2026-10-12T23:51:29Z 
 | tf32 | 1200–1470 MHz | 2619 MHz | 719 W | 57–62 °C | sw_power_cap 100% |
 | fp32 | 1905–1980 MHz | 2619 MHz | 710 W | 64–66 °C | sw_power_cap 86% |
 
-Read through NVML 13.580.95.05 via nvml-wrapper 0.13 about every 12 ms (5 ms apart plus the time NVML takes to answer) on the GPU that ran the GEMMs, during the timed rounds only. Board limits: 700 W, SM clock 1980 MHz, memory clock 2619 MHz. Power is the median round's energy-counter change between its first and last counter update, divided by the whole counter periods between them; the period is measured over that dtype's whole run, warm-up included, and a round that saw fewer than two updates has no power. Clock limits give the share of polls that reported each NVML clock-limit reason.
+Read through NVML 13.580.95.05 via nvml-wrapper 0.13 about every 12 ms (5 ms apart plus the time NVML takes to answer) on the GPU that ran the GEMMs, during the timed rounds only. Board limits: 700 W, SM clock 1980 MHz, memory clock 2619 MHz. Power is the median round's energy-counter change between its first and last counter update, divided by the updates between them times the counter period measured over that dtype's whole run, warm-up included; a round that saw fewer than two updates has no power. Clock limits give the share of polls that reported each NVML clock-limit reason.
 <!-- /napkin -->
 
 ## Other GPUs
