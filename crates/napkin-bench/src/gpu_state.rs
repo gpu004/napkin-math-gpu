@@ -369,25 +369,28 @@ mod tests {
 
     /// A round whose first update is seen 52 ms late and whose last is seen
     /// 1 ms late: the polls that saw its three updates are 149 ms apart, not
-    /// 200 ms. #31 put the p95 delay in seeing an update at 51 ms.
+    /// 200 ms. #31 put the p95 delay in seeing an update at 51 ms. The delay
+    /// comes from slow reads, as on an H100: the poll stamped 1019 ms read the
+    /// counter at 999 ms, just before the update at 1000 ms, and the poll
+    /// stamped 1052 ms read it at 1037 ms, so no gap is longer than 33 ms.
     #[test]
     fn late_poll_at_a_round_edge_does_not_change_its_power() {
         let start = Instant::now();
         let at = |t_ms: u64| start + Duration::from_millis(t_ms);
-        let mut times: Vec<u64> = (0..=200)
-            .map(|i| 1 + 10 * i)
-            .filter(|t_ms| !(1_000..1_052).contains(t_ms))
-            .chain([999, 1_052])
+        let mut reads: Vec<(u64, u64)> = (0..=200)
+            .map(|i| (1 + 10 * i, 1 + 10 * i))
+            .filter(|(t_ms, _)| !(1_001..=1_051).contains(t_ms))
+            .chain([(1_019, 999), (1_052, 1_037)])
             .collect();
-        times.sort_unstable();
-        let polls: Vec<Poll> = times
+        reads.sort_unstable();
+        let polls: Vec<Poll> = reads
             .iter()
-            .map(|&t_ms| Poll {
+            .map(|&(t_ms, read_ms)| Poll {
                 at: at(t_ms),
                 sm_mhz: 1_980,
                 mem_mhz: 2_619,
                 temperature_c: 60,
-                energy_mj: t_ms / 100 * 100 * u64::from(POWER_W),
+                energy_mj: read_ms / 100 * 100 * u64::from(POWER_W),
                 reasons: ThrottleReasons::empty(),
             })
             .collect();
