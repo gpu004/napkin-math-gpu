@@ -1266,7 +1266,7 @@ fn cmd_llm(args: &LlmArgs) -> Result<String, String> {
         args.headroom.unwrap_or(0.1),
     )
     .map_err(|e| e.to_string())?;
-    let group_size = args.heads.get() / args.kv_heads.get();
+    let group_size = args.heads.get() / args.kv_heads;
     let batch = args.batch.get();
     let prompt = args.prompt.get();
     let generated = args.generated.get();
