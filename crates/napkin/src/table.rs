@@ -640,6 +640,7 @@ fn gpu_state_table(out: &mut String, state: &GpuState) {
         ],
     );
     emit(out, &["---", "---:", "---:", "---:", "---:", "---"]);
+    let (mut rounds_ms, mut rounds_polls) = (0.0, 0_u32);
     for dtype in [Dtype::Fp16, Dtype::Bf16, Dtype::Tf32, Dtype::Fp32] {
         let Some(rounds) = state.rounds.get(&format!("gemm_{dtype}")) else {
             continue;
@@ -654,6 +655,8 @@ fn gpu_state_table(out: &mut String, state: &GpuState) {
         let mut power: Vec<f64> = rounds.iter().filter_map(|round| round.power_w).collect();
         power.sort_by(f64::total_cmp);
         let polls: u32 = rounds.iter().map(|round| round.polls).sum();
+        rounds_ms += rounds.iter().map(|round| round.wall_ms).sum::<f64>();
+        rounds_polls += polls;
         let mut reasons = BTreeMap::new();
         for round in rounds {
             for (name, count) in &round.clock_limit_reasons {
@@ -685,16 +688,27 @@ fn gpu_state_table(out: &mut String, state: &GpuState) {
             ],
         );
     }
+    // `poll_interval_ms` is only the pause between polls. Reading NVML's
+    // energy counter alone took 4–35 ms on an H100 (#31), so the cadence the
+    // reader sees comes from the rounds: their wall time over their polls.
+    let cadence = if rounds_polls > 0 {
+        format!(
+            "about every {} ms ({} ms apart plus the time NVML takes to answer)",
+            fmt_sig(rounds_ms / f64::from(rounds_polls), 2),
+            fmt_sig(state.poll_interval_ms, 2),
+        )
+    } else {
+        format!("every {} ms", fmt_sig(state.poll_interval_ms, 2))
+    };
     let _ = write!(
         out,
-        "\nRead through {} every {} ms on the GPU that ran the GEMMs, during the timed rounds \
+        "\nRead through {} {cadence} on the GPU that ran the GEMMs, during the timed rounds \
          only. Board limits: {:.0} W, SM clock {} MHz, memory clock {} MHz. Power is the median \
-         round's energy-counter change between its first and last counter update; the counter \
-         updates only a few times per round, so a single round in `gpu_state` can read above the \
-         board limit. Clock limits give the share of polls that reported each \
-         NVML clock-limit reason.\n",
+         round's energy-counter change between its first and last counter update, divided by \
+         the whole counter periods between them; the period is measured over that dtype's whole \
+         run, warm-up included, and a round that saw fewer than two updates has no power. Clock \
+         limits give the share of polls that reported each NVML clock-limit reason.\n",
         state.source,
-        fmt_sig(state.poll_interval_ms, 2),
         state.power_limit_w,
         state.max_sm_clock_mhz,
         state.max_mem_clock_mhz,

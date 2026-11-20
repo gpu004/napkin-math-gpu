@@ -584,7 +584,9 @@ impl Measured {
 pub struct GpuState {
     /// NVML and wrapper versions, e.g. `"NVML 12.580.95.05 via nvml-wrapper 0.13"`.
     pub source: String,
-    /// Target time between NVML polls while a round runs.
+    /// Pause between NVML polls while a round runs. Real polls land further
+    /// apart, by however long NVML takes to answer; `RoundState::wall_ms`
+    /// over `RoundState::polls` gives the real cadence.
     pub poll_interval_ms: f64,
     pub max_sm_clock_mhz: u32,
     pub max_mem_clock_mhz: u32,
@@ -611,10 +613,13 @@ pub struct RoundState {
     pub wall_ms: f64,
     pub sm_clock_mhz: Option<Span>,
     pub mem_clock_mhz: Option<Span>,
-    /// Energy-counter delta over the round divided by the time it covers.
-    /// NVML's power reading is a one-second average on recent GPUs, so it
-    /// would smear neighbouring rounds together. None when the counter
-    /// ticked fewer than two times inside the round.
+    /// Energy-counter delta between the first and last counter update inside
+    /// the round, divided by the whole counter periods between them. The
+    /// period is measured over the whole dtype's run, because the polls that
+    /// see an update can land up to a poll gap after it. NVML's power reading
+    /// is a one-second average on recent GPUs, so it would smear neighbouring
+    /// rounds together. None when the counter ticked fewer than two times
+    /// inside the round.
     pub power_w: Option<f64>,
     pub temperature_c: Option<Span>,
     /// How many polls saw each clock-limit reason, in NVML's names

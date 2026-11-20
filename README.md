@@ -881,9 +881,14 @@ napkin readme --write README.md PROBLEMS.md  # refreshes the tables
   selected algorithm is reused by all timed calls. Shape-specific rates coexist
   with, and never replace, the 8192³ peak.
 - `gpu_state`: NVML (`libnvidia-ml`, loaded at run time) polls the GEMM GPU
-  every 5 ms during the timed rounds and stores, per round, its SM and memory
-  clocks, temperature, average power from the energy counter, and how often
-  each clock-limit reason (e.g. `sw_power_cap`) was active. `napkin table`
+  during the timed rounds, pausing 5 ms between polls, and stores, per round,
+  its SM and memory clocks, temperature, average power from the energy
+  counter, and how often each clock-limit reason (e.g. `sw_power_cap`) was
+  active. The energy counter advances only about every 100 ms on an H100, and
+  reading it takes 4–35 ms, so a round's power is the energy between its first
+  and last counter update over the whole counter periods between them, not
+  over the time between the polls that saw them
+  ([#31](https://github.com/gpu004/napkin-math-gpu/issues/31)). `napkin table`
   prints a row per dtype and shape.
 - Round spread: every metric keeps its per-round samples in `samples_ms`, and
   the tables show the median round. When a metric's slowest round is more than
