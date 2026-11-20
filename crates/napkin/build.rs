@@ -1214,10 +1214,7 @@ fn emit_measured(measured: &Measured) -> String {
     let fields = [
         ("captured_at", string_literal(captured_at)),
         ("gpu_request", string_literal(gpu_request)),
-        (
-            "mode",
-            format!("RunMode::{mode:?}"),
-        ),
+        ("mode", format!("RunMode::{mode:?}")),
         ("device_name", string_literal(device_name)),
         ("device_count", format!("{device_count}_u32")),
         ("compute_capability", string_literal(compute_capability)),
