@@ -28,7 +28,7 @@ spread between rounds, and its time for 1 MB and 1 GB.
 
 H100 SXM 80GB, one significant digit. Host ↔ device is the slower direction. Host and NVLink throughput come from NVBandwidth 2026-10-12, the rest from napkin-bench's median round. The AllReduce row is the fastest call and the highest bus bandwidth on the NCCL Tests curve (H100!:8, 2026-10-12).
 
-‡ napkin-bench's number for this cell differs by more than 15% between runs on different machines; `napkin variation` has the range.
+‡ napkin-bench's number for this cell differs by more than 15% between runs on different machines; `napkin variation` has each metric's range, with host copies split by direction.
 <!-- /napkin -->
 
 Units are decimal: GB is 10⁹ bytes and TB/s is 10¹² bytes per second.
@@ -833,7 +833,7 @@ price per GPU-second above.
 | 1 TB GPU → GPU over NVLink, two GPUs' share billed | $0.01 | $0.008 | $0.007 | $0.01 | $0.008 | $0.008 | $0.02 | $0.003 | $0.01 | $0.02 | $0.009 | $0.01 | $0.007 | $0.004 | $0.008 | $0.005 | $0.005 | $0.006 | $0.005 | $0.005 |
 | 1 EFLOP of dense BF16 GEMM at the 8192³ rate | $3 | $2 | $2 | $3 | $2 | $2 | $5 | $0.9 | $3 | $4 | $3 | $3 | $2 | $1 | $2 | $1 | $3 | $2 | $1 | $1 |
 
-Each cell is the time one GPU takes at the rates in `napkin table` and `napkin compare`, times the GPUs billed, times the record's price per GPU-hour, at one significant digit. A record that rents 8 GPUs at a time is divided by 8: the cell is the share of the rental this work uses, not a bill for 1 or 2 GPUs alone. It assumes billing covers only that work at full speed: no startup, idle time, or rounding up to the billing increment, which `napkin cost` adds.
+Each cell is the hours one GPU takes at the rates in `napkin table` and `napkin compare`, times the GPUs billed, times the record's price per GPU-hour, at one significant digit. A record that rents 8 GPUs at a time is divided by 8: the cell is the share of the rental this work uses, not a bill for 1 or 2 GPUs alone. It assumes billing covers only that work at full speed: no startup, idle time, or rounding up to the billing increment, which `napkin cost` adds.
 <!-- /napkin -->
 
 On H100, bytes that stay in HBM are almost free; bytes that cross PCIe cost
