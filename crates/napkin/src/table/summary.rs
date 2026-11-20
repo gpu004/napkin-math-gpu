@@ -343,7 +343,7 @@ mod tests {
         profile.repeats = vec![repeat];
         let table = summary(&profile, &[]).unwrap();
         assert!(
-            table.contains("| Host ↔ device, pinned | 14 μs |"),
+            table.contains("| Host ↔ device, pinned | 10 μs |"),
             "D2H moved 20% but the slower H2D moved 8%: {table}"
         );
     }

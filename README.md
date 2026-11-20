@@ -138,7 +138,7 @@ earlier rule of Simon's, since dropped, that kept a size only if it held within
 | GPU ↔ GPU, slower direction, GB/s | 274–276 (0.38%) | 395–395 (0.058%) | 765–766 (0.089%) | 765–769 (0.5%) |
 | Dense BF16 GEMM, 8192³, TFLOP/s | 262–284 (8.6%) | 679–697 (2.8%) | 1330–1380 (3.8%) | 1400–1460 (4%) |
 
-Each cell is the lowest–highest median round over the runs, then the spread: highest over lowest, minus one. ‡ marks more than 15%, the most sirupsen/napkin-math lets a number move between machines. Transfers here are napkin-bench's own copies, not NVBandwidth.
+Each cell is the lowest–highest median round over the runs, then the spread: highest over lowest, minus one. ‡ marks a spread above 15% before rounding, this repo's threshold for a number that varies by machine. Transfers here are napkin-bench's own copies, not NVBandwidth.
 
 | GPU | Run captured (UTC) | Driver | Provider | Region | GPU UUIDs |
 | --- | --- | --- | --- | --- | --- |
@@ -830,10 +830,10 @@ price per GPU-second above.
 | Price per GPU-hour | $6.88 | $5.42 | $5.05 | $14.2 | $11.2 | $10.5 | $12.3 | $2.27 | $7.87 | $11.1 | $6.59 | $7.67 | $4.86 | $4.95 | $11.1 | $7.09 | $2.5 | $3.95 | $6.25 | $7.1 |
 | 1 TB of HBM traffic, read + write counted | $0.0006 | $0.0005 | $0.0005 | $0.0006 | $0.0005 | $0.0005 | $0.001 | $0.0002 | $0.0007 | $0.001 | $0.0006 | $0.0007 | $0.0004 | $0.0002 | $0.0005 | $0.0003 | $0.0004 | $0.0004 | $0.0003 | $0.0003 |
 | 1 TB host ↔ device, pinned, slower direction | $0.03 | $0.03 | $0.03 | $0.07 | $0.06 | $0.05 | $0.06 | $0.01 | $0.04 | $0.06 | $0.03 | $0.04 | $0.02 | $0.02 | $0.06 | $0.04 | $0.03 | $0.02 | $0.03 | $0.04 |
-| 1 TB GPU → GPU over NVLink, both GPUs billed | $0.01 | $0.008 | $0.007 | $0.01 | $0.008 | $0.008 | $0.02 | $0.003 | $0.01 | $0.02 | $0.009 | $0.01 | $0.007 | $0.004 | $0.008 | $0.005 | $0.005 | $0.006 | $0.005 | $0.005 |
+| 1 TB GPU → GPU over NVLink, two GPUs' share billed | $0.01 | $0.008 | $0.007 | $0.01 | $0.008 | $0.008 | $0.02 | $0.003 | $0.01 | $0.02 | $0.009 | $0.01 | $0.007 | $0.004 | $0.008 | $0.005 | $0.005 | $0.006 | $0.005 | $0.005 |
 | 1 EFLOP of dense BF16 GEMM at the 8192³ rate | $3 | $2 | $2 | $3 | $2 | $2 | $5 | $0.9 | $3 | $4 | $3 | $3 | $2 | $1 | $2 | $1 | $3 | $2 | $1 | $1 |
 
-Each cell is the time one GPU takes at the rates in `napkin table` and `napkin compare`, times the GPUs billed, times the price record, at one significant digit. It assumes billing covers only that work at full speed: no startup, idle time, or rounding up to the billing increment, which `napkin cost` adds.
+Each cell is the time one GPU takes at the rates in `napkin table` and `napkin compare`, times the GPUs billed, times the record's price per GPU-hour, at one significant digit. A record that rents 8 GPUs at a time is divided by 8: the cell is the share of the rental this work uses, not a bill for 1 or 2 GPUs alone. It assumes billing covers only that work at full speed: no startup, idle time, or rounding up to the billing increment, which `napkin cost` adds.
 <!-- /napkin -->
 
 On H100, bytes that stay in HBM are almost free; bytes that cross PCIe cost

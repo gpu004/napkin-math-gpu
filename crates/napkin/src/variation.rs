@@ -105,7 +105,12 @@ pub const D2H: Metric = Metric {
 pub const HOST_LATENCY: Metric = Metric {
     name: "Host ↔ device latency, slower direction",
     unit: Unit::Microseconds,
-    value: |m| m.h2d_latency_us.into_iter().chain(m.d2h_latency_us).reduce(f64::max),
+    value: |m| {
+        m.h2d_latency_us
+            .into_iter()
+            .chain(m.d2h_latency_us)
+            .reduce(f64::max)
+    },
 };
 /// The slower host copy direction within each run, like `HOST_LATENCY`.
 pub const HOST: Metric = Metric {
