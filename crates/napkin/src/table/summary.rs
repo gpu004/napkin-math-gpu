@@ -60,7 +60,8 @@ pub fn summary(profile: &Profile, collectives: &[CollectiveEvidence]) -> Option<
         let _ = writeln!(
             out,
             "\n‡ napkin-bench's number for this cell differs by more than {:.0}% between runs \
-             on different machines; `napkin variation` has the range.",
+             on different machines; `napkin variation` has each metric's range, with host \
+             copies split by direction.",
             variation::MACHINE_FLAG * 100.0
         );
     }

@@ -1028,7 +1028,8 @@ See [BENCHMARKS.md](BENCHMARKS.md#nccl-tests) for what is recorded and how
   measured/theoretical, software stack — no throughput number is universal.
 - **Sum serial stages; max overlapped ones.** Overlap is a property of the
   workload, not of the GPU.
-- **Weights barely compress, so compression barely speeds up loading them.**
+- **Weights barely compress, so compression trades a little transfer time for
+  decompression time.**
   As Simon notes, floats that use their full mantissa barely compress, and
   BF16 weights do. Only the 8-bit exponent is predictable:
   [DFloat11](https://arxiv.org/abs/2504.11651) entropy-codes it losslessly and

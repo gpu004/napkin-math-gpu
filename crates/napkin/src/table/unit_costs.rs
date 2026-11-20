@@ -108,7 +108,7 @@ pub fn unit_costs(profiles: &[Profile], records: &[PriceRecord]) -> String {
     }
     let _ = writeln!(
         out,
-        "\nEach cell is the time one GPU takes at the rates in `napkin table` and `napkin \
+        "\nEach cell is the hours one GPU takes at the rates in `napkin table` and `napkin \
          compare`, times the GPUs billed, times the record's price per GPU-hour, at one \
          significant digit. A record that rents 8 GPUs at a time is divided by 8: the cell is \
          the share of the rental this work uses, not a bill for 1 or 2 GPUs alone. It \

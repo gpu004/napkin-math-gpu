@@ -116,6 +116,8 @@ def main(
         raise ValueError(f"--gpu must be one of: {sorted(FUNCS)}")
     if quick and merge_shapes:
         raise ValueError("--merge-shapes cannot be used with --quick")
+    if repeat < 0:
+        raise ValueError("--repeat must be a positive run count")
     if repeat:
         if quick or merge_shapes:
             raise ValueError("--repeat records full runs; drop --quick and --merge-shapes")
